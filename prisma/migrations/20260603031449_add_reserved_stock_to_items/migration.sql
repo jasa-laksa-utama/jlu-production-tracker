@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "items" ADD COLUMN     "reservedStock" DOUBLE PRECISION NOT NULL DEFAULT 0;

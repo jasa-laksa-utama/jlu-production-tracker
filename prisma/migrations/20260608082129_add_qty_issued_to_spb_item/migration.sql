@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "spb_items" ADD COLUMN     "qtyIssued" DOUBLE PRECISION NOT NULL DEFAULT 0;

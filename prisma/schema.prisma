@@ -1,0 +1,919 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+model User {
+  id             String                 @id @default(uuid()) @db.Uuid
+  username       String                 @unique
+  email          String                 @unique
+  name           String
+  password       String
+  position       String?
+  image          String?
+  isActive       Boolean                @default(true)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  driver         Driver?
+  receipts       PurchaseOrderReceipt[]
+  purchaseOrders PurchaseOrder[]
+  roles          Role[]                 @relation("UserRoles")
+  pemesanPOs     PurchaseOrder[]        @relation("POPemesan")
+  mengetahuiPOs  PurchaseOrder[]        @relation("POMengetahui")
+  approvedPOs    PurchaseOrder[]        @relation("POApprovals")
+  rejectedPOs    PurchaseOrder[]        @relation("PORejections")
+
+  @@map("users")
+}
+
+model Role {
+  id    String @id @default(uuid()) @db.Uuid
+  name  String @unique
+  users User[] @relation("UserRoles")
+
+  @@map("roles")
+}
+
+model Customer {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  company   String?
+  email     String?
+  phone     String?
+  address   String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  leads     Lead[]
+  projects  Project[]
+
+  @@map("customers")
+}
+
+model Lead {
+  id             String     @id @default(uuid()) @db.Uuid
+  customerId     String     @db.Uuid
+  projectName    String
+  description    String?
+  status         String     @default("NEW")
+  source         String?
+  assignedToId   String?
+  value          Decimal?   @default(0) @db.Decimal(18, 2)
+  projectType    String?    @default("PO_PROJECT")
+  leadNumber     String?    @unique
+  salesPerson    String?
+  expectedDate   DateTime?
+  probability    Int?
+  globalDriveUrl String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  documents      Document[] @relation("LeadDocuments")
+  customer       Customer   @relation(fields: [customerId], references: [id])
+  project        Project?
+
+  @@map("leads")
+}
+
+model Project {
+  id               String             @id @default(uuid()) @db.Uuid
+  projectNumber    String?            @unique
+  projectName      String
+  customerId       String             @db.Uuid
+  leadId           String?            @unique @db.Uuid
+  description      String?
+  status           String             @default("PENDING")
+  ppicStatus       String             @default("PENDING")
+  ppicEntryDate    DateTime?
+  ppicCompletedAt  DateTime?
+  engStatus        String             @default("PENDING")
+  engCompletedAt   DateTime?
+  prodStatus       String             @default("PENDING")
+  prodCompletedAt  DateTime?
+  prodEntryDate    DateTime?
+  expectedDate     DateTime?
+  startDate        DateTime?          @default(now())
+  currentDivision  String?            @default("PPIC")
+  currentStatus    String?            @default("PENDING")
+  engEntryDate     DateTime?
+  globalDriveUrl   String?
+  value            Decimal?           @default(0) @db.Decimal(18, 2)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  engReviewedAt    DateTime?
+  purchasingStatus String             @default("PENDING")
+  warehouseStatus  String             @default("PENDING")
+  qcCompletedAt    DateTime?
+  qcEntryDate      DateTime?
+  qcStatus         String             @default("PENDING")
+  logCompletedAt   DateTime?
+  logEntryDate     DateTime?
+  logStatus        String             @default("PENDING")
+  packingListUrl   String?
+  markingStatus    String             @default("PENDING")
+  documents        Document[]         @relation("ProjectDocuments")
+  productionLogs   ProductionLog[]
+  productionSetup  ProductionSetup?
+  productionStages ProductionStage[]
+  components       ProjectComponent[]
+  handovers        ProjectHandover[]
+  history          ProjectHistory[]
+  customer         Customer           @relation(fields: [customerId], references: [id])
+  lead             Lead?              @relation(fields: [leadId], references: [id])
+  qcLogs           QCLog[]
+  shipmentPackages ShipmentPackage[]
+  shipments        Shipment[]
+  spb              SPB[]
+  boqs             BoQ[]
+  masterplan       Masterplan?
+  conveyorUnits    ConveyorUnit[]
+
+  @@map("projects")
+}
+
+model ProjectHistory {
+  id         String    @id @default(uuid()) @db.Uuid
+  projectId  String    @db.Uuid
+  division   String?
+  status     String?
+  entryDate  DateTime  @default(now())
+  exitDate   DateTime?
+  notes      String?
+  action     String?
+  fromStatus String?
+  toStatus   String?
+  remark     String?
+  updatedBy  String?
+  createdAt  DateTime  @default(now())
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_histories")
+}
+
+model Document {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String?
+  url        String
+  fileType   String?
+  category   String?
+  version    Int      @default(1)
+  label      String?
+  fileName   String?
+  isExternal Boolean  @default(false)
+  uploadedBy String?
+  notes      String?
+  leadId     String?  @db.Uuid
+  projectId  String?  @db.Uuid
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lead       Lead?    @relation("LeadDocuments", fields: [leadId], references: [id])
+  project    Project? @relation("ProjectDocuments", fields: [projectId], references: [id])
+
+  @@map("documents")
+}
+
+model ItemType {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String   @unique
+  createdAt  DateTime @default(now())
+  codePrefix String?  @unique
+  items      Item[]
+
+  @@map("item_types")
+}
+
+model Unit {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now())
+  items     Item[]
+
+  @@map("units")
+}
+
+model Item {
+  id               String              @id @default(uuid()) @db.Uuid
+  code             String              @unique
+  name             String?
+  typeMerk         String?
+  initialStock     Float               @default(0)
+  currentStock     Float               @default(0)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  itemTypeId       String?             @db.Uuid
+  unitId           String?             @db.Uuid
+  minStock         Float               @default(0)
+  description      String?
+  category         String              @default("A")
+  reservedStock    Float               @default(0)
+  itemType         ItemType?           @relation(fields: [itemTypeId], references: [id])
+  unit             Unit?               @relation(fields: [unitId], references: [id])
+  poItems          PurchaseOrderItem[]
+  shipmentPackages ShipmentPackage[]
+  spbItems         SPBItem[]
+  opnameDetails    StockOpnameDetail[]
+  transactions     Transaction[]
+  boqItems         BoQItem[]
+
+  @@map("items")
+}
+
+model Transaction {
+  id         String   @id @default(uuid()) @db.Uuid
+  date       DateTime @default(now())
+  type       String
+  itemId     String   @db.Uuid
+  quantity   Float
+  createdAt  DateTime @default(now())
+  note       String?
+  peruntukan String?
+  poNumber   String?
+  supplier   String?
+  item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+model StockOpname {
+  id      String              @id @default(uuid()) @db.Uuid
+  date    DateTime            @default(now())
+  month   Int
+  year    Int
+  notes   String?
+  status  String              @default("OPEN")
+  details StockOpnameDetail[]
+
+  @@map("stock_opnames")
+}
+
+model StockOpnameDetail {
+  id            String      @id @default(uuid()) @db.Uuid
+  stockOpnameId String      @db.Uuid
+  itemId        String      @db.Uuid
+  systemStock   Float
+  physicalStock Float
+  difference    Float
+  item          Item        @relation(fields: [itemId], references: [id])
+  stockOpname   StockOpname @relation(fields: [stockOpnameId], references: [id], onDelete: Cascade)
+
+  @@map("stock_opname_details")
+}
+
+model PurchaseOrder {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  nomorPO            String                 @unique
+  kepada             String
+  tanggal            DateTime
+  periode            String?
+  p_np               String?
+  projek             String?
+  status             String                 @default("PENDING")
+  totalAmount        Decimal                @default(0) @db.Decimal(18, 2)
+  paidAmount         Decimal                @default(0) @db.Decimal(18, 2)
+  paymentStatus      String                 @default("UNPAID")
+  isReceived         Boolean                @default(false)
+  receivedAt         DateTime?
+  suratJalanUrl      String?
+  signatureUrl       String?
+  keteranganTambahan String?
+  hormatKami         String?
+  userId             String                 @db.Uuid
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  poType             String?                @default("MANUAL")
+  taxType            String?                @default("NON_PAJAK")
+  npwp               String?
+  att                String?
+  telpFax            String?
+  terbilang          String?
+  pphEnabled         Boolean                @default(false)
+  discountPercent    Float?                 @default(0)
+  discountAmount     Decimal?               @default(0) @db.Decimal(18, 2)
+  ppnAmount          Decimal?               @default(0) @db.Decimal(18, 2)
+  pphAmount          Decimal?               @default(0) @db.Decimal(18, 2)
+  nettoAmount        Decimal?               @default(0) @db.Decimal(18, 2)
+  showPemesan        Boolean                @default(true)
+  showMengetahui     Boolean                @default(true)
+  showMenyetujui     Boolean                @default(true)
+  namaPemesan        String?
+  namaMengetahui     String?
+  namaMenyetujui     String?
+  sampleImageUrl     String?
+  paymentMethod      String?                @default("CASH")
+  installmentTerm    String?
+  supplierId         String?                @db.Uuid
+  items              PurchaseOrderItem[]
+  payments           PurchaseOrderPayment[]
+  receipts           PurchaseOrderReceipt[]
+  supplier           Supplier?              @relation(fields: [supplierId], references: [id])
+  user               User                   @relation(fields: [userId], references: [id])
+  pemesanId          String?                @db.Uuid
+  pemesanUser        User?                  @relation("POPemesan", fields: [pemesanId], references: [id])
+  pemesanAt          DateTime?
+  mengetahuiId       String?                @db.Uuid
+  mengetahuiUser     User?                  @relation("POMengetahui", fields: [mengetahuiId], references: [id])
+  mengetahuiAt       DateTime?
+  approvedById       String?                @db.Uuid
+  approvedBy         User?                  @relation("POApprovals", fields: [approvedById], references: [id])
+  approvedAt         DateTime?
+  rejectedReason     String?
+  rejectedAt         DateTime?
+  rejectedById       String?                @db.Uuid
+  rejectedUser       User?                  @relation("PORejections", fields: [rejectedById], references: [id])
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String                     @id @default(uuid()) @db.Uuid
+  purchaseOrderId String                     @db.Uuid
+  namaBarang      String
+  kode            String?
+  ukuran          String?
+  qty             Float
+  satuan          String
+  hargaSatuan     Decimal                    @default(0) @db.Decimal(18, 2)
+  disc            Float?
+  ppn             Float?
+  pph             Float?
+  subTotal        Decimal                    @db.Decimal(18, 2)
+  noticeMerkJenis String?
+  noSpb           String?
+  lokasi          String?
+  tglDatang       DateTime?
+  tglKirim        DateTime?
+  tglSampai       DateTime?
+  isClosed        Boolean                    @default(false)
+  itemId          String?                    @db.Uuid
+  qtyReceived     Float                      @default(0)
+  item            Item?                      @relation(fields: [itemId], references: [id])
+  purchaseOrder   PurchaseOrder              @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receiptItems    PurchaseOrderReceiptItem[]
+
+  @@map("purchase_order_items")
+}
+
+model PurchaseOrderPayment {
+  id              String        @id @default(uuid()) @db.Uuid
+  purchaseOrderId String        @db.Uuid
+  amount          Float
+  paymentDate     DateTime      @default(now())
+  method          String
+  notes           String?
+  proofUrl        String?
+  createdAt       DateTime      @default(now())
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@map("purchase_order_payments")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  title     String
+  message   String
+  type      String   @default("INFO")
+  targetUrl String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  module    String   @default("TRACKER")
+
+  @@map("notifications")
+}
+
+model SPB {
+  id               String    @id @default(uuid()) @db.Uuid
+  spbNumber        String    @unique
+  projectId        String    @db.Uuid
+  date             DateTime  @default(now())
+  status           String    @default("PENDING_APPROVAL")
+  makerName        String?
+  mengetahuiName   String?   @default("Slamet")
+  menyetujuiName   String?
+  approvedByPpic   Boolean   @default(false)
+  approvedByPpicAt DateTime?
+  approvedByPm     Boolean   @default(false)
+  approvedByPmAt   DateTime?
+  rejectedReason   String?
+  rejectedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items            SPBItem[]
+
+  @@map("spb")
+}
+
+model SPBItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  spbId      String   @db.Uuid
+  materialId String?  @db.Uuid
+  name       String
+  qty        Float
+  unit       String   @default("pcs")
+  source     String
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  typeMerk   String?
+  status     String   @default("PENDING")
+  qtyIssued  Float    @default(0)
+  material   Item?    @relation(fields: [materialId], references: [id])
+  spb        SPB      @relation(fields: [spbId], references: [id], onDelete: Cascade)
+
+  @@map("spb_items")
+}
+
+model Supplier {
+  id             String          @id @default(uuid()) @db.Uuid
+  name           String          @unique
+  codeLetter     String
+  codeNumber     String
+  phone          String?
+  address        String?
+  isActive       Boolean         @default(true)
+  p_np           String          @default("JLUNP")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  mapsUrl        String?
+  shopName       String?
+  soldItems      String?
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model Driver {
+  id            String     @id @default(uuid()) @db.Uuid
+  name          String
+  phone         String?
+  licenseNumber String?
+  status        String     @default("AVAILABLE")
+  userId        String?    @unique @db.Uuid
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  user          User?      @relation(fields: [userId], references: [id])
+  shipments     Shipment[]
+
+  @@map("drivers")
+}
+
+model Vehicle {
+  id          String     @id @default(uuid()) @db.Uuid
+  name        String
+  plateNumber String     @unique
+  type        String
+  status      String     @default("AVAILABLE")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  shipments   Shipment[]
+
+  @@map("vehicles")
+}
+
+model Shipment {
+  id                 String            @id @default(uuid()) @db.Uuid
+  suratJalanNo       String?           @unique
+  projectId          String            @db.Uuid
+  deliveryDate       DateTime
+  shippingMethod     String
+  destination        String
+  estimatedWeight    Float?
+  estimatedDimension String?
+  notes              String?
+  status             String            @default("READY_TO_SHIP")
+  fleetRequestStatus String?
+  driverId           String?           @db.Uuid
+  vehicleId          String?           @db.Uuid
+  approvalLogistics  Boolean           @default(false)
+  approvalPurchasing Boolean           @default(false)
+  approvalManagement Boolean           @default(false)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  packages           ShipmentPackage[]
+  driver             Driver?           @relation(fields: [driverId], references: [id])
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  vehicle            Vehicle?          @relation(fields: [vehicleId], references: [id])
+
+  @@map("shipments")
+}
+
+model ShipmentPackage {
+  id                 String             @id @default(uuid()) @db.Uuid
+  code               String             @unique
+  lotNo              String
+  projectId          String             @db.Uuid
+  itemId             String?            @db.Uuid
+  itemName           String
+  itemCode           String?
+  qty                Float
+  unit               String
+  weight             Float
+  dimensions         String
+  status             String             @default("READY_TO_SHIP")
+  shipmentId         String?            @db.Uuid
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  qcStatus           String             @default("PENDING")
+  project_components ProjectComponent[]
+  item               Item?              @relation(fields: [itemId], references: [id])
+  project            Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shipment           Shipment?          @relation(fields: [shipmentId], references: [id])
+
+  @@map("shipment_packages")
+}
+
+model PurchaseOrderReceipt {
+  id                   String                     @id @default(uuid()) @db.Uuid
+  purchaseOrderId      String                     @db.Uuid
+  noSuratJalanSupplier String
+  suratJalanUrl        String
+  receivedAt           DateTime
+  receivedById         String                     @db.Uuid
+  notes                String?
+  createdAt            DateTime                   @default(now())
+  items                PurchaseOrderReceiptItem[]
+  purchaseOrder        PurchaseOrder              @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  user                 User                       @relation(fields: [receivedById], references: [id])
+
+  @@map("purchase_order_receipts")
+}
+
+model PurchaseOrderReceiptItem {
+  id                  String               @id @default(uuid()) @db.Uuid
+  receiptId           String               @db.Uuid
+  purchaseOrderItemId String               @db.Uuid
+  qtyReceived         Float
+  purchaseOrderItem   PurchaseOrderItem    @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
+  receipt             PurchaseOrderReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@map("purchase_order_receipt_items")
+}
+
+model ProductionSetup {
+  id              String   @id @default(uuid()) @db.Uuid
+  projectId       String   @unique @db.Uuid
+  drawingApproved Boolean  @default(false)
+  drawingLink     String?
+  materialsReady  Boolean  @default(false)
+  materialsNotes  String?
+  instructionMemo String
+  leader          String
+  team            String
+  startedAt       DateTime @default(now())
+  startedBy       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("production_setups")
+}
+
+model ProductionStage {
+  id             String              @id @default(uuid()) @db.Uuid
+  name           String
+  progress       Int                 @default(0)
+  status         String              @default("READY")
+  notes          String?
+  assignedLeader String?
+  assignedTeam   String?
+  updatedAt      DateTime            @updatedAt
+  createdAt      DateTime            @default(now())
+  qcNotes        String?
+  qcStatus       String              @default("PENDING")
+  projectId      String              @db.Uuid
+  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subSteps       ProductionSubStep[]
+  qcLogs         QCLog[]
+
+  @@map("production_stages")
+}
+
+model ProductionSubStep {
+  id        String          @id @default(uuid()) @db.Uuid
+  stageId   String          @db.Uuid
+  name      String
+  checked   Boolean         @default(false)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  qcNotes   String?
+  qcStatus  String          @default("PENDING")
+  stage     ProductionStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+
+  @@map("production_sub_steps")
+}
+
+model ProductionLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @db.Uuid
+  message   String
+  user      String
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("production_logs")
+}
+
+model QCLog {
+  id        String          @id @default(uuid()) @db.Uuid
+  projectId String          @db.Uuid
+  stageId   String          @db.Uuid
+  status    String
+  notes     String?
+  user      String
+  createdAt DateTime        @default(now())
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stage     ProductionStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+
+  @@map("qc_logs")
+}
+
+model ProjectHandover {
+  id         String             @id @default(uuid()) @db.Uuid
+  projectId  String             @db.Uuid
+  stages     String
+  notes      String?
+  handoverBy String
+  createdAt  DateTime           @default(now())
+  components ProjectComponent[]
+  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_handovers")
+}
+
+model ProjectComponent {
+  id                String           @id @default(uuid()) @db.Uuid
+  projectId         String           @db.Uuid
+  name              String
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  handoverId        String?          @db.Uuid
+  markingStatus     String           @default("PENDING")
+  packageId         String?          @db.Uuid
+  logAccepted       Boolean          @default(false)
+  stages            ComponentStage[]
+  handover          ProjectHandover? @relation(fields: [handoverId], references: [id])
+  shipment_packages ShipmentPackage? @relation(fields: [packageId], references: [id])
+  project           Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_components")
+}
+
+model ComponentStage {
+  id             String           @id @default(uuid()) @db.Uuid
+  componentId    String           @db.Uuid
+  name           String
+  status         String           @default("READY")
+  progress       Int              @default(0)
+  notes          String?
+  qcStatus       String           @default("PENDING")
+  qcNotes        String?
+  updatedAt      DateTime         @updatedAt
+  createdAt      DateTime         @default(now())
+  assignedLeader String?
+  assignedTeam   String?
+  component      ProjectComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@map("component_stages")
+}
+
+model BoQ {
+  id                  String             @id @default(uuid()) @db.Uuid
+  projectId           String             @db.Uuid
+  project             Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  boqNumber           String             @unique
+  boqStatus           String             @default("DRAFT")
+  boqApprovedByPpic   Boolean            @default(false)
+  boqApprovedByPpicAt DateTime?
+  boqApprovedByPm     Boolean            @default(false)
+  boqApprovedByPmAt   DateTime?
+  boqMakerName        String?
+  boqRejectedReason   String?
+  boqRejectedAt       DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  boqItems            BoQItem[]
+
+  @@map("boqs")
+}
+
+model BoQItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  boqId       String   @db.Uuid
+  boq         BoQ      @relation(fields: [boqId], references: [id], onDelete: Cascade)
+  
+  itemId      String   @db.Uuid
+  item        Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  
+  qty         Float
+  unit        String   @default("pcs")
+  price       Decimal  @default(0) @db.Decimal(18, 2)
+  note        String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("boq_items")
+}
+
+// ============================================================
+// MASTERPLAN — Konfigurasi Bobot & Jadwal Proyek
+// ============================================================
+
+model Masterplan {
+  id              String            @id @default(uuid()) @db.Uuid
+  projectId       String            @unique @db.Uuid
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  totalWeeks      Int               @default(30)
+  startDate       DateTime
+  createdBy       String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  phases          MasterplanPhase[]
+  weeklyPlans     WeeklyPlan[]
+  divisionLeaders DivisionLeader[]
+
+  @@map("masterplans")
+}
+
+model DivisionLeader {
+  id            String     @id @default(uuid()) @db.Uuid
+  masterplanId  String     @db.Uuid
+  masterplan    Masterplan @relation(fields: [masterplanId], references: [id], onDelete: Cascade)
+  
+  divisionName  String     // "PROCUREMENT" | "ENGINEERING" | "FABRICATION" | "CIVIL" | "LOGISTICS" | "SHIPMENT" | "ERECTION" | "COMMISSIONING"
+  leaderName    String
+  leaderUserId  String?    @db.Uuid
+  assignedAt    DateTime   @default(now())
+
+  @@unique([masterplanId, divisionName])
+  @@map("division_leaders")
+}
+
+// ============================================================
+// MASTERPLAN PHASES (Dinamis & Dapat Dikustomisasi)
+// ============================================================
+
+model MasterplanPhase {
+  id              String          @id @default(uuid()) @db.Uuid
+  masterplanId    String          @db.Uuid
+  masterplan      Masterplan      @relation(fields: [masterplanId], references: [id], onDelete: Cascade)
+  
+  name            String          // "Procurement", "Engineering", dll.
+  code            String          // Kode unik per proyek (misal: "PROCUREMENT")
+  orderIndex      Int
+  weightPercent   Decimal         @db.Decimal(5, 2)
+  startWeek       Int             // Minggu mulai (1 s/d totalWeeks)
+  endWeek         Int             // Minggu akhir
+  
+  planProgress    Decimal         @default(0) @db.Decimal(5, 2)
+  actualProgress  Decimal         @default(0) @db.Decimal(5, 2)
+  status          String          @default("NOT_STARTED") // NOT_STARTED, IN_PROGRESS, COMPLETED
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  unitProgresses  UnitProgress[]
+  subProgresses   PhaseSubStep[]  // Untuk breakdown sub-langkah dinamis (Shipment, Erection, dll.)
+
+  @@unique([masterplanId, code])
+  @@map("masterplan_phases")
+}
+
+model PhaseSubStep {
+  id              String          @id @default(uuid()) @db.Uuid
+  phaseId         String          @db.Uuid
+  phase           MasterplanPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  
+  name            String          // "Dry Run Test (no load)", dll.
+  weightPercent   Decimal         @db.Decimal(5, 2) // Bobot internal sub-step (total sub-step = 100%)
+  checked         Boolean         @default(false)
+  checkedAt       DateTime?
+  checkedBy       String?
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@map("phase_sub_steps")
+}
+
+// ============================================================
+// CONVEYOR UNITS & ITEMS
+// ============================================================
+
+model ConveyorUnit {
+  id            String          @id @default(uuid()) @db.Uuid
+  projectId     String          @db.Uuid
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  name          String          // "Room Hopper 5x5x2.7 mtr"
+  unitType      String          // "STRUCTURE" | "MECHANICAL" | "BOTH"
+  satuan        String          @default("unit")
+  volume        Int             @default(1)
+  orderIndex    Int             @default(0)
+  
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  
+  progresses    UnitProgress[]
+  structureItems StructureItem[]
+  mechanicalItems MechanicalItem[]
+
+  @@unique([projectId, name])
+  @@map("conveyor_units")
+}
+
+model UnitProgress {
+  id            String           @id @default(uuid()) @db.Uuid
+  phaseId       String           @db.Uuid
+  phase         MasterplanPhase  @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  unitId        String           @db.Uuid
+  unit          ConveyorUnit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  
+  weightPercent Decimal          @db.Decimal(5, 2) // Bobot unit ini dalam fase
+  actualPercent Decimal          @default(0) @db.Decimal(5, 2)
+  
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([phaseId, unitId])
+  @@map("unit_progresses")
+}
+
+model StructureItem {
+  id              String        @id @default(uuid()) @db.Uuid
+  unitId          String        @db.Uuid
+  unit            ConveyorUnit  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  
+  name            String
+  qty             Int           @default(1)
+  orderIndex      Int           @default(0)
+  
+  cuttingDone     Boolean       @default(false)  // 15%
+  settingDone     Boolean       @default(false)  // 35%
+  weldingDone     Boolean       @default(false)  // 40%
+  finishingDone   Boolean       @default(false)  // 5%
+  paintingDone    Boolean       @default(false)  // 3.5%
+  packagingDone   Boolean       @default(false)  // 1.5%
+  
+  progressPercent Decimal       @default(0) @db.Decimal(5, 2)
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@map("structure_items")
+}
+
+model MechanicalItem {
+  id              String        @id @default(uuid()) @db.Uuid
+  unitId          String        @db.Uuid
+  unit            ConveyorUnit  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  
+  name            String
+  qty             Int           @default(1)
+  satuan          String        @default("pcs")
+  orderIndex      Int           @default(0)
+  
+  procurementDone Boolean       @default(false) // 40%
+  poDone          Boolean       @default(false) // 10%
+  fabricationDone Boolean       @default(false) // 45%
+  packagingDone   Boolean       @default(false) // 5%
+  
+  progressPercent Decimal       @default(0) @db.Decimal(5, 2)
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@map("mechanical_items")
+}
+
+// ============================================================
+// WEEKLY PLANS (S-CURVE DATA)
+// ============================================================
+
+model WeeklyPlan {
+  id                    String     @id @default(uuid()) @db.Uuid
+  masterplanId          String     @db.Uuid
+  masterplan            Masterplan @relation(fields: [masterplanId], references: [id], onDelete: Cascade)
+  
+  weekNumber            Int        // 1 s/d totalWeeks
+  weekStartDate         DateTime
+  weekEndDate           DateTime
+  
+  planCumulativePercent Decimal    @default(0) @db.Decimal(5, 2)
+  planWeeklyPercent     Decimal    @default(0) @db.Decimal(5, 2)
+  
+  actualCumulativePercent Decimal  @default(0) @db.Decimal(5, 2)
+  actualWeeklyPercent     Decimal  @default(0) @db.Decimal(5, 2)
+  
+  variance              Decimal    @default(0) @db.Decimal(5, 2)
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@unique([masterplanId, weekNumber])
+  @@map("weekly_plans")
+}
