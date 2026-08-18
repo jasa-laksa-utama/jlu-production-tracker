@@ -22,24 +22,62 @@ import {
 } from "@/components/ui/card";
 import { TrendingUp, AlertCircle } from "lucide-react";
 
-export function SCurveChart({ data }: { data: any[] }) {
-  // Format data for chart
-  const chartData = data.map((item) => ({
-    name: `Wk ${item.weekNumber}`,
-    plan: Number(item.planCumulativePercent || 0),
-    actual: item.actualCumulativePercent
+export function SCurveChart({ data, project }: { data: any[]; project?: any }) {
+  const phases = project?.masterplan?.phases || [];
+  const totalActualProgressFromPhases = phases.reduce(
+    (sum: number, phase: any) => {
+      const weight = Number(phase.weightPercent || 0);
+      const prog = Number(phase.actualProgress || 0);
+      return sum + (prog / 100) * weight;
+    },
+    0,
+  );
+
+  const startDate =
+    project?.masterplan?.startDate || project?.createdAt || new Date();
+  const totalWeeks = project?.masterplan?.totalWeeks || data?.length || 30;
+  const start = new Date(startDate);
+  const now = new Date();
+  const diffMs = now.getTime() - start.getTime();
+  const elapsedDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+  const currentWeekNum = Math.min(
+    totalWeeks,
+    Math.max(1, Math.floor(elapsedDays / 7) + 1),
+  );
+
+  // Format data for chart with fallback to real-time phase progress
+  const chartData = data.map((item) => {
+    let actualVal = item.actualCumulativePercent
       ? Number(item.actualCumulativePercent)
-      : null,
-    weeklyPlan: Number(item.planWeeklyPercent || 0),
-    weeklyActual: item.actualWeeklyPercent
-      ? Number(item.actualWeeklyPercent)
-      : null,
-  }));
+      : null;
+    if (
+      (actualVal === null || actualVal === 0) &&
+      item.weekNumber <= currentWeekNum &&
+      totalActualProgressFromPhases > 0
+    ) {
+      actualVal = Math.round(totalActualProgressFromPhases * 100) / 100;
+    }
+
+    return {
+      name: `Wk ${item.weekNumber}`,
+      plan: Number(item.planCumulativePercent || 0),
+      actual: actualVal,
+      weeklyPlan: Number(item.planWeeklyPercent || 0),
+      weeklyActual: item.actualWeeklyPercent
+        ? Number(item.actualWeeklyPercent)
+        : null,
+    };
+  });
 
   // Get current variance
-  const latestActiveData = data.filter((d) => d.actualCumulativePercent > 0);
+  const latestActiveData = chartData.filter(
+    (d) => d.actual !== null && d.actual > 0,
+  );
   const latestWeek = latestActiveData[latestActiveData.length - 1];
-  const variance = latestWeek ? Number(latestWeek.variance || 0) : 0;
+  const variance =
+    latestWeek && latestWeek.actual !== null
+      ? Number(latestWeek.actual - latestWeek.plan)
+      : 0;
 
   return (
     <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
@@ -68,7 +106,7 @@ export function SCurveChart({ data }: { data: any[] }) {
         )}
       </CardHeader>
       <CardContent className="pt-6">
-        <div className="h-[350px] w-full">
+        <div className="h-87.5 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}

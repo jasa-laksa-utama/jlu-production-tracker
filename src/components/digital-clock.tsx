@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { format } from "date-fns";
-import { id } from "date-fns/locale";
-import { Clock } from "lucide-react";
+import { formatJakartaDate } from "@/lib/date-utils";
 
 export function DigitalClock() {
   const [time, setTime] = useState<Date | null>(null);
@@ -23,13 +21,12 @@ export function DigitalClock() {
 
   return (
     <div className="flex items-center gap-2 text-muted-foreground select-none">
-      {/* <Clock className="w-3.5 h-3.5 opacity-70 text-primary" /> */}
       <span className="text-xs font-semibold">
-        {format(time, "EEEE, dd MMMM yyyy", { locale: id })}
+        {formatJakartaDate(time, "full").replace(/\s+\d{2}[:\.]\d{2}.*/, "")}
       </span>
       <span className="text-sm opacity-40 mx-0.5">•</span>
       <span className="text-sm font-semibold tabular-nums">
-        {format(time, "HH:mm:ss")}
+        {formatJakartaDate(time, "time")}
       </span>
     </div>
   );

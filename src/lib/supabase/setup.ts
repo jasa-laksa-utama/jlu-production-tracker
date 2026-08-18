@@ -1,6 +1,7 @@
 import { createAdminClient } from "./server";
 
-const BUCKET_NAME = "project-documents";
+const DOCS_BUCKET_NAME = "project-documents";
+const QC_BUCKET_NAME = "qc-attachments";
 
 export async function ensureBucketExists() {
   const supabase = createAdminClient();
@@ -11,12 +12,12 @@ export async function ensureBucketExists() {
     return { success: false, error: listError.message };
   }
 
-  const exists = buckets.some((b) => b.id === BUCKET_NAME);
-
-  if (!exists) {
-    console.log(`Bucket "${BUCKET_NAME}" does not exist. Creating...`);
-    const { data, error } = await supabase.storage.createBucket(BUCKET_NAME, {
-      public: false, // Private bucket as requested for security
+  // 1. Check & Create project-documents bucket (Private)
+  const docsExists = buckets.some((b) => b.id === DOCS_BUCKET_NAME);
+  if (!docsExists) {
+    console.log(`Bucket "${DOCS_BUCKET_NAME}" does not exist. Creating...`);
+    await supabase.storage.createBucket(DOCS_BUCKET_NAME, {
+      public: false,
       allowedMimeTypes: [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -27,15 +28,27 @@ export async function ensureBucketExists() {
       ],
       fileSizeLimit: 26214400, // 25MB
     });
-
-    if (error) {
-      console.error("Error creating bucket:", error);
-      return { success: false, error: error.message };
-    }
-    console.log(`Bucket "${BUCKET_NAME}" created successfully.`);
-    return { success: true, created: true };
   }
 
-  console.log(`Bucket "${BUCKET_NAME}" already exists.`);
-  return { success: true, created: false };
+  // 2. Check & Create qc-attachments bucket (Public)
+  const qcExists = buckets.some((b) => b.id === QC_BUCKET_NAME);
+  if (!qcExists) {
+    console.log(`Bucket "${QC_BUCKET_NAME}" does not exist. Creating...`);
+    const { error: qcError } = await supabase.storage.createBucket(QC_BUCKET_NAME, {
+      public: true, // Public bucket as requested
+      allowedMimeTypes: [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+      ],
+      fileSizeLimit: 5242880, // 5MB limit
+    });
+    if (qcError) {
+      console.error("Error creating qc-attachments bucket:", qcError);
+    } else {
+      console.log(`Bucket "${QC_BUCKET_NAME}" created successfully.`);
+    }
+  }
+
+  return { success: true };
 }

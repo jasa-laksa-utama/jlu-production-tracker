@@ -71,7 +71,7 @@ const styles = StyleSheet.create({
   infoRow: {
     flexDirection: "row",
     marginBottom: 5,
-    alignItems: "flex-end",
+    alignItems: "flex-start",
   },
   infoLabel: {
     fontFamily: "Helvetica-Bold",
@@ -105,15 +105,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     borderBottomWidth: 0.8,
     borderBottomColor: "#ccc",
-    height: 24,
-    alignItems: "center",
+    minHeight: 22,
+    alignItems: "stretch",
   },
   colNo: {
     width: "6%",
     textAlign: "center",
     borderRightWidth: 1,
     borderRightColor: "#000",
-    height: "100%",
+    paddingVertical: 3,
     justifyContent: "center",
   },
   colCode: {
@@ -121,7 +121,8 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: "#000",
     paddingLeft: 4,
-    height: "100%",
+    paddingRight: 2,
+    paddingVertical: 3,
     justifyContent: "center",
   },
   colName: {
@@ -129,7 +130,8 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: "#000",
     paddingLeft: 4,
-    height: "100%",
+    paddingRight: 4,
+    paddingVertical: 3,
     justifyContent: "center",
   },
   colQty: {
@@ -138,7 +140,7 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: "#000",
     paddingRight: 4,
-    height: "100%",
+    paddingVertical: 3,
     justifyContent: "center",
   },
   colUnit: {
@@ -146,7 +148,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     borderRightWidth: 1,
     borderRightColor: "#000",
-    height: "100%",
+    paddingVertical: 3,
     justifyContent: "center",
   },
   colPrice: {
@@ -155,14 +157,14 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: "#000",
     paddingRight: 4,
-    height: "100%",
+    paddingVertical: 3,
     justifyContent: "center",
   },
   colSubtotal: {
     width: "14%",
     textAlign: "right",
     paddingRight: 4,
-    height: "100%",
+    paddingVertical: 3,
     justifyContent: "center",
   },
   thText: {
@@ -261,11 +263,12 @@ const styles = StyleSheet.create({
 
 export function BoQPDFDocument({ project, items }: BoQPDFDocumentProps) {
   const totalValue = items.reduce((acc, it) => acc + it.qty * it.price, 0);
+  const createdDate = project?.createdAt ? new Date(project.createdAt) : new Date();
   const formattedDate = new Intl.DateTimeFormat("id-ID", {
     day: "2-digit",
     month: "long",
     year: "numeric",
-  }).format(new Date());
+  }).format(createdDate);
 
   const formatIndonesianDate = (date: Date) => {
     const months = [
@@ -297,7 +300,8 @@ export function BoQPDFDocument({ project, items }: BoQPDFDocumentProps) {
           <View>
             <Text style={styles.companyName}>PT. JASA LAKSA UTAMA</Text>
             <Text style={styles.companySub}>
-              Production, Engineering & Logistics System
+              High Capacity Conveyor Systems, Crushing Equipment, And Material
+              Handling Solutions
             </Text>
           </View>
           <View>
@@ -336,14 +340,26 @@ export function BoQPDFDocument({ project, items }: BoQPDFDocumentProps) {
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Customer</Text>
               <Text style={styles.infoColon}>:</Text>
-              <Text style={styles.infoValue}>
-                {project?.customer?.company
-                  ? `${project.customer.company} (${project.customer.name})`
-                  : project?.customer?.name || "-"}
-              </Text>
+              <View style={styles.infoValue}>
+                {project?.customer?.company ? (
+                  <>
+                    <Text style={styles.tdTextBold}>
+                      {project.customer.company}
+                    </Text>
+                    {project.customer.name &&
+                      project.customer.name !== project.customer.company && (
+                        <Text style={{ marginTop: 1 }}>
+                          ({project.customer.name})
+                        </Text>
+                      )}
+                  </>
+                ) : (
+                  <Text>{project?.customer?.name || "-"}</Text>
+                )}
+              </View>
             </View>
             <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Tanggal Cetak</Text>
+              <Text style={styles.infoLabel}>Tanggal Dibuat</Text>
               <Text style={styles.infoColon}>:</Text>
               <Text style={styles.infoValue}>{formattedDate}</Text>
             </View>
@@ -450,9 +466,13 @@ export function BoQPDFDocument({ project, items }: BoQPDFDocumentProps) {
             {project?.boqStatus && project.boqStatus !== "DRAFT" ? (
               <View style={styles.digitalSignContainer}>
                 <Text style={styles.digitalSignText}>DIGITALLY SIGNED BY</Text>
-                <Text style={styles.digitalSignName}>{project.boqMakerName || "ENGINEERING"}</Text>
+                <Text style={styles.digitalSignName}>
+                  {project.boqMakerName || "ENGINEERING"}
+                </Text>
                 <Text style={styles.digitalSignDate}>
-                  {project.createdAt ? formatIndonesianDate(new Date(project.createdAt)) : formattedDate}
+                  {project.createdAt
+                    ? formatIndonesianDate(new Date(project.createdAt))
+                    : formattedDate}
                 </Text>
               </View>
             ) : (
@@ -468,7 +488,11 @@ export function BoQPDFDocument({ project, items }: BoQPDFDocumentProps) {
                 <Text style={styles.digitalSignText}>DIGITALLY SIGNED BY</Text>
                 <Text style={styles.digitalSignName}>SLAMET</Text>
                 <Text style={styles.digitalSignDate}>
-                  {project.boqApprovedByPpicAt ? formatIndonesianDate(new Date(project.boqApprovedByPpicAt)) : formattedDate}
+                  {project.boqApprovedByPpicAt
+                    ? formatIndonesianDate(
+                        new Date(project.boqApprovedByPpicAt),
+                      )
+                    : formattedDate}
                 </Text>
               </View>
             ) : (
@@ -484,7 +508,9 @@ export function BoQPDFDocument({ project, items }: BoQPDFDocumentProps) {
                 <Text style={styles.digitalSignText}>DIGITALLY SIGNED BY</Text>
                 <Text style={styles.digitalSignName}>PROJECT MANAGER</Text>
                 <Text style={styles.digitalSignDate}>
-                  {project.boqApprovedByPmAt ? formatIndonesianDate(new Date(project.boqApprovedByPmAt)) : formattedDate}
+                  {project.boqApprovedByPmAt
+                    ? formatIndonesianDate(new Date(project.boqApprovedByPmAt))
+                    : formattedDate}
                 </Text>
               </View>
             ) : (

@@ -18,6 +18,7 @@ import { requireAuth } from "@/lib/auth-guard";
 export async function convertToProject(
   leadId: string,
   expectedDate?: Date | null,
+  customProjectNumber?: string | null,
 ) {
   try {
     await requireAuth();
@@ -35,8 +36,18 @@ export async function convertToProject(
       );
     }
 
-    // Generate project number
-    const projectNumber = await generateTrackingNumber("PROJECT", lead.projectType || "PO_PROJECT");
+    // Determine project number (Manual or Auto-generated)
+    let projectNumber = customProjectNumber?.trim() || "";
+    if (projectNumber) {
+      const existingProjNum = await prisma.project.findFirst({
+        where: { projectNumber },
+      });
+      if (existingProjNum) {
+        throw new Error(`Project Number "${projectNumber}" sudah digunakan oleh proyek lain.`);
+      }
+    } else {
+      projectNumber = await generateTrackingNumber("PROJECT", lead.projectType || "PO_PROJECT");
+    }
 
     // Create the Project and its first history record in a transaction
     const result = await prisma.$transaction(async (tx) => {
@@ -64,11 +75,9 @@ export async function convertToProject(
           projectNumber,
           startDate: new Date(),
           globalDriveUrl: lead.globalDriveUrl, // Copy drive URL from Lead
-          currentDivision: "ENGINEERING",
-          currentStatus: "IN_PROGRESS",
           status: "IN_PROGRESS",
           engStatus: "IN_PROGRESS",
-          engEntryDate: new Date(),
+          dealAt: new Date(),
         },
       });
 
@@ -198,24 +207,8 @@ export async function updateProjectDivisionStatus(
       // 2. Update the Project record with division-specific logic
       const updateData: any = {
         status: finalStatus,
-        currentDivision: newDivision,
-        currentStatus: finalStatus,
       };
 
-      // CRITICAL FIX: If we are returning to Engineering from ANOTHER division, reset PPIC status
-      // EXCEPTION: If we are already in Engineering and just updating internal status (Revision -> Acc Customer),
-      // do NOT reset to REVISION or force PENDING if not needed.
-      if (
-        newDivision === "ENGINEERING" &&
-        project.currentDivision !== "ENGINEERING"
-      ) {
-        updateData.ppicStatus = "PENDING";
-        updateData.ppicCompletedAt = null;
-        updateData.ppicEntryDate = null;
-        updateData.engStatus = "REVISION"; // Default to revision when returned
-      }
-
-      // Map division names to column prefixes
       const divisionMap: Record<string, string> = {
         ENGINEERING: "eng",
         PPIC: "ppic",
@@ -225,85 +218,9 @@ export async function updateProjectDivisionStatus(
         LOGISTIC: "log",
       };
 
-      // 3. Automated Handover Logic
-      const goingToEngineering = newDivision === "ENGINEERING";
-      const comingFromOther = project.currentDivision !== newDivision;
-
-      // SYNC GUARD: If we are in PPIC and approving, we MUST sync engStatus too
-      if (finalStatus === "APPROVED_BY_PPIC") {
-        updateData.engStatus = "APPROVED_BY_PPIC";
-        updateData.engCompletedAt = new Date();
-      }
-
-      if (comingFromOther) {
-        if (goingToEngineering) {
-          // IMPORTANT: Reset PPIC status back to PENDING if we are returning to Engineering from outside
-          updateData.ppicStatus = "PENDING";
-          updateData.ppicCompletedAt = null;
-          updateData.ppicEntryDate = null;
-
-          const oldPrefix =
-            divisionMap[project.currentDivision as keyof typeof divisionMap];
-          if (oldPrefix && project.currentDivision !== "PPIC") {
-            updateData[`${oldPrefix}Status`] = "PENDING";
-            updateData[`${oldPrefix}CompletedAt`] = null;
-            updateData[`${oldPrefix}EntryDate`] = null;
-          }
-        } else {
-          // Standard forward handover logic...
-          const oldPrefix =
-            divisionMap[project.currentDivision as keyof typeof divisionMap];
-          if (project.currentDivision === "ENGINEERING") {
-            updateData.engReviewedAt = new Date();
-          }
-          if (oldPrefix) {
-            updateData[`${oldPrefix}Status`] = finalStatus;
-            updateData[`${oldPrefix}CompletedAt`] = new Date();
-          }
-        }
-      }
-
-      // 4. Update the record for the NEW division
-      // If we are just updating status WITHIN the same division (like internal Engineering update),
-      // or moving forward to a new division, we need to update that division's specific status column.
-      const isInternalUpdate = project.currentDivision === newDivision;
-
-      if (!goingToEngineering || isInternalUpdate) {
-        const prefix = divisionMap[newDivision];
-        if (prefix) {
-          updateData[`${prefix}Status`] = finalStatus;
-
-          // If entering a new division (current status in that division is PENDING), set EntryDate
-          const hasEntryDate = ["eng", "ppic", "qc", "log", "prod"].includes(prefix);
-          if (
-            hasEntryDate &&
-            project[`${prefix}Status` as keyof typeof project] === "PENDING" &&
-            finalStatus !== "PENDING"
-          ) {
-            updateData[`${prefix}EntryDate`] = new Date();
-          }
-
-          // If it's a "DONE", "APPROVED", or "APPROVED_BY_CUSTOMER" state
-          if (
-            finalStatus === "DONE" ||
-            finalStatus === "APPROVED" ||
-            finalStatus === "APPROVED_BY_CUSTOMER" ||
-            finalStatus === "APPROVED_BY_PPIC" ||
-            finalStatus.startsWith("APPROVED")
-          ) {
-            if (finalStatus !== "APPROVED_BY_CUSTOMER") {
-              updateData[`${prefix}CompletedAt`] = new Date();
-            }
-
-            // Global endDate if Logistic is DONE
-            if (
-              newDivision === "LOGISTIC" &&
-              (finalStatus === "DONE" || finalStatus === "APPROVED")
-            ) {
-              updateData.endDate = new Date();
-            }
-          }
-        }
+      const prefix = divisionMap[newDivision];
+      if (prefix) {
+        updateData[`${prefix}Status`] = finalStatus;
       }
 
       const updatedProject = await tx.project.update({
@@ -351,35 +268,44 @@ export async function updateProjectDivisionStatus(
 }
 
 /**
- * Fetches projects for a specific division with optional pagination and filtering.
+ * Fetches all active projects for tracker pages.
+ * No longer restricted by division or status. All deal projects automatically appear everywhere.
  */
-export async function getProjectsByDivision(
-  division: string,
-  params: {
+export async function getProjects(
+  divisionOrParams?: string | {
     page?: number;
     pageSize?: number;
     search?: string;
     status?: string;
+    division?: string;
     startDate?: string;
     endDate?: string;
     sortOrder?: "asc" | "desc";
-  } = {},
+  },
+  maybeParams?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    status?: string;
+    division?: string;
+    startDate?: string;
+    endDate?: string;
+    sortOrder?: "asc" | "desc";
+  },
 ) {
   try {
     await requireAuth();
-    
-    // Auto-sync inventory status for projects in the WAITING_INVENTORY state
-    try {
-      const activeInventoryProjects = await prisma.project.findMany({
-        where: { status: "WAITING_INVENTORY" },
-        select: { id: true },
-      });
-      for (const p of activeInventoryProjects) {
-        await syncProjectInventoryStatus(p.id);
-      }
-    } catch (err) {
-      console.error("Failed to auto-sync inventory projects in getProjectsByDivision:", err);
-    }
+
+    let division =
+      typeof divisionOrParams === "string"
+        ? divisionOrParams
+        : (typeof divisionOrParams === "object"
+            ? (divisionOrParams as any).division
+            : undefined) ||
+          maybeParams?.division ||
+          "ALL";
+
+    let params = (typeof divisionOrParams === "object" ? divisionOrParams : maybeParams) || {};
 
     const {
       page = 1,
@@ -394,66 +320,32 @@ export async function getProjectsByDivision(
     const skip = (page - 1) * pageSize;
     const take = pageSize;
 
-    // Filter by the division's specific status column if status is provided,
-    // otherwise show all projects that haven't been completed in this division yet
-    // OR that are currently assigned to this division.
-    const divisionMap: Record<string, string> = {
-      ENGINEERING: "eng",
-      PPIC: "ppic",
-      PURCHASING: "pur",
-      PRODUCTION: "prod",
-      QUALITY_CONTROL: "qc",
-      LOGISTIC: "log",
-    };
-    const prefix = divisionMap[division] || "eng";
-
     const AND: Prisma.ProjectWhereInput[] = [];
 
-    // Default visibility for a division:
-    // Show if they have an active status (not PENDING unless it's the currentDivision)
-    // or if the project is explicitly in their division.
+    // Always show all active non-cancelled, non-deleted deal projects across all pages
+    AND.push({
+      status: { notIn: ["CANCELLED", "DELETED"] },
+    });
+
+    // If user explicitly filters by status in the UI, filter against the division's status field
     if (status && status !== "ALL") {
-      if (division === "PPIC" && status === "WAITING_INVENTORY") {
-        AND.push({
-          OR: [
-            { currentDivision: "INVENTORY", NOT: { status: "INVENTORY_READY" } },
-            { status: "WAITING_INVENTORY" },
-          ],
-        });
-      } else if (division === "PPIC" && status === "INVENTORY_READY") {
-        AND.push({ status: "INVENTORY_READY" });
-      } else if (division === "ENGINEERING" && status === "REVIEW") {
-        AND.push({
-          OR: [
-            { engStatus: "REVIEW" },
-            { ppicStatus: "REVIEW" },
-          ],
-        });
-      } else if (division === "ENGINEERING" && status === "APPROVED_BY_CUSTOMER") {
-        AND.push({
-          engStatus: "APPROVED_BY_CUSTOMER",
-          NOT: {
-            ppicStatus: "REVIEW",
-          },
-        });
-      } else {
-        AND.push({ [`${prefix}Status`]: status });
-      }
-    } else {
-      // In a specific division view, we usually want to see what's relevant to them
-      if (division === "QUALITY_CONTROL") {
-        AND.push({
-          OR: [
-            { currentDivision: "QUALITY_CONTROL" },
-            { prodStatus: { in: ["IN_PROGRESS", "DONE"] } },
-            { qcStatus: { not: "PENDING" } },
-          ],
-        });
+      const upperDiv = (division || "").toUpperCase();
+      if (upperDiv === "PRODUKSI" || upperDiv === "PRODUCTION") {
+        AND.push({ prodStatus: status });
+      } else if (upperDiv === "ENGINEERING" || upperDiv === "ENG") {
+        AND.push({ engStatus: status });
+      } else if (upperDiv === "PPIC") {
+        AND.push({ ppicStatus: status });
+      } else if (upperDiv === "QUALITY_CONTROL" || upperDiv === "QC") {
+        AND.push({ qcStatus: status });
       } else {
         AND.push({
           OR: [
-            { currentDivision: division },
-            { [`${prefix}Status`]: { not: "PENDING" } },
+            { status: status },
+            { engStatus: status },
+            { ppicStatus: status },
+            { prodStatus: status },
+            { qcStatus: status },
           ],
         });
       }
@@ -468,11 +360,6 @@ export async function getProjectsByDivision(
           { customer: { company: { contains: search, mode: "insensitive" } } },
         ],
       });
-    }
-
-    // Status filtering is handled in the initial AND block above
-    if (status && status !== "ALL") {
-      // already added
     }
 
     if (startDate) {
@@ -502,12 +389,23 @@ export async function getProjectsByDivision(
             },
           },
           spb: {
+            orderBy: {
+              createdAt: "desc",
+            },
             include: {
               items: {
                 include: {
                   material: true,
                 },
               },
+            },
+          },
+          spj: {
+            include: {
+              items: true,
+            },
+            orderBy: {
+              createdAt: "desc",
             },
           },
           productionSetup: true,
@@ -528,6 +426,16 @@ export async function getProjectsByDivision(
             include: {
               structureItems: { orderBy: { orderIndex: "asc" } },
               mechanicalItems: { orderBy: { orderIndex: "asc" } },
+              qcCheckpoints: {
+                include: {
+                  revisions: {
+                    orderBy: { createdAt: "desc" },
+                  },
+                },
+              },
+              qcRevisions: {
+                orderBy: { createdAt: "desc" },
+              },
             },
           },
           components: {
@@ -537,6 +445,9 @@ export async function getProjectsByDivision(
             orderBy: {
               createdAt: "asc",
             },
+          },
+          qcRevisions: {
+            orderBy: { createdAt: "desc" },
           },
           productionStages: {
             include: {
@@ -559,7 +470,32 @@ export async function getProjectsByDivision(
               createdAt: "desc",
             },
           },
+          goodsReleaseMemos: {
+            include: {
+              items: true,
+              returns: {
+                include: {
+                  items: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+          },
           handovers: true,
+          boqs: {
+            include: {
+              boqItems: {
+                include: {
+                  item: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+          },
           _count: {
             select: {
               spb: true,
@@ -625,6 +561,9 @@ export async function getProjectsByDivision(
   }
 }
 
+// Export getProjectsByDivision as an alias for backwards compatibility
+export const getProjectsByDivision = getProjects;
+
 /**
  * Gets overall stats for a division, ignoring search filters.
  */
@@ -665,12 +604,10 @@ export async function getDivisionStats(division: string) {
             ppicStatus: {
               in: ["APPROVED_BY_PPIC", "APPROVE_PPIC", "APPROVED", "DONE"],
             },
-            currentDivision: "PPIC",
           },
         }),
         prisma.project.count({
           where: {
-            currentDivision: "INVENTORY",
             NOT: { status: "INVENTORY_READY" },
           },
         }),
@@ -697,10 +634,7 @@ export async function getDivisionStats(division: string) {
       const [totalActive, inProgress, review, approved] = await Promise.all([
         prisma.project.count({
           where: {
-            OR: [
-              { currentDivision: "PRODUCTION" },
-              { prodStatus: { not: "PENDING" } },
-            ],
+            status: { notIn: ["CANCELLED", "DELETED"] },
           },
         }),
         prisma.project.count({
@@ -710,7 +644,6 @@ export async function getDivisionStats(division: string) {
         }),
         prisma.project.count({
           where: {
-            currentDivision: "PRODUCTION",
             prodStatus: "PENDING",
           },
         }),
@@ -731,11 +664,7 @@ export async function getDivisionStats(division: string) {
       const [totalActive, inProgress, review, approved] = await Promise.all([
         prisma.project.count({
           where: {
-            OR: [
-              { currentDivision: "QUALITY_CONTROL" },
-              { prodStatus: { in: ["IN_PROGRESS", "DONE"] } },
-              { qcStatus: { not: "PENDING" } },
-            ],
+            status: { notIn: ["CANCELLED", "DELETED"] },
           },
         }),
         prisma.project.count({
@@ -943,12 +872,7 @@ export async function getProjectsMasterOverview(
       });
     }
 
-    // Division filter
-    if (division && division !== "ALL") {
-      andConditions.push({
-        currentDivision: division.toUpperCase()
-      });
-    }
+
 
     // Date range filter
     if (start) {
@@ -1095,10 +1019,7 @@ export async function handoverToInventory(projectId: string) {
         where: { id: projectId },
         data: {
           status: "WAITING_INVENTORY",
-          currentDivision: "INVENTORY",
-          currentStatus: "WAITING_INVENTORY",
           ppicStatus: "APPROVED_BY_PPIC", // APPROVED_BY_PPIC is the final status for PPIC division
-          ppicCompletedAt: new Date(),
           warehouseStatus,
           purchasingStatus,
         },
@@ -1194,7 +1115,6 @@ export async function syncProjectInventoryStatus(projectId: string) {
           where: { id: projectId },
           data: {
             status: "INVENTORY_READY",
-            currentStatus: "INVENTORY_READY",
             warehouseStatus: "NOT_REQUIRED",
             purchasingStatus: "NOT_REQUIRED",
           },
@@ -1266,7 +1186,6 @@ export async function syncProjectInventoryStatus(projectId: string) {
           where: { id: projectId },
           data: {
             status: "INVENTORY_READY",
-            currentStatus: "INVENTORY_READY",
             warehouseStatus: hasWarehouse ? "PREPARED" : "NOT_REQUIRED",
             purchasingStatus: hasTrading ? "RECEIVED" : "NOT_REQUIRED",
           },
@@ -1436,7 +1355,7 @@ export async function completeDrawingRevision(projectId: string, notes: string) 
         where: { id: projectId },
         data: {
           engStatus: "APPROVED_BY_PPIC", // Back to approved state
-          engCompletedAt: new Date(),
+          boqApprovedAt: new Date(),
         },
       });
     });
@@ -1525,7 +1444,7 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
       where: {
         ...projectWhere,
         OR: [
-          { currentStatus: { in: ["REVIEW", "PENDING_APPROVAL"] } },
+          { status: { in: ["REVIEW", "PENDING_APPROVAL"] } },
           { engStatus: { in: ["REVIEW", "PENDING_APPROVAL"] } },
           { ppicStatus: { in: ["REVIEW", "PENDING_APPROVAL"] } }
         ]
@@ -1537,10 +1456,7 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
       where: {
         ...projectWhere,
         NOT: {
-          OR: [
-            { status: { in: ["CLOSED", "COMPLETED", "CANCELLED"] } },
-            { logStatus: { in: ["COMPLETED", "DELIVERED"] } }
-          ]
+          status: { in: ["CLOSED", "COMPLETED", "CANCELLED"] },
         }
       }
     });
@@ -1549,28 +1465,25 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
     const completed = await prisma.project.count({
       where: {
         ...projectWhere,
-        OR: [
-          { status: { in: ["CLOSED", "COMPLETED"] } },
-          { logStatus: { in: ["COMPLETED", "DELIVERED"] } }
-        ]
+        status: { in: ["CLOSED", "COMPLETED"] },
       }
     });
 
-    // 6. Average Production Lead Time (durasi pembuatan proyek dari dibuat -> serah terima logistik)
+    // 6. Average Production Lead Time (durasi pembuatan proyek dari deal -> produksi selesai)
     const projectsWithLeadTime = await prisma.project.findMany({
       where: {
         ...projectWhere,
-        logEntryDate: { not: null },
+        dealAt: { not: null },
       },
       select: {
         createdAt: true,
-        logEntryDate: true,
+        dealAt: true,
       },
     });
     let averageLeadTime = 0;
     if (projectsWithLeadTime.length > 0) {
       const totalMs = projectsWithLeadTime.reduce((sum, p) => {
-        return sum + (p.logEntryDate!.getTime() - p.createdAt.getTime());
+        return sum + ((p.dealAt || p.createdAt).getTime() - p.createdAt.getTime());
       }, 0);
       const avgDays = totalMs / (1000 * 60 * 60 * 24 * projectsWithLeadTime.length);
       averageLeadTime = Math.round(avgDays * 10) / 10;
@@ -1604,13 +1517,10 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
     const completedProjects = await prisma.project.findMany({
       where: {
         ...projectWhere,
-        OR: [
-          { status: { in: ["CLOSED", "COMPLETED"] } },
-          { logStatus: { in: ["COMPLETED", "DELIVERED"] } }
-        ]
+        status: { in: ["CLOSED", "COMPLETED"] },
       },
       select: {
-        logCompletedAt: true,
+        productionCompletedAt: true,
         expectedDate: true,
       }
     });
@@ -1618,7 +1528,7 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
     if (completedProjects.length > 0) {
       const onTimeCount = completedProjects.filter(p => {
         if (!p.expectedDate) return true;
-        const completionDate = p.logCompletedAt || new Date();
+        const completionDate = p.productionCompletedAt || new Date();
         return completionDate.getTime() <= p.expectedDate.getTime();
       }).length;
       onTimeRate = Math.round((onTimeCount / completedProjects.length) * 100);
@@ -1627,13 +1537,12 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
     }
 
     // 9. Division Workload Load
-    const divisions = ["PPIC", "ENGINEERING", "INVENTORY", "PRODUCTION", "QUALITY_CONTROL", "LOGISTIC", "SHIPPING"];
+    const divisions = ["PPIC", "ENGINEERING", "PRODUCTION", "QUALITY_CONTROL"];
     const divisionCounts = await Promise.all(
       divisions.map(async (div) => {
         const count = await prisma.project.count({
           where: {
             ...projectWhere,
-            currentDivision: div,
             NOT: {
               status: { in: ["CLOSED", "CANCELLED"] }
             }
@@ -1721,14 +1630,11 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
       
       const closedCount = await prisma.project.count({
         where: {
-          logCompletedAt: {
+          productionCompletedAt: {
             gte: startOfMonth,
             lte: endOfMonth,
           },
-          OR: [
-            { status: { in: ["CLOSED", "COMPLETED"] } },
-            { logStatus: { in: ["COMPLETED", "DELIVERED"] } }
-          ]
+          status: { in: ["CLOSED", "COMPLETED"] },
         }
       });
       
@@ -1813,3 +1719,54 @@ export async function getPurchaseOrders() {
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * Sends a note from PPIC (or another division) to Engineering.
+ * Creates a ProjectHistory record and sends a notification.
+ */
+export async function sendNoteToEngineering(projectId: string, notes: string) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const uBy = session?.user?.name || "System";
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, projectName: true, projectNumber: true },
+    });
+
+    if (!project) throw new Error("Project not found");
+
+    await prisma.projectHistory.create({
+      data: {
+        projectId,
+        division: "ENGINEERING",
+        action: "Catatan dari PPIC",
+        notes: notes,
+        updatedBy: uBy,
+        remark: "PPIC Note for Engineering",
+      },
+    });
+
+    revalidatePath("/trackers/ppic");
+    revalidatePath("/trackers/engineering");
+    revalidatePath("/dashboard");
+
+    try {
+      await createNotification({
+        title: "Catatan Baru dari PPIC",
+        message: `${uBy} mengirim catatan untuk ${project.projectNumber || project.projectName}: "${notes}"`,
+        type: "INFO",
+        module: "ENGINEERING",
+        targetUrl: "/trackers/engineering",
+      });
+    } catch (e) {
+      console.error("Failed to create notification for engineering note:", e);
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message || "Gagal mengirim catatan ke Engineering" };
+  }
+}
+

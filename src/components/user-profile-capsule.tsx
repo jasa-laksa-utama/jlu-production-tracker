@@ -46,7 +46,7 @@ export function UserProfileCapsule({
   const { data: session, status } = useSession();
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
 
-  if (status === "loading" || !session) {
+  if (status === "loading") {
     return (
       <div
         className={cn(
@@ -62,6 +62,33 @@ export function UserProfileCapsule({
           </div>
         )}
       </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <button
+        type="button"
+        onClick={async () => {
+          try {
+            await signOut({ redirect: false });
+          } catch (e) {}
+          document.cookie =
+            "next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          document.cookie =
+            "__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          document.cookie =
+            "authjs.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          window.location.href = "/login?clear=true&logout=true";
+        }}
+        className={cn(
+          "flex items-center gap-2 px-3 py-1.5 rounded-xl bg-primary text-primary-foreground text-xs font-bold shadow-sm hover:bg-primary/90 transition-all cursor-pointer",
+          className,
+        )}
+      >
+        <LogOut className="w-3.5 h-3.5 rotate-180" />
+        Login Kembali
+      </button>
     );
   }
 
@@ -96,10 +123,10 @@ export function UserProfileCapsule({
           </div>
           {!isCollapsed && (
             <div className="flex flex-col items-start leading-tight flex-1">
-              <span className="text-[12px] font-bold text-foreground group-hover:text-primary transition-colors text-left truncate max-w-[180px]">
+              <span className="text-[12px] font-bold text-foreground group-hover:text-primary transition-colors text-left truncate max-w-45">
                 {user.name}
               </span>
-              <span className="text-[10px] text-muted-foreground truncate max-w-[180px]">
+              <span className="text-[10px] text-muted-foreground truncate max-w-45">
                 {user.username}
               </span>
             </div>

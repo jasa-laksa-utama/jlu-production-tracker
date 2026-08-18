@@ -13,6 +13,7 @@ import {
   markAsRead,
   markAllAsRead,
 } from "@/app/actions/notifications";
+import { formatJakartaDate } from "@/lib/date-utils";
 
 interface NotificationItem {
   id: string;
@@ -140,9 +141,9 @@ export function NotificationBell({ moduleName = "TRACKER" }: { moduleName?: stri
       <PopoverTrigger
         className="relative h-9 w-9 rounded-xl hover:bg-muted active:scale-90 transition-all cursor-pointer border border-border/10 shrink-0 flex items-center justify-center outline-hidden"
       >
-        <Bell className="h-[18px] w-[18px] text-muted-foreground" />
+        <Bell className="h-4.5 w-4.5 text-muted-foreground" />
         {unreadCount > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-black text-white border-2 border-background animate-in zoom-in-50 duration-200">
+          <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-black text-white border-2 border-background animate-in zoom-in-50 duration-200">
             {unreadCount}
           </span>
         )}
@@ -150,7 +151,7 @@ export function NotificationBell({ moduleName = "TRACKER" }: { moduleName?: stri
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="w-[360px] p-0 rounded-2xl bg-popover border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50"
+        className="w-90 p-0 rounded-2xl bg-popover border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50"
       >
         <div className="flex items-center justify-between p-4 border-b border-border/50 bg-muted/20 shrink-0">
           <div className="flex items-center gap-2">
@@ -175,7 +176,7 @@ export function NotificationBell({ moduleName = "TRACKER" }: { moduleName?: stri
           )}
         </div>
 
-        <div className="max-h-[350px] overflow-y-auto divide-y divide-border/40">
+        <div className="max-h-87.5 overflow-y-auto divide-y divide-border/40">
           {notifications.length > 0 ? (
             notifications.map((notif) => (
               <button
@@ -197,7 +198,10 @@ export function NotificationBell({ moduleName = "TRACKER" }: { moduleName?: stri
                     <p className={cn("text-xs font-bold text-foreground truncate", !notif.isRead && "text-primary")}>
                       {notif.title}
                     </p>
-                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                    <span
+                      className="text-[10px] text-muted-foreground whitespace-nowrap cursor-help"
+                      title={formatJakartaDate(notif.createdAt, "full")}
+                    >
                       {formatTimeAgo(notif.createdAt)}
                     </span>
                   </div>

@@ -17,11 +17,11 @@ import {
   Contact2,
   PlusCircle,
   PenTool,
+  Building2,
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/skeleton";
-import Image from "next/image";
 
 import {
   Sidebar,
@@ -40,15 +40,38 @@ import {
 import { UserProfileCapsule } from "./user-profile-capsule";
 import { getApprovalCounts } from "@/app/actions/spb";
 
+import { useSession } from "next-auth/react";
+
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const { data: session } = useSession();
   const { setOpenMobile, state } = useSidebar();
   const [mounted, setMounted] = React.useState(false);
   const [counts, setCounts] = React.useState({
-    ppic: { spb: 0, boq: 0, total: 0 },
-    pm: { spb: 0, boq: 0, total: 0 },
+    ppic: { spb: 0, boq: 0, spj: 0, total: 0 },
+    pm: { spb: 0, boq: 0, spj: 0, total: 0 },
+    engineering: { substitutions: 0, total: 0 },
+    direksi: { vendorSelections: 0, total: 0 },
   });
+
+  const userRoles = React.useMemo(() => {
+    return (session?.user?.roles || []).map((r: string) => r.toLowerCase());
+  }, [session]);
+
+  const hasRole = React.useCallback(
+    (allowed: string[]) => {
+      if (!session || !userRoles.length) return true;
+      const isSuper = userRoles.some((r) =>
+        ["superadmin", "admin", "founder"].includes(r),
+      );
+      if (isSuper) return true;
+      return userRoles.some((r) =>
+        allowed.map((a) => a.toLowerCase()).includes(r),
+      );
+    },
+    [session, userRoles],
+  );
 
   React.useEffect(() => {
     setMounted(true);
@@ -59,6 +82,8 @@ export function AppSidebar() {
           setCounts({
             ppic: res.ppic,
             pm: res.pm,
+            engineering: res.engineering || { substitutions: 0, vendorSelections: 0, total: 0 },
+            direksi: (res as any).direksi || { vendorSelections: 0, total: 0 },
           });
         }
       } catch (err) {
@@ -66,7 +91,17 @@ export function AppSidebar() {
       }
     };
     fetchCounts();
-  }, [pathname]);
+
+    // Refresh sidebar notification counts & approval page data automatically every 30 seconds
+    const intervalId = setInterval(() => {
+      fetchCounts();
+      if (pathname.includes("/spb-approval")) {
+        router.refresh();
+      }
+    }, 30000);
+
+    return () => clearInterval(intervalId);
+  }, [pathname, router]);
 
   return (
     <Sidebar
@@ -74,21 +109,19 @@ export function AppSidebar() {
       className="border-r border-border bg-sidebar h-full hover:bg-sidebar/50 pb-4"
     >
       <SidebarHeader className="p-4 flex flex-row items-center justify-start group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:justify-center overflow-hidden">
-        <div className="flex items-center gap-2">
-          <div className="p-1 rounded-lg shrink-0 w-8 h-10 flex items-center justify-center shadow-xs">
-            <Image
+        <div className="flex items-center gap-2.5">
+          <div className="flex items-center justify-center shrink-0 w-10 h-10 rounded-xl overflow-hidden">
+            <img
               src="/jlu-logo-removebg.png"
               alt="Jasa Laksa Utama Logo"
-              width={40}
-              height={40}
-              className="object-contain"
+              className="w-full h-full object-contain"
             />
           </div>
           <div className="flex flex-col font-semibold group-data-[collapsible=icon]:hidden whitespace-nowrap">
             <span className="text-foreground text-lg font-bold leading-none">
               Jasa Laksa Utama
             </span>
-            <span className="text-sm text-muted-foreground mt-0.5 leading-none">
+            <span className="text-xs text-muted-foreground mt-1 leading-none font-medium">
               Production Tracker
             </span>
           </div>
@@ -107,9 +140,9 @@ export function AppSidebar() {
 
       <SidebarContent className="px-2 group-data-[collapsible=icon]:px-0">
         <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-semibold text-foreground-600">
+          {/* <SidebarGroupLabel className="text-xs font-semibold text-foreground-600">
             Main
-          </SidebarGroupLabel>
+          </SidebarGroupLabel> */}
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -128,22 +161,31 @@ export function AppSidebar() {
                   <span>Dashboard</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  className={
-                    pathname === "/leads"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/leads"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/leads" />}
-                  tooltip="Leads & Project"
-                >
-                  <Contact2 className="h-4 w-4" />
-                  <span>Leads & Project</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {hasRole([
+                "Sales",
+                "PPIC",
+                "PPIC (Head)",
+                "PPIC Head",
+                "Project Manager",
+                "PM",
+              ]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    className={
+                      pathname === "/leads"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/leads"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/leads" />}
+                    tooltip="Leads & Project"
+                  >
+                    <Contact2 className="h-4 w-4" />
+                    <span>Leads & Project</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -156,70 +198,98 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Engineering"
-                  className={
-                    pathname === "/trackers/engineering"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/trackers/engineering"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/trackers/engineering" />}
-                >
-                  <PenTool className="h-4 w-4" />
-                  <span>Engineering</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="PPIC"
-                  className={
-                    pathname === "/trackers/ppic"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/trackers/ppic"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/trackers/ppic" />}
-                >
-                  <ClipboardCheck className="h-4 w-4" />
-                  <span>PPIC</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Produksi"
-                  className={
-                    pathname === "/trackers/production"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/trackers/production"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/trackers/production" />}
-                >
-                  <Factory className="h-4 w-4" />
-                  <span>Produksi</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Quality Control"
-                  className={
-                    pathname === "/trackers/quality-control"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/trackers/quality-control"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/trackers/quality-control" />}
-                >
-                  <UserCheck className="h-4 w-4" />
-                  <span>Quality Control</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {hasRole([
+                "Engineering",
+                "PPIC",
+                "PPIC (Head)",
+                "PPIC Head",
+                "Project Manager",
+                "PM",
+              ]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Engineering"
+                    className={
+                      pathname === "/trackers/engineering"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/engineering"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/engineering" />}
+                  >
+                    <PenTool className="h-4 w-4" />
+                    <span>Engineering</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {hasRole([
+                "PPIC",
+                "PPIC (Head)",
+                "PPIC Head",
+                "Project Manager",
+                "PM",
+              ]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="PPIC"
+                    className={
+                      pathname === "/trackers/ppic"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/ppic"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/ppic" />}
+                  >
+                    <ClipboardCheck className="h-4 w-4" />
+                    <span>PPIC</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {hasRole([
+                "Production",
+                "Produksi",
+                "PPIC (Head)",
+                "PPIC Head",
+                "Project Manager",
+                "PM",
+              ]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Production"
+                    className={
+                      pathname === "/trackers/production"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/production"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/production" />}
+                  >
+                    <Factory className="h-4 w-4" />
+                    <span>Production</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {hasRole(["Quality Control", "QC", "Project Manager", "PM"]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Quality Control"
+                    className={
+                      pathname === "/trackers/quality-control"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/quality-control"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/quality-control" />}
+                  >
+                    <UserCheck className="h-4 w-4" />
+                    <span>Quality Control</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -232,66 +302,130 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Approval SPB (PPIC)"
-                  className={
-                    pathname === "/trackers/spb-approval-ppic"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/trackers/spb-approval-ppic"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/trackers/spb-approval-ppic" />}
-                >
-                  <ClipboardCheck className="h-4 w-4" />
-                  <span className="flex-1">Approval PPIC</span>
-                  {mounted && (
-                    <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
-                      {counts.ppic.spb > 0 && (
-                        <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-600 px-1 text-[8px] font-black text-white shadow-xs">
-                          {counts.ppic.spb}
+              {hasRole([
+                "Engineering",
+                "PPIC (Head)",
+                "PPIC Head",
+                "Project Manager",
+                "PM",
+              ]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Approval Substitusi (Engineering)"
+                    className={
+                      pathname === "/trackers/spb-approval-engineering"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/spb-approval-engineering"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/spb-approval-engineering" />}
+                  >
+                    <PenTool className="h-4 w-4" />
+                    <span className="flex-1">Approval Engineering</span>
+                    {mounted && (counts.engineering?.substitutions ?? 0) > 0 && (
+                      <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
+                        <span
+                          className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground px-1.5 text-[9px] font-black shadow-2xs"
+                          title={`${counts.engineering?.substitutions} Substitusi Pending`}
+                        >
+                          {counts.engineering?.substitutions}
                         </span>
-                      )}
-                      {counts.ppic.boq > 0 && (
-                        <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-purple-600 px-1 text-[8px] font-black text-white shadow-xs">
-                          {counts.ppic.boq}
+                      </div>
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {hasRole([
+                "PPIC (Head)",
+                "PPIC Head",
+                "PPIC",
+                "Project Manager",
+                "PM",
+              ]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Approval SPB (PPIC)"
+                    className={
+                      pathname === "/trackers/spb-approval-ppic"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/spb-approval-ppic"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/spb-approval-ppic" />}
+                  >
+                    <ClipboardCheck className="h-4 w-4" />
+                    <span className="flex-1">Approval PPIC</span>
+                    {mounted && counts.ppic.total > 0 && (
+                      <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
+                        <span
+                          className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground px-1.5 text-[9px] font-black shadow-2xs"
+                          title={`${counts.ppic.total} Approval Pending`}
+                        >
+                          {counts.ppic.total}
                         </span>
-                      )}
-                    </div>
-                  )}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Approval SPB (PM)"
-                  className={
-                    pathname === "/trackers/spb-approval-pm"
-                      ? "py-2.5 font-semibold"
-                      : "text-muted-foreground hover:text-foreground py-2.5"
-                  }
-                  isActive={pathname === "/trackers/spb-approval-pm"}
-                  onClick={() => setOpenMobile(false)}
-                  render={<Link href="/trackers/spb-approval-pm" />}
-                >
-                  <UserCheck className="h-4 w-4" />
-                  <span className="flex-1">Approval PM</span>
-                  {mounted && (
-                    <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
-                      {counts.pm.spb > 0 && (
-                        <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-600 px-1 text-[8px] font-black text-white shadow-xs">
-                          {counts.pm.spb}
+                      </div>
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {hasRole(["Project Manager", "PM"]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Approval SPB (PM)"
+                    className={
+                      pathname === "/trackers/spb-approval-pm"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/spb-approval-pm"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/spb-approval-pm" />}
+                  >
+                    <UserCheck className="h-4 w-4" />
+                    <span className="flex-1">Approval PM</span>
+                    {mounted && counts.pm.total > 0 && (
+                      <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
+                        <span
+                          className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground px-1.5 text-[9px] font-black shadow-2xs"
+                          title={`${counts.pm.total} Approval Pending`}
+                        >
+                          {counts.pm.total}
                         </span>
-                      )}
-                      {counts.pm.boq > 0 && (
-                        <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-purple-600 px-1 text-[8px] font-black text-white shadow-xs">
-                          {counts.pm.boq}
+                      </div>
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {hasRole(["Direktur", "Direksi", "Superadmin", "Admin"]) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Approval Direksi"
+                    className={
+                      pathname === "/trackers/spb-approval-direksi"
+                        ? "py-2.5 font-semibold"
+                        : "text-muted-foreground hover:text-foreground py-2.5"
+                    }
+                    isActive={pathname === "/trackers/spb-approval-direksi"}
+                    onClick={() => setOpenMobile(false)}
+                    render={<Link href="/trackers/spb-approval-direksi" />}
+                  >
+                    <Building2 className="h-4 w-4" />
+                    <span className="flex-1">Approval Direksi</span>
+                    {mounted && (counts as any).direksi?.total > 0 && (
+                      <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
+                        <span
+                          className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground px-1.5 text-[9px] font-black shadow-2xs"
+                          title={`${(counts as any).direksi.total} Menunggu Persetujuan Direksi`}
+                        >
+                          {(counts as any).direksi.total}
                         </span>
-                      )}
-                    </div>
-                  )}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+                      </div>
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -299,29 +433,31 @@ export function AppSidebar() {
 
       <SidebarFooter className="p-2">
         <SidebarMenu className="mb-2">
-          <SidebarMenuItem>
-            {!mounted ? (
-              <div className="flex items-center gap-2 py-2.5 px-2">
-                <Skeleton className="h-4 w-4" />
-                <Skeleton className="h-4 w-32" />
-              </div>
-            ) : (
-              <SidebarMenuButton
-                tooltip="System Settings"
-                className={
-                  pathname.startsWith("/settings")
-                    ? "py-2.5 font-medium"
-                    : "text-muted-foreground hover:text-foreground py-2.5"
-                }
-                isActive={pathname.startsWith("/settings")}
-                render={<Link href="/settings/users" />}
-                onClick={() => setOpenMobile(false)}
-              >
-                <Settings className="h-4 w-4" />
-                <span>Admin Settings</span>
-              </SidebarMenuButton>
-            )}
-          </SidebarMenuItem>
+          {hasRole(["Superadmin", "Admin", "Founder"]) && (
+            <SidebarMenuItem>
+              {!mounted ? (
+                <div className="flex items-center gap-2 py-2.5 px-2">
+                  <Skeleton className="h-4 w-4" />
+                  <Skeleton className="h-4 w-32" />
+                </div>
+              ) : (
+                <SidebarMenuButton
+                  tooltip="System Settings"
+                  className={
+                    pathname.startsWith("/settings")
+                      ? "py-2.5 font-medium"
+                      : "text-muted-foreground hover:text-foreground py-2.5"
+                  }
+                  isActive={pathname.startsWith("/settings")}
+                  render={<Link href="/settings/users" />}
+                  onClick={() => setOpenMobile(false)}
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>Admin Settings</span>
+                </SidebarMenuButton>
+              )}
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
 
         <SidebarSeparator className="mb-2" />

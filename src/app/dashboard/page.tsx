@@ -1,3 +1,5 @@
+import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { MetricCards } from "@/components/metric-cards";
@@ -10,6 +12,11 @@ export default async function Page({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
+  const session = await auth();
+  if (!session || !session.user || (!session.user.id && !session.user.username)) {
+    redirect("/login?clear=true");
+  }
+
   const resolvedParams = await searchParams;
   const page = Number(resolvedParams.page) || 1;
   const search = (resolvedParams.search as string) || "";

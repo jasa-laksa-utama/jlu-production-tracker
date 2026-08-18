@@ -218,7 +218,7 @@ export function UserTable({ users, roles }: { users: any[]; roles: any[] }) {
                 </Button>
               }
             />
-            <DialogContent className="max-w-md">
+            <DialogContent className="max-w-xl!">
               <DialogHeader>
                 <DialogTitle>Add New User</DialogTitle>
                 <DialogDescription>
@@ -517,7 +517,7 @@ export function UserTable({ users, roles }: { users: any[]; roles: any[] }) {
 
       {/* Edit Dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-xl!">
           <DialogHeader>
             <DialogTitle>Edit User</DialogTitle>
             <DialogDescription>

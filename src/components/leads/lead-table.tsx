@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { formatJakartaDate } from "@/lib/date-utils";
 import {
   Search,
   MoreHorizontal,
@@ -89,6 +90,7 @@ import { DateRangePicker } from "./date-range-picker";
 import { DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import { cn, sanitizeInput, formatRupiah } from "@/lib/utils";
+import { calcUnitProgress } from "@/lib/progress-calculator";
 import { Label } from "../ui/label";
 import { DocumentManagerDialog } from "@/components/document-manager-dialog";
 import { ProjectDetailDialog } from "@/components/project-detail-dialog";
@@ -139,6 +141,10 @@ export function LeadTable({
     null,
   );
   const [expectedDate, setExpectedDate] = useState<Date | undefined>(undefined);
+  const [projectNumberMode, setProjectNumberMode] = useState<"AUTO" | "MANUAL">(
+    "AUTO",
+  );
+  const [customProjectNo, setCustomProjectNo] = useState("");
   const [dealChecks, setDealChecks] = useState({
     poFile: null as File | null,
     ssFile: null as File | null,
@@ -215,6 +221,8 @@ export function LeadTable({
           ? new Date(convertToProjectLead.expectedDate)
           : undefined,
       );
+      setProjectNumberMode("AUTO");
+      setCustomProjectNo("");
       setDealChecks({
         poFile: null,
         ssFile: null,
@@ -475,7 +483,7 @@ export function LeadTable({
       case "PENDING":
         return "Pending";
       case "WAITING_INVENTORY":
-        return "Waiting Inventory";
+        return "Partially Issued";
       case "IN_PROGRESS":
       case "ON_PROGRESS":
         return "In Progress";
@@ -501,6 +509,45 @@ export function LeadTable({
       default:
         return status ? status.replace(/_/g, " ") : "-";
     }
+  };
+
+  const getProductionProgress = (project: any): number => {
+    if (!project) return 0;
+
+    if (project.masterplan?.phases && project.masterplan.phases.length > 0) {
+      return Math.round(
+        project.masterplan.phases.reduce((sum: number, phase: any) => {
+          const weight = Number(phase.weightPercent || 0);
+          const progress = Number(phase.actualProgress || 0);
+          return sum + (progress * weight) / 100;
+        }, 0),
+      );
+    }
+
+    if (project.prodStatus === "DONE") return 100;
+
+    if (project.productionStages && project.productionStages.length > 0) {
+      let total = 0;
+      project.productionStages.forEach((s: any) => {
+        total += Number(s.progress || 0);
+      });
+      const avg = Math.round(total / project.productionStages.length);
+      if (avg > 0 || project.prodStatus === "IN_PROGRESS") return avg;
+    }
+
+    if (project.conveyorUnits && project.conveyorUnits.length > 0) {
+      let totalUnit = 0;
+      project.conveyorUnits.forEach((unit: any) => {
+        totalUnit += calcUnitProgress(
+          unit.structureItems || [],
+          unit.mechanicalItems || [],
+          unit.unitType || "BOTH",
+        );
+      });
+      return Math.round(totalUnit / project.conveyorUnits.length);
+    }
+
+    return 0;
   };
 
   const formatDivision = (division?: string) => {
@@ -712,7 +759,7 @@ export function LeadTable({
                   >
                     <Command className="w-full">
                       <CommandInput placeholder="Search customer or company..." />
-                      <CommandList className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                      <CommandList className="max-h-75 overflow-y-auto custom-scrollbar">
                         <CommandEmpty>No customer found.</CommandEmpty>
                         <CommandGroup>
                           {activeCustomers.map((customer) => (
@@ -792,7 +839,7 @@ export function LeadTable({
                 <textarea
                   name="description"
                   placeholder="Brief details"
-                  className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                  className="flex min-h-15 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -886,14 +933,14 @@ export function LeadTable({
         <Table>
           <TableHeader className="bg-muted/30">
             <TableRow className="hover:bg-transparent border-border text-xs font-bold">
-              <TableHead className="w-[50px] text-center">No</TableHead>
-              <TableHead className="w-[200px]">Project Name</TableHead>
+              <TableHead className="w-12.5 text-center">No</TableHead>
+              <TableHead className="w-50">Project Name</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Sales</TableHead>
-              <TableHead className="w-[100px]">Entry Date</TableHead>
+              <TableHead className="w-25">Entry Date</TableHead>
               <TableHead>Value</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Project Status</TableHead>
+              <TableHead className="w-40">Progress Produksi</TableHead>
               <TableHead>Docs</TableHead>
               <TableHead className="text-right">Action</TableHead>
             </TableRow>
@@ -927,10 +974,10 @@ export function LeadTable({
                           {lead.leadNumber || "-"}
                         </span>
                         <span className="truncate">{lead.projectName}</span>
-                        <span className="text-xs text-muted-foreground font-medium truncate max-w-[250px]">
+                        <span className="text-xs text-muted-foreground font-medium truncate max-w-62.5">
                           {lead.customer?.company || "Personal Customer"}
                         </span>
-                        <span className="text-xs text-muted-foreground font-medium truncate max-w-[250px]">
+                        <span className="text-xs text-muted-foreground font-medium truncate max-w-62.5">
                           {lead.customer?.name || "-"}
                         </span>
                       </div>
@@ -946,11 +993,11 @@ export function LeadTable({
                   <TableCell className="text-muted-foreground font-semibold text-xs">
                     <div className="flex items-center gap-2">
                       <CalendarIcon className="w-3 h-3 opacity-80" />
-                      {format(new Date(lead.createdAt), "dd MMM yyyy")}
+                      {formatJakartaDate(lead.createdAt, "date")}
                     </div>
                   </TableCell>
                   <TableCell
-                    className="text-muted-foreground font-mono text-sm"
+                    className="text-foreground text-sm"
                     suppressHydrationWarning
                   >
                     {lead.value ? formatRupiah(lead.value) : "-"}
@@ -1019,33 +1066,52 @@ export function LeadTable({
                   </TableCell>
                   <TableCell>
                     {lead.project ? (
-                      <div className="flex flex-col gap-1">
-                        <div>
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "font-medium text-[11px] px-2 py-0.5",
-                              getProjectStatusColor(
-                                lead.project.currentStatus ||
-                                  lead.project.status ||
-                                  "PENDING",
-                              ),
-                            )}
-                          >
-                            {getProjectStatusLabel(
-                              lead.project.currentStatus ||
-                                lead.project.status ||
-                                "PENDING",
-                            )}
-                          </Badge>
-                        </div>
-                        {lead.project.currentDivision && (
-                          <span className="text-[10px] text-muted-foreground font-medium">
-                            Divisi:{" "}
-                            {formatDivision(lead.project.currentDivision)}
-                          </span>
-                        )}
-                      </div>
+                      (() => {
+                        const progress = getProductionProgress(lead.project);
+                        const isDone =
+                          progress === 100 ||
+                          lead.project.prodStatus === "DONE";
+                        return (
+                          <div className="flex flex-col gap-1 min-w-30 max-w-37.5">
+                            <div className="flex items-center justify-between text-[11px] font-semibold">
+                              <span
+                                className={cn(
+                                  "font-bold text-xs",
+                                  isDone
+                                    ? "text-emerald-600 dark:text-emerald-400"
+                                    : progress > 0
+                                      ? "text-primary"
+                                      : "text-muted-foreground",
+                                )}
+                              >
+                                {progress}%
+                              </span>
+                              <span className="text-[10px] text-muted-foreground font-medium truncate ml-1">
+                                {isDone
+                                  ? "Selesai"
+                                  : lead.project.prodStatus === "IN_PROGRESS"
+                                    ? "Produksi"
+                                    : progress > 0
+                                      ? "In Progress"
+                                      : "Belum Mulai"}
+                              </span>
+                            </div>
+                            <div className="w-full bg-muted border border-border/40 h-2 rounded-full overflow-hidden">
+                              <div
+                                className={cn(
+                                  "h-full rounded-full transition-all duration-500",
+                                  isDone
+                                    ? "bg-emerald-500"
+                                    : progress > 0
+                                      ? "bg-primary"
+                                      : "bg-muted-foreground/30",
+                                )}
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })()
                     ) : (
                       <span className="text-muted-foreground text-xs">—</span>
                     )}
@@ -1086,7 +1152,7 @@ export function LeadTable({
                       <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted cursor-pointer">
                         <MoreHorizontal className="h-4 w-4" />
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-[200px]">
+                      <DropdownMenuContent align="end" className="w-50">
                         <div className="px-2 py-1.5 text-sm font-semibold text-muted-foreground">
                           Actions
                         </div>
@@ -1187,7 +1253,7 @@ export function LeadTable({
         open={!!confirmStatus}
         onOpenChange={(open) => !open && setConfirmStatus(null)}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle>Update Lead Status</DialogTitle>
             <DialogDescription>
@@ -1219,7 +1285,7 @@ export function LeadTable({
         open={!!convertToProjectLead}
         onOpenChange={(open) => !open && setConvertToProjectLead(null)}
       >
-        <DialogContent className="md:max-w-[500px]! max-h-[calc(100vh-10rem)] overflow-y-auto">
+        <DialogContent className="md:max-w-125! max-h-[calc(100vh-10rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-green-600" />
@@ -1242,6 +1308,52 @@ export function LeadTable({
             return (
               <>
                 <div className="space-y-4 py-4">
+                  <div className="space-y-2.5">
+                    <Label className="text-sm font-semibold">
+                      Nomor Project
+                    </Label>
+                    <div className="flex items-center gap-4 py-0.5">
+                      <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
+                        <input
+                          type="radio"
+                          name="projNumMode"
+                          checked={projectNumberMode === "AUTO"}
+                          onChange={() => {
+                            setProjectNumberMode("AUTO");
+                            setCustomProjectNo("");
+                          }}
+                          className="text-primary focus:ring-primary cursor-pointer"
+                        />
+                        Otomatis (Sistem)
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
+                        <input
+                          type="radio"
+                          name="projNumMode"
+                          checked={projectNumberMode === "MANUAL"}
+                          onChange={() => setProjectNumberMode("MANUAL")}
+                          className="text-primary focus:ring-primary cursor-pointer"
+                        />
+                        Manual (Input Sendiri)
+                      </label>
+                    </div>
+
+                    {projectNumberMode === "MANUAL" && (
+                      <Input
+                        type="text"
+                        placeholder="Contoh: PRJ-2026-0012 / JLU-ENG-05"
+                        className="text-xs font-mono"
+                        value={customProjectNo}
+                        onChange={(e) => setCustomProjectNo(e.target.value)}
+                      />
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      {projectNumberMode === "AUTO"
+                        ? "Nomor project akan dibuat otomatis oleh sistem."
+                        : "Ketik nomor project khusus sesuai format internal Anda."}
+                    </p>
+                  </div>
+
                   <div className="space-y-2">
                     <Label className="text-sm font-semibold">
                       Expected Completion Date
@@ -1278,7 +1390,7 @@ export function LeadTable({
                           <div className="flex items-center justify-between p-2 rounded border border-green-200 bg-green-50/50 text-[10px]">
                             <div className="flex items-center gap-2 truncate">
                               <FileText className="w-3.5 h-3.5 text-green-600" />
-                              <span className="truncate max-w-[150px] font-medium text-green-700">
+                              <span className="truncate max-w-37.5 font-medium text-green-700">
                                 {existingPo.fileName} (v{existingPo.version})
                               </span>
                             </div>
@@ -1317,7 +1429,7 @@ export function LeadTable({
                               ) : (
                                 <Mail className="w-3.5 h-3.5 text-blue-600" />
                               )}
-                              <span className="truncate max-w-[150px] font-medium text-blue-700">
+                              <span className="truncate max-w-37.5 font-medium text-blue-700">
                                 {existingOffering.fileName || "External Link"}{" "}
                                 (v{existingOffering.version})
                               </span>
@@ -1351,7 +1463,7 @@ export function LeadTable({
                         </Label>
                         <Textarea
                           placeholder="Masukkan catatan deal jika ada..."
-                          className="text-xs min-h-[60px]"
+                          className="text-xs min-h-15"
                           value={dealChecks.notes}
                           onChange={(e) =>
                             setDealChecks((p) => ({
@@ -1387,6 +1499,8 @@ export function LeadTable({
                     disabled={
                       isPending ||
                       !expectedDate ||
+                      (projectNumberMode === "MANUAL" &&
+                        !customProjectNo.trim()) ||
                       (!dealChecks.poFile && !existingPo) ||
                       (!dealChecks.ssFile && !existingOffering)
                     }
@@ -1399,6 +1513,9 @@ export function LeadTable({
                           const result = await convertToProject(
                             convertToProjectLead.id,
                             expectedDate,
+                            projectNumberMode === "MANUAL"
+                              ? customProjectNo.trim()
+                              : null,
                           );
 
                           if (!result.success) throw new Error(result.error);
@@ -1577,7 +1694,7 @@ export function LeadTable({
                   >
                     <Command className="w-full">
                       <CommandInput placeholder="Search customer or company..." />
-                      <CommandList className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                      <CommandList className="max-h-75 overflow-y-auto custom-scrollbar">
                         <CommandEmpty>No customer found.</CommandEmpty>
                         <CommandGroup>
                           {customers.map((customer) => (
@@ -1641,7 +1758,7 @@ export function LeadTable({
                   name="description"
                   defaultValue={editLead.description || ""}
                   placeholder="Brief details"
-                  className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                  className="flex min-h-20 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
                 />
               </div>
 
@@ -1741,7 +1858,7 @@ export function LeadTable({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="text-red-600">Delete Lead</DialogTitle>
             <DialogDescription>
@@ -1792,7 +1909,7 @@ export function LeadTable({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-600">
               <AlertCircle className="w-5 h-5" />
@@ -1860,7 +1977,7 @@ export function LeadTable({
         open={!!revertConfirmLead}
         onOpenChange={(open) => !open && setRevertConfirmLead(null)}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-orange-600">
               <Undo2 className="w-5 h-5" />

@@ -32,7 +32,7 @@ export interface ConveyorPhaseConfig {
 export const DEFAULT_CONVEYOR_PHASES: ConveyorPhaseConfig[] = [
   { code: "PROCUREMENT", name: "Procurement", weight: 12.50, startWeek: 1, endWeek: 15, orderIndex: 1 },
   { code: "ENGINEERING", name: "Engineering", weight: 2.50, startWeek: 1, endWeek: 14, orderIndex: 2 },
-  { code: "FAB_STRUCT_MECH", name: "Fabrication Structure & Mechanical", weight: 35.00, startWeek: 2, endWeek: 20, orderIndex: 3 },
+  { code: "FAB_STRUCT_MECH", name: "Fabrication Structure & Mechanical", weight: 35.00, startWeek: 1, endWeek: 19, orderIndex: 3 },
   { code: "CLEARING", name: "Clearing / leveling area by owner", weight: 0.00, startWeek: 2, endWeek: 6, orderIndex: 4 }, // 0% weight initially or custom
   { code: "CIVIL_WORK", name: "Civil Work", weight: 25.00, startWeek: 5, endWeek: 21, orderIndex: 5 },
   { code: "SHIPMENT", name: "Shipment to Site", weight: 2.50, startWeek: 13, endWeek: 15, orderIndex: 6 },

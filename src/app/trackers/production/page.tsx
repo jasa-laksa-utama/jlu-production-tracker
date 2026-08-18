@@ -1,7 +1,4 @@
-import {
-  getProjectsByDivision,
-  getDivisionStats,
-} from "@/app/actions/projects";
+import { getProjects, getDivisionStats } from "@/app/actions/projects";
 import { ProductionTable } from "@/components/trackers/production-table";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Metadata } from "next";
@@ -25,12 +22,13 @@ export default async function ProductionTrackerPage({
   const sort = (resolvedParams.sort as string) || "desc";
 
   const [projectsResult, statsResult] = await Promise.all([
-    getProjectsByDivision("PRODUCTION", {
+    getProjects({
       page,
       pageSize: limit,
       search,
       status,
       sortOrder: sort as any,
+      division: "PRODUKSI",
     }),
     getDivisionStats("PRODUCTION"),
   ]);
@@ -62,12 +60,15 @@ export default async function ProductionTrackerPage({
               Divisi Produksi
             </h2>
             <p className="text-muted-foreground">
-              Pemantauan progress produksi conveyor secara paralel, manajemen
-              tim, dan penandaan kesiapan drawing/material.
+              Update Progress Produksi Conveyor
             </p>
           </div>
 
-          <ProductionTable projects={JSON.parse(JSON.stringify(projects))} meta={meta} stats={stats} />
+          <ProductionTable
+            projects={JSON.parse(JSON.stringify(projects))}
+            meta={meta}
+            stats={stats}
+          />
         </main>
       </div>
     </div>

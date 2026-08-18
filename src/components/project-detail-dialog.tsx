@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { formatJakartaDate } from "@/lib/date-utils";
 import {
   AlertCircle,
   ExternalLink,
@@ -134,7 +135,7 @@ export function ProjectDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-125 max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-xl font-semibold">
             {data.projectName}
@@ -192,9 +193,9 @@ export function ProjectDetailDialog({
               </Label>
               <p className="text-sm font-semibold text-foreground">
                 {data.expectedDate
-                  ? format(new Date(data.expectedDate), "dd MMM yyyy")
+                  ? formatJakartaDate(data.expectedDate, "date")
                   : data.lead?.expectedDate
-                    ? format(new Date(data.lead.expectedDate), "dd MMM yyyy")
+                    ? formatJakartaDate(data.lead.expectedDate, "date")
                     : "N/A"}
               </p>
             </div>
@@ -208,16 +209,6 @@ export function ProjectDetailDialog({
               </p>
             </div>
 
-            {type === "PROJECT" && (
-              <div className="space-y-1">
-                <Label className="text-xs font-semibold text-muted-foreground">
-                  Current Division
-                </Label>
-                <p className="text-sm font-semibold text-foreground">
-                  {formatDivision(data.currentDivision)}
-                </p>
-              </div>
-            )}
           </div>
 
           {/* Customer Section */}
@@ -250,7 +241,7 @@ export function ProjectDetailDialog({
             <Label className="text-xs font-semibold text-muted-foreground">
               Description
             </Label>
-            <div className="min-h-[60px] max-h-[120px] overflow-y-auto bg-muted/20 rounded-lg p-3 border border-border/50 text-xs text-foreground/80 whitespace-pre-wrap">
+            <div className="min-h-15 max-h-30 overflow-y-auto bg-muted/20 rounded-lg p-3 border border-border/50 text-xs text-foreground/80 whitespace-pre-wrap">
               {data.description || "No description provided."}
             </div>
           </div>
@@ -272,7 +263,7 @@ export function ProjectDetailDialog({
           {/* Footer Info */}
           <div className="pt-4 flex items-center justify-between text-xs text-muted-foreground font-medium">
             <span>
-              Record Created: {format(new Date(data.createdAt), "dd MMM yyyy")}
+              Record Created: {formatJakartaDate(data.createdAt, "date")}
             </span>
             <Button
               variant="ghost"

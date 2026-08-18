@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth, requireRole } from "@/lib/auth-guard";
+import { parseSPBImageUrls } from "@/lib/utils";
 
 const BUCKET_NAME = "project-documents";
 
@@ -180,11 +181,13 @@ export async function saveDocumentRecord(data: {
   version: number;
   uploadedBy?: string;
   notes?: string;
+  tonnage?: number;
 }) {
   try {
     await requireRole(["Superadmin", "Admin", "PPIC", "PM", "Engineering", "Production"]);
     const session = await auth();
     const uBy = session?.user?.name || data.uploadedBy || "Seseorang";
+    const docTonnage = Math.max(0, Number(data.tonnage) || 0);
 
     const document = await prisma.document.create({
       data: {
@@ -199,6 +202,7 @@ export async function saveDocumentRecord(data: {
         version: data.version,
         uploadedBy: uBy,
         notes: data.notes || null,
+        tonnage: docTonnage,
       },
     });
 
@@ -206,6 +210,16 @@ export async function saveDocumentRecord(data: {
     revalidatePath("/leads");
     revalidatePath("/dashboard");
     revalidatePath("/trackers/engineering");
+
+    // Trigger sync masterplan progress jika pada proyek
+    if (data.projectId) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(data.projectId);
+      } catch (syncErr) {
+        console.error("Error trigger syncEngineeringMasterplanProgress in saveDocumentRecord:", syncErr);
+      }
+    }
 
     // Fetch parent info and log notification
     try {
@@ -433,5 +447,108 @@ export async function migrateLeadDocsToProject(
       success: false,
       error: error.message || "Failed to migrate documents",
     };
+  }
+}
+
+/**
+ * Generates a presigned upload URL for SPB attachment images.
+ */
+export async function createSPBImageUploadUrl(
+  projectId: string,
+  originalFileName: string
+) {
+  try {
+    await requireRole(["Engineering", "Superadmin", "Admin", "PPIC", "PM"]);
+    
+    const allowedExtensions = [".png", ".jpg", ".jpeg", ".webp"];
+    const fileExt = originalFileName.substring(originalFileName.lastIndexOf(".")).toLowerCase();
+    if (!allowedExtensions.includes(fileExt)) {
+      throw new Error("Tipe file gambar tidak diizinkan. Hanya file JPG, PNG, dan WEBP yang diperbolehkan.");
+    }
+
+    const timestamp = Date.now();
+    const safeFileName = originalFileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+    const filePath = `spb_attachments/${projectId}/${timestamp}_${safeFileName}`;
+
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.storage
+      .from(BUCKET_NAME)
+      .createSignedUploadUrl(filePath);
+
+    if (error) {
+      console.error("Supabase createSignedUploadUrl error:", error);
+      return { success: false, error: error.message };
+    }
+
+    return {
+      success: true,
+      uploadUrl: data.signedUrl,
+      path: data.path,
+    };
+  } catch (error: any) {
+    console.error("createSPBImageUploadUrl error:", error);
+    return {
+      success: false,
+      error: error.message || "Gagal membuat URL upload gambar SPB",
+    };
+  }
+}
+
+/**
+ * Gets a signed download/view URL for an SPB image attachment.
+ */
+export async function getSPBImageUrl(imagePath: string) {
+  try {
+    if (!imagePath) return { success: false, error: "Path gambar tidak ada" };
+    if (imagePath.startsWith("http://") || imagePath.startsWith("https://")) {
+      return { success: true, url: imagePath };
+    }
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.storage
+      .from(BUCKET_NAME)
+      .createSignedUrl(imagePath, 3600);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true, url: data.signedUrl };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Gets signed download/view URLs for multiple SPB image attachment paths.
+ */
+export async function getSPBImageUrls(imageUrlOrPaths: string | string[]) {
+  try {
+    const paths = Array.isArray(imageUrlOrPaths)
+      ? imageUrlOrPaths
+      : parseSPBImageUrls(imageUrlOrPaths);
+
+    if (!paths || paths.length === 0) {
+      return { success: true, urls: [] };
+    }
+
+    const supabase = createAdminClient();
+    const urls: string[] = [];
+
+    for (const path of paths) {
+      if (!path) continue;
+      if (path.startsWith("http://") || path.startsWith("https://")) {
+        urls.push(path);
+      } else {
+        const { data, error } = await supabase.storage
+          .from(BUCKET_NAME)
+          .createSignedUrl(path, 3600);
+        if (!error && data?.signedUrl) {
+          urls.push(data.signedUrl);
+        }
+      }
+    }
+
+    return { success: true, urls };
+  } catch (error: any) {
+    return { success: false, error: error.message || "Gagal mengambil URL gambar" };
   }
 }

@@ -266,6 +266,27 @@ export async function getLeads(params: {
               history: {
                 orderBy: { entryDate: "desc" },
               },
+              masterplan: {
+                include: {
+                  phases: {
+                    orderBy: { orderIndex: "asc" },
+                  },
+                },
+              },
+              productionStages: {
+                include: {
+                  subSteps: true,
+                },
+                orderBy: {
+                  createdAt: "asc",
+                },
+              },
+              conveyorUnits: {
+                include: {
+                  structureItems: true,
+                  mechanicalItems: true,
+                },
+              },
             },
           },
           documents: {
@@ -288,7 +309,7 @@ export async function getLeads(params: {
 
     return { 
       success: true, 
-      data: serializedLeads,
+      data: JSON.parse(JSON.stringify(serializedLeads)),
       meta: {
         totalCount,
         totalPages: Math.ceil(totalCount / pageSize),

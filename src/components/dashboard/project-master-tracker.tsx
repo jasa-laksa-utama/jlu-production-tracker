@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { formatJakartaDate } from "@/lib/date-utils";
 import {
   Search,
   ChevronLeft,
@@ -171,8 +172,7 @@ export function ProjectMasterTracker({
       p.customer?.name || "",
       p.runningDays || 0,
       p.expectedDate ? format(new Date(p.expectedDate), "dd MMM yyyy") : "-",
-      p.currentDivision || "",
-      p.currentStatus || "PENDING",
+      p.status || "IN_PROGRESS",
     ]);
 
     let excelTemplate = `
@@ -433,10 +433,10 @@ export function ProjectMasterTracker({
           <Table>
             <TableHeader className="bg-muted/20 border-b">
               <TableRow className="border-border hover:bg-transparent">
-                <TableHead className="w-[50px] text-center font-semibold">
+                <TableHead className="w-12.5 text-center font-semibold">
                   No
                 </TableHead>
-                <TableHead className="min-w-[200px] font-semibold">
+                <TableHead className="min-w-50 font-semibold">
                   Project & Customer
                 </TableHead>
                 <TableHead className="text-center font-semibold">
@@ -450,7 +450,7 @@ export function ProjectMasterTracker({
                 <TableHead className="text-right font-semibold">
                   Current
                 </TableHead>
-                <TableHead className="w-[60px] text-right font-semibold">
+                <TableHead className="w-15 text-right font-semibold">
                   Detail
                 </TableHead>
               </TableRow>
@@ -526,7 +526,7 @@ export function ProjectMasterTracker({
                             {project.runningDays} Days
                           </span>
                           <span className="text-xs text-muted-foreground font-semibold">
-                            Since {format(project.createdAt, "dd MMM yy")}
+                            Since {formatJakartaDate(project.createdAt, "date")}
                           </span>
                         </div>
                       </TableCell>
@@ -550,7 +550,7 @@ export function ProjectMasterTracker({
                           )}
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
                             <Calendar className="w-3 h-3" />
-                            {deadline ? format(deadline, "dd MMM yy") : "-"}
+                            {deadline ? formatJakartaDate(deadline, "date") : "-"}
                           </div>
                         </div>
                       </TableCell>
@@ -593,7 +593,7 @@ export function ProjectMasterTracker({
                           variant="secondary"
                           className="font-semibold text-xs"
                         >
-                          {(project.currentDivision || "PPIC").replace(
+                          {(project.status || "IN_PROGRESS").replace(
                             /_/g,
                             " ",
                           )}
@@ -619,7 +619,7 @@ export function ProjectMasterTracker({
 
         {/* Confirmation Dialog for Export XLS */}
         <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
-          <DialogContent className="sm:max-w-[425px]">
+          <DialogContent className="sm:max-w-106.25">
             <DialogHeader>
               <DialogTitle>Konfirmasi Unduh</DialogTitle>
               <DialogDescription>

@@ -4,37 +4,74 @@ import { STRUCTURE_WEIGHTS, MECHANICAL_WEIGHTS } from "./progress-weights";
 // LEVEL 1: Hitung progress 1 item Structure (0 - 100)
 // =============================================
 export function calcStructureItemProgress(item: {
-  cuttingDone: boolean;
-  settingDone: boolean;
-  weldingDone: boolean;
-  finishingDone: boolean;
-  paintingDone: boolean;
-  packagingDone: boolean;
+  qty?: number;
+  cuttingQty?: number;
+  settingQty?: number;
+  weldingQty?: number;
+  finishingQty?: number;
+  paintingQty?: number;
+  packagingQty?: number;
+  cuttingDone?: boolean;
+  settingDone?: boolean;
+  weldingDone?: boolean;
+  finishingDone?: boolean;
+  paintingDone?: boolean;
+  packagingDone?: boolean;
 }): number {
+  const qty = Math.max(1, Number(item.qty || 1));
+
+  const cQty = item.cuttingQty !== undefined ? Number(item.cuttingQty) : (item.cuttingDone ? qty : 0);
+  const sQty = item.settingQty !== undefined ? Number(item.settingQty) : (item.settingDone ? qty : 0);
+  const wQty = item.weldingQty !== undefined ? Number(item.weldingQty) : (item.weldingDone ? qty : 0);
+  const fQty = item.finishingQty !== undefined ? Number(item.finishingQty) : (item.finishingDone ? qty : 0);
+  const pQty = item.paintingQty !== undefined ? Number(item.paintingQty) : (item.paintingDone ? qty : 0);
+  const kQty = item.packagingQty !== undefined ? Number(item.packagingQty) : (item.packagingDone ? qty : 0);
+
+  const cFrac = Math.min(1, Math.max(0, cQty / qty));
+  const sFrac = Math.min(1, Math.max(0, sQty / qty));
+  const wFrac = Math.min(1, Math.max(0, wQty / qty));
+  const fFrac = Math.min(1, Math.max(0, fQty / qty));
+  const pFrac = Math.min(1, Math.max(0, pQty / qty));
+  const kFrac = Math.min(1, Math.max(0, kQty / qty));
+
   return (
-    (item.cuttingDone   ? STRUCTURE_WEIGHTS.cutting   : 0) +
-    (item.settingDone   ? STRUCTURE_WEIGHTS.setting   : 0) +
-    (item.weldingDone   ? STRUCTURE_WEIGHTS.welding   : 0) +
-    (item.finishingDone ? STRUCTURE_WEIGHTS.finishing  : 0) +
-    (item.paintingDone  ? STRUCTURE_WEIGHTS.painting   : 0) +
-    (item.packagingDone ? STRUCTURE_WEIGHTS.packaging  : 0)
+    cFrac * STRUCTURE_WEIGHTS.cutting +
+    sFrac * STRUCTURE_WEIGHTS.setting +
+    wFrac * STRUCTURE_WEIGHTS.welding +
+    fFrac * STRUCTURE_WEIGHTS.finishing +
+    pFrac * STRUCTURE_WEIGHTS.painting +
+    kFrac * STRUCTURE_WEIGHTS.packaging
   ) * 100;
 }
 
-// =============================================
-// LEVEL 1: Hitung progress 1 item Mechanical (0 - 100)
-// =============================================
 export function calcMechanicalItemProgress(item: {
-  procurementDone: boolean;
-  poDone: boolean;
-  fabricationDone: boolean;
-  packagingDone: boolean;
+  qty?: number;
+  procurementQty?: number;
+  poQty?: number;
+  fabricationQty?: number;
+  packagingQty?: number;
+  procurementDone?: boolean;
+  poDone?: boolean;
+  fabricationDone?: boolean;
+  packagingDone?: boolean;
 }): number {
+  const qty = Math.max(1, Number(item.qty || 1));
+
+  const procQty = item.procurementQty !== undefined ? Number(item.procurementQty) : (item.procurementDone ? qty : 0);
+  const poQty = item.poQty !== undefined ? Number(item.poQty) : (item.poDone ? qty : 0);
+  const fabQty = item.fabricationQty !== undefined ? Number(item.fabricationQty) : (item.fabricationDone ? qty : 0);
+  const packQty = item.packagingQty !== undefined ? Number(item.packagingQty) : (item.packagingDone ? qty : 0);
+
+  const procFrac = Math.min(1, Math.max(0, procQty / qty));
+  const poFrac = Math.min(1, Math.max(0, poQty / qty));
+  const fabFrac = Math.min(1, Math.max(0, fabQty / qty));
+  const packFrac = Math.min(1, Math.max(0, packQty / qty));
+
   return (
-    (item.procurementDone ? MECHANICAL_WEIGHTS.procurement : 0) +
-    (item.poDone          ? MECHANICAL_WEIGHTS.po          : 0) +
-    (item.fabricationDone ? MECHANICAL_WEIGHTS.fabrication : 0) +
-    (item.packagingDone   ? MECHANICAL_WEIGHTS.packaging   : 0)
+    procFrac * MECHANICAL_WEIGHTS.procurement +
+    poFrac * MECHANICAL_WEIGHTS.po +
+    fabFrac * MECHANICAL_WEIGHTS.fabrication +
+    packFrac * MECHANICAL_WEIGHTS.packaging
   ) * 100;
 }
 

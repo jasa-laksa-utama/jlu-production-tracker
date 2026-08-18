@@ -65,8 +65,6 @@ export async function startProduction(
       await tx.project.update({
         where: { id: projectId },
         data: {
-          currentDivision: "PRODUCTION",
-          currentStatus: "IN_PROGRESS",
           status: "IN_PROGRESS",
           prodStatus: "IN_PROGRESS",
         },
@@ -316,6 +314,17 @@ export async function updateProductionStage(
         },
       });
 
+      await tx.projectHistory.create({
+        data: {
+          projectId,
+          division: "PRODUCTION",
+          status: "IN_PROGRESS",
+          action: "STAGE_PROGRESS_UPDATED",
+          notes: logMessage,
+          updatedBy: userBy,
+        },
+      });
+
       await syncProjectProdStatus(tx, projectId);
       await syncProjectQCStatus(tx, projectId);
 
@@ -396,11 +405,9 @@ export async function handoverProductionToQC(projectId: string, notes: string) {
       const updatedProject = await tx.project.update({
         where: { id: projectId },
         data: {
-          currentDivision: "QUALITY_CONTROL",
-          currentStatus: "IN_PROGRESS",
           status: "IN_PROGRESS",
           prodStatus: "DONE",
-          prodCompletedAt: new Date(),
+          productionCompletedAt: new Date(),
         },
       });
 
@@ -498,21 +505,11 @@ export async function handoverProjectStagesToLogistics(
       // 2. Update Project Division & Status
       // Ensure that project is moved to LOGISTIC division and status is set to READY
       const updateData: any = {};
-      if (
-        project.currentDivision !== "LOGISTIC" ||
-        project.currentStatus !== "READY" ||
-        project.status !== "READY"
-      ) {
-        updateData.currentDivision = "LOGISTIC";
-        updateData.currentStatus = "READY";
+      if (project.status !== "READY") {
         updateData.status = "READY";
       }
 
-      // Sync logistics-specific tracking fields
       updateData.logStatus = "READY";
-      if (!project.logEntryDate) {
-        updateData.logEntryDate = new Date();
-      }
 
       if (Object.keys(updateData).length > 0) {
         await tx.project.update({
@@ -1003,6 +1000,17 @@ export async function updateComponentStage(
         },
       });
 
+      await tx.projectHistory.create({
+        data: {
+          projectId,
+          division: "PRODUCTION",
+          status: "IN_PROGRESS",
+          action: "COMPONENT_STAGE_UPDATED",
+          notes: logMessage,
+          updatedBy: userBy,
+        },
+      });
+
       await syncProjectStageFromComponents(tx, projectId, compStage.name);
 
       return updatedStage;
@@ -1415,20 +1423,11 @@ export async function handoverComponentsToLogistics(
 
       // 3. Update project division and status to LOGISTIC if not already there
       const updateData: any = {};
-      if (
-        project.currentDivision !== "LOGISTIC" ||
-        project.currentStatus !== "READY" ||
-        project.status !== "READY"
-      ) {
-        updateData.currentDivision = "LOGISTIC";
-        updateData.currentStatus = "READY";
+      if (project.status !== "READY") {
         updateData.status = "READY";
       }
 
       updateData.logStatus = "READY";
-      if (!project.logEntryDate) {
-        updateData.logEntryDate = new Date();
-      }
 
       if (Object.keys(updateData).length > 0) {
         await tx.project.update({

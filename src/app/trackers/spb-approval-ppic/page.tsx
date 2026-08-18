@@ -3,66 +3,133 @@ import { requireAuth } from "@/lib/auth-guard";
 import { AppSidebar } from "@/components/app-sidebar";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { PpicSpbApprovalClient } from "./ppic-spb-approval-client";
+import {
+  getPendingSPBSubstitutions,
+  getPendingSPBGudangForPpic,
+  getPendingSPBVendorSelection,
+} from "@/app/actions/spb";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Persetujuan SPB (PPIC) | PT. JLU Production",
   description:
-    "Divisi PPIC menyetujui atau menolak Surat Permintaan Barang (SPB) dari divisi engineering.",
+    "Divisi PPIC menyetujui atau menolak Surat Permintaan Barang (SPB Proyek & SPB Gudang) dan Persetujuan Vendor PO.",
 };
 
 export default async function PpicSpbApprovalPage() {
   await requireAuth();
 
-  // Fetch pending SPBs waiting for PPIC approval
-  const pendingSpbs = await prisma.sPB.findMany({
-    where: {
-      status: "PENDING_APPROVAL",
-      approvedByPpic: false,
-    },
-    include: {
-      project: {
-        include: {
-          customer: true,
+  const [
+    pendingSpbs,
+    pendingBoqs,
+    pendingSpjs,
+    pendingMemos,
+    pendingSubstitutionsRes,
+    pendingSpbGudangRes,
+    pendingVendorItemsRes,
+    masterItems,
+  ] = await Promise.all([
+    prisma.sPB.findMany({
+      where: {
+        status: "PENDING_APPROVAL",
+        approvedByPpic: false,
+      },
+      include: {
+        project: {
+          include: {
+            customer: true,
+          },
+        },
+        items: {
+          include: {
+            material: true,
+          },
         },
       },
-      items: {
-        include: {
-          material: true,
+      orderBy: {
+        createdAt: "desc",
+      },
+    }),
+    prisma.boQ.findMany({
+      where: {
+        boqStatus: "PENDING_APPROVAL",
+        boqApprovedByPpic: false,
+      },
+      include: {
+        project: {
+          include: {
+            customer: true,
+          },
+        },
+        boqItems: {
+          include: {
+            item: true,
+          },
         },
       },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
-
-  // Fetch pending BoQs waiting for PPIC approval
-  const pendingBoqs = await prisma.boQ.findMany({
-    where: {
-      boqStatus: "PENDING_APPROVAL",
-      boqApprovedByPpic: false,
-    },
-    include: {
-      project: {
-        include: {
-          customer: true,
+      orderBy: {
+        createdAt: "desc",
+      },
+    }),
+    prisma.sPJ.findMany({
+      where: {
+        status: "PENDING_APPROVAL",
+        approvedByPpic: false,
+      },
+      include: {
+        project: {
+          include: {
+            customer: true,
+          },
+        },
+        items: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    }),
+    prisma.goodsReleaseMemo.findMany({
+      where: {
+        status: "PENDING",
+      },
+      include: {
+        project: {
+          include: {
+            customer: true,
+          },
+        },
+        items: true,
+        returns: {
+          include: {
+            items: true,
+          },
         },
       },
-      boqItems: {
-        include: {
-          item: true,
-        },
+      orderBy: {
+        createdAt: "desc",
       },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
+    }),
+    getPendingSPBSubstitutions("PPIC"),
+    getPendingSPBGudangForPpic(),
+    getPendingSPBVendorSelection("PPIC"),
+    prisma.item.findMany({
+      select: {
+        id: true,
+        code: true,
+        name: true,
+      },
+    }),
+  ]);
 
   // Convert dates and decimal fields to serialize correctly
   const serializedSpbs = JSON.parse(JSON.stringify(pendingSpbs));
   const serializedBoqs = JSON.parse(JSON.stringify(pendingBoqs));
+  const serializedSpjs = JSON.parse(JSON.stringify(pendingSpjs));
+  const serializedMemos = JSON.parse(JSON.stringify(pendingMemos));
+  const serializedSubstitutions = pendingSubstitutionsRes.success ? pendingSubstitutionsRes.data : [];
+  const serializedSpbGudang = pendingSpbGudangRes.success ? pendingSpbGudangRes.data : [];
+  const serializedVendorItems = pendingVendorItemsRes.success ? pendingVendorItemsRes.data : [];
+  const serializedMasterItems = JSON.parse(JSON.stringify(masterItems));
 
   return (
     <div className="flex w-full overflow-hidden bg-background h-screen">
@@ -75,11 +142,20 @@ export default async function PpicSpbApprovalPage() {
               Portal Persetujuan (PPIC)
             </h2>
             <p className="text-sm text-muted-foreground font-medium">
-              Review dan berikan persetujuan untuk dokumen SPB dan Bill of Quantities (BoQ).
+              Review dan berikan persetujuan untuk dokumen SPB Proyek, SPB Gudang, Persetujuan Vendor PO, SPJ, BoQ, Memo Pengeluaran Barang, dan Substitusi Barang.
             </p>
           </div>
 
-          <PpicSpbApprovalClient initialSpbs={serializedSpbs} initialBoqs={serializedBoqs} />
+          <PpicSpbApprovalClient
+            initialSpbs={serializedSpbs}
+            initialBoqs={serializedBoqs}
+            initialSpjs={serializedSpjs}
+            initialMemos={serializedMemos}
+            initialSubstitutions={serializedSubstitutions}
+            initialSpbGudang={serializedSpbGudang}
+            initialVendorItems={serializedVendorItems}
+            masterItems={serializedMasterItems}
+          />
         </main>
       </div>
     </div>

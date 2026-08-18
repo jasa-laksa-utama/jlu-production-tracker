@@ -1,0 +1,15 @@
+-- AlterTable
+ALTER TABLE "spb_items" ADD COLUMN "hasSubstitution" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "originalName" TEXT,
+ADD COLUMN "originalTypeMerk" TEXT,
+ADD COLUMN "originalMaterialId" UUID,
+ADD COLUMN "originalPrice" DECIMAL(18,2),
+ADD COLUMN "substitutedName" TEXT,
+ADD COLUMN "substitutedTypeMerk" TEXT,
+ADD COLUMN "substitutedMaterialId" UUID,
+ADD COLUMN "substitutedPrice" DECIMAL(18,2),
+ADD COLUMN "substitutionReason" TEXT,
+ADD COLUMN "approvalEngineering" TEXT NOT NULL DEFAULT 'NONE',
+ADD COLUMN "approvalPpic" TEXT NOT NULL DEFAULT 'NONE',
+ADD COLUMN "approvalPm" TEXT NOT NULL DEFAULT 'NONE',
+ADD COLUMN "substitutionStatus" TEXT NOT NULL DEFAULT 'NONE';

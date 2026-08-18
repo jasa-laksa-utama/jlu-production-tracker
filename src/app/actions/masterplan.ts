@@ -6,6 +6,242 @@ import { requireAuth } from "@/lib/auth-guard";
 import { auth } from "@/auth";
 import { DEFAULT_CONVEYOR_PHASES } from "@/lib/progress-weights";
 import { distributeWeeklyPlanProgress } from "@/lib/s-curve-calculator";
+import {
+  checkEngineeringPrerequisitesLocal,
+  calculateEngineeringProgress,
+} from "@/lib/engineering-progress";
+import { getPhaseProgressAtCutoff } from "@/lib/masterplan-cutoff-utils";
+
+export async function checkEngineeringPrerequisites(projectId: string) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      documents: true,
+      lead: {
+        include: { documents: true },
+      },
+      boqs: {
+        include: { boqItems: true },
+      },
+    },
+  });
+
+  if (!project) {
+    return {
+      canCreateMasterplan: false,
+      hasDrawing: false,
+      hasBoq: false,
+      hasPartList: false,
+      missingItems: ["Proyek tidak ditemukan"],
+    };
+  }
+
+  return checkEngineeringPrerequisitesLocal(project);
+}
+
+
+
+export async function syncMasterplanWeeklySnapshot(masterplanId: string) {
+  try {
+    const masterplan = await prisma.masterplan.findUnique({
+      where: { id: masterplanId },
+      include: {
+        phases: {
+          include: { subProgresses: true },
+        },
+        weeklyPlans: { orderBy: { weekNumber: "asc" } },
+        project: {
+          include: {
+            spb: true,
+            boqs: { include: { boqItems: true } },
+            documents: true,
+            productionLogs: { orderBy: { createdAt: "asc" } },
+          },
+        },
+      },
+    });
+
+    if (!masterplan) return;
+
+    const start = masterplan.startDate ? new Date(masterplan.startDate) : new Date();
+    const now = new Date();
+    const diffMs = now.getTime() - start.getTime();
+    const elapsedDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+    const currentWeekNum = Math.min(masterplan.totalWeeks, Math.max(1, Math.floor(elapsedDays / 7) + 1));
+
+    let prevActualCum = 0;
+
+    for (const wp of masterplan.weeklyPlans) {
+      if (wp.weekNumber <= currentWeekNum) {
+        // Cutoff end date for this week: 23:59:59 of weekEndDate
+        const weekCutoff = new Date(wp.weekEndDate);
+        weekCutoff.setHours(23, 59, 59, 999);
+
+        // Calculate total actual progress at this week's end cutoff
+        const weekActualCum = masterplan.phases.reduce((sum, phase) => {
+          const weight = Number(phase.weightPercent || 0);
+          const phaseProgAtCutoff = getPhaseProgressAtCutoff(phase, masterplan.project, weekCutoff);
+          return sum + (phaseProgAtCutoff / 100) * weight;
+        }, 0);
+
+        const roundedActualCum = Math.round(weekActualCum * 100) / 100;
+        const planCum = Number(wp.planCumulativePercent || 0);
+        const actualWeekly = Math.max(0, Math.round((roundedActualCum - prevActualCum) * 100) / 100);
+        const variance = Math.round((roundedActualCum - planCum) * 100) / 100;
+
+        await prisma.weeklyPlan.update({
+          where: { id: wp.id },
+          data: {
+            actualCumulativePercent: roundedActualCum,
+            actualWeeklyPercent: actualWeekly,
+            variance,
+          },
+        });
+
+        prevActualCum = roundedActualCum;
+      }
+    }
+  } catch (err) {
+    console.error("Error syncing masterplan weekly snapshot:", err);
+  }
+}
+
+export async function syncEngineeringMasterplanProgress(projectId: string) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: {
+        documents: true,
+        lead: {
+          include: { documents: true },
+        },
+        boqs: {
+          include: { boqItems: true },
+          orderBy: { createdAt: "desc" },
+        },
+        masterplan: {
+          include: { phases: true },
+        },
+      },
+    });
+
+    if (!project) return;
+
+    const { engProgress } = calculateEngineeringProgress(project);
+
+    if (project.masterplan) {
+      const engPhase = project.masterplan.phases.find(
+        (p) => p.code === "ENGINEERING" || p.name.toUpperCase().includes("ENG"),
+      );
+
+      if (engPhase) {
+        await prisma.masterplanPhase.update({
+          where: { id: engPhase.id },
+          data: {
+            actualProgress: engProgress,
+            status: engProgress === 100 ? "COMPLETED" : engProgress > 0 ? "IN_PROGRESS" : "NOT_STARTED",
+          },
+        });
+        await syncMasterplanWeeklySnapshot(project.masterplan.id);
+      }
+    }
+  } catch (err) {
+    console.error("Error syncing engineering masterplan progress:", err);
+  }
+}
+
+export async function syncProcurementMasterplanProgress(projectId: string) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: {
+        masterplan: {
+          include: { phases: true },
+        },
+      },
+    });
+
+    if (!project || !project.masterplan) return;
+
+    // Fetch all SPB items for this project using Raw SQL to include raw columns
+    const rawSpbItems: any[] = await prisma.$queryRaw`
+      SELECT 
+        i.id, 
+        i.status, 
+        i.qty, 
+        i."qtyIssued", 
+        i."vendorSelectionStatus", 
+        i."approvalEngineering", 
+        i."approvalPm", 
+        i."selectedSupplierId",
+        i."selectedSupplierName"
+      FROM spb_items i
+      JOIN spbs s ON i."spbId" = s.id
+      WHERE s."projectId" = ${projectId}
+    `;
+
+    let totalItemProgress = 0;
+    const totalItems = rawSpbItems.length;
+
+    if (totalItems > 0) {
+      rawSpbItems.forEach((item) => {
+        let score = 0;
+
+        const isReceivedInWarehouse =
+          item.status === "RECEIVED" ||
+          (item.qtyIssued && parseFloat(item.qtyIssued) >= parseFloat(item.qty || "0"));
+
+        const isPoProcessed =
+          item.vendorSelectionStatus === "APPROVED" ||
+          !!item.selectedSupplierId ||
+          !!item.selectedSupplierName;
+
+        const isRecommendationSubmitted =
+          item.vendorSelectionStatus === "SUBMITTED" ||
+          item.approvalEngineering === "APPROVED" ||
+          item.approvalPm === "APPROVED";
+
+        if (isReceivedInWarehouse) {
+          score = 100; // Tahap 3: Barang/PO sudah sampai digudang
+        } else if (isPoProcessed) {
+          score = 66; // Tahap 2: PO diproses / vendor ditetapkan
+        } else if (isRecommendationSubmitted) {
+          score = 33; // Tahap 1: Pengajuan penawaran rekomendasi vendor diproses
+        } else {
+          score = 0;
+        }
+
+        totalItemProgress += score;
+      });
+    }
+
+    const procProgress = totalItems > 0 ? Math.min(100, Math.round(totalItemProgress / totalItems)) : 0;
+
+    const procPhase = project.masterplan.phases.find(
+      (p: any) =>
+        p.code === "PROCUREMENT" ||
+        p.name.toUpperCase().includes("PROCURE")
+    );
+
+    if (procPhase) {
+      await prisma.masterplanPhase.update({
+        where: { id: procPhase.id },
+        data: {
+          actualProgress: procProgress,
+          status:
+            procProgress === 100
+              ? "COMPLETED"
+              : procProgress > 0
+                ? "IN_PROGRESS"
+                : "NOT_STARTED",
+        },
+      });
+      await syncMasterplanWeeklySnapshot(project.masterplan.id);
+    }
+  } catch (err) {
+    console.error("Error syncing procurement masterplan progress:", err);
+  }
+}
 
 export interface MasterplanSetupInput {
   projectId: string;
@@ -20,14 +256,15 @@ export interface MasterplanSetupInput {
     endWeek: number;
     orderIndex: number;
     subSteps?: string[]; // Standard sub steps (e.g. for Shipment, Erection, Commissioning)
+    weeklyTargets?: Record<number, number> | Array<{ weekNumber: number; targetPercent: number }>;
   }>;
   units: Array<{
     name: string;
     unitType: "STRUCTURE" | "MECHANICAL" | "BOTH";
     satuan: string;
     volume: number;
-    structureItems?: string[];
-    mechanicalItems?: string[];
+    structureItems?: Array<{ name: string; qty?: number; satuan?: string } | string>;
+    mechanicalItems?: Array<{ name: string; qty?: number; satuan?: string } | string>;
   }>;
 }
 
@@ -50,6 +287,14 @@ export async function setupProjectMasterplan(input: MasterplanSetupInput) {
     }
 
     const { projectId, totalWeeks, startDate, leaders, phases, units } = input;
+
+    // Validate Engineering prerequisites (min. 1 Drawing, 1 BoQ with items, 1 Mechanical Part List)
+    const prereqCheck = await checkEngineeringPrerequisites(projectId);
+    if (!prereqCheck.canCreateMasterplan) {
+      throw new Error(
+        `Masterplan belum dapat dibuat! Dokumen/BoQ Engineering belum lengkap. Kurang: ${prereqCheck.missingItems.join(", ")}`
+      );
+    }
 
     // Validate total weight equals 100
     const totalWeight = phases.reduce((sum, p) => sum + Number(p.weightPercent), 0);
@@ -96,7 +341,7 @@ export async function setupProjectMasterplan(input: MasterplanSetupInput) {
         });
       }
 
-      // 4. Create Phases & Standard Sub Steps
+      // 4. Create Phases, Custom Weekly Targets & Standard Sub Steps
       const dbPhases = [];
       for (const phase of phases) {
         const createdPhase = await tx.masterplanPhase.create({
@@ -112,6 +357,8 @@ export async function setupProjectMasterplan(input: MasterplanSetupInput) {
           },
         });
         dbPhases.push(createdPhase);
+
+
 
         // Add default/standard sub steps if provided
         if (phase.subSteps && phase.subSteps.length > 0) {
@@ -182,13 +429,18 @@ export async function setupProjectMasterplan(input: MasterplanSetupInput) {
         // Initialize Structure Items if STRUCTURE/BOTH
         if (u.unitType !== "MECHANICAL" && u.structureItems) {
           let itemIdx = 0;
-          for (const sName of u.structureItems) {
-            if (!sName.trim()) continue;
+          for (const sItem of u.structureItems) {
+            const sName = typeof sItem === "string" ? sItem.trim() : (sItem.name || "").trim();
+            if (!sName) continue;
+            const sQty = typeof sItem === "string" ? 1 : Number(sItem.qty) || 1;
+            const sSatuan = typeof sItem === "string" ? "unit" : (sItem.satuan || "unit").trim();
+
             await tx.structureItem.create({
               data: {
                 unitId: unit.id,
-                name: sName.trim(),
-                qty: 1,
+                name: sName,
+                qty: sQty,
+                satuan: sSatuan,
                 orderIndex: itemIdx++,
               },
             });
@@ -198,13 +450,18 @@ export async function setupProjectMasterplan(input: MasterplanSetupInput) {
         // Initialize Mechanical Items if MECHANICAL/BOTH
         if (u.unitType !== "STRUCTURE" && u.mechanicalItems) {
           let itemIdx = 0;
-          for (const mName of u.mechanicalItems) {
-            if (!mName.trim()) continue;
+          for (const mItem of u.mechanicalItems) {
+            const mName = typeof mItem === "string" ? mItem.trim() : (mItem.name || "").trim();
+            if (!mName) continue;
+            const mQty = typeof mItem === "string" ? 1 : Number(mItem.qty) || 1;
+            const mSatuan = typeof mItem === "string" ? "unit" : (mItem.satuan || "unit").trim();
+
             await tx.mechanicalItem.create({
               data: {
                 unitId: unit.id,
-                name: mName.trim(),
-                qty: 1,
+                name: mName,
+                qty: mQty,
+                satuan: mSatuan,
                 orderIndex: itemIdx++,
               },
             });
@@ -237,7 +494,15 @@ export async function setupProjectMasterplan(input: MasterplanSetupInput) {
       return masterplan;
     });
 
+    try {
+      await syncEngineeringMasterplanProgress(projectId);
+      await syncProcurementMasterplanProgress(projectId);
+    } catch (err) {
+      console.error("Auto sync masterplan progress error:", err);
+    }
+
     revalidatePath(`/trackers/production`);
+    revalidatePath(`/trackers/engineering`);
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error setting up project masterplan:", error);

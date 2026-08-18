@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   FileText,
   UploadCloud,
@@ -22,18 +22,18 @@ import {
   Download,
   History,
   ExternalLink,
-  ChevronDown,
+  ChevronLeft,
   ChevronRight,
-  Clock,
-  AlertCircle,
   Globe,
   Copy,
   Check,
-  Edit,
   Eye,
   Loader2,
-  X,
   FolderOpen,
+  Plus,
+  RefreshCw,
+  Search,
+  Filter,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -44,20 +44,59 @@ import {
   getDocumentDownloadUrl,
 } from "@/app/actions/documents";
 import { updateGlobalDriveLink } from "@/app/actions/drive-link";
-import { format } from "date-fns";
+import { formatJakartaDate } from "@/lib/date-utils";
 
-// Document categories available system-wide
+// Kategori Dokumen Sistem
 export const DOCUMENT_CATEGORIES = [
-  { id: "BRIEF", label: "Brief", icon: "📋" },
-  { id: "DRAWING", label: "Drawing", icon: "📐" },
-  { id: "BOQ", label: "Bill of Quantity", icon: "📊" },
-  { id: "MECH_PART_LIST", label: "Mechanical Part List", icon: "⚙️" },
-  { id: "RAB", label: "RAB", icon: "💰" },
-  { id: "RAP", label: "RAP", icon: "📈" },
-  { id: "SPB", label: "SPB", icon: "🚚" },
-  { id: "PRODUCTION", label: "Dokumen Produksi", icon: "🏭" },
-  { id: "QC", label: "Dokumen QC", icon: "✅" },
-  { id: "OTHER", label: "Other", icon: "📎" },
+  {
+    id: "BRIEF",
+    label: "Brief",
+    icon: "📋",
+    desc: "Dokumen brief, TOR, dan spesifikasi awal",
+  },
+  {
+    id: "DRAWING",
+    label: "Drawing",
+    icon: "📐",
+    desc: "Gambar teknik 2D/3D & layout kerja",
+  },
+  {
+    id: "MECH_PART_LIST",
+    label: "Mechanical Part List",
+    icon: "⚙️",
+    desc: "Daftar komponen mekanik & part list",
+  },
+  {
+    id: "ASSEMBLY_LIST",
+    label: "Assembly List",
+    icon: "📦",
+    desc: "Urutan dan instruksi perakitan unit",
+  },
+  {
+    id: "RAB",
+    label: "RAB",
+    icon: "💰",
+    desc: "Rencana Anggaran Biaya proyek",
+  },
+  { id: "RAP", label: "RAP", icon: "📈", desc: "Rencana Anggaran Pelaksanaan" },
+  {
+    id: "PRODUCTION",
+    label: "Dokumen Produksi",
+    icon: "🏭",
+    desc: "Work order, SPK, dan instruksi kerja",
+  },
+  {
+    id: "QC",
+    label: "Dokumen QC",
+    icon: "✅",
+    desc: "Checklist QC, ITP, dan laporan inspeksi",
+  },
+  {
+    id: "OTHER",
+    label: "Lainnya",
+    icon: "📎",
+    desc: "Lampiran & berkas pendukung lainnya",
+  },
 ] as const;
 
 export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number]["id"];
@@ -65,19 +104,19 @@ export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number]["id"];
 const DEFAULT_CATEGORIES: DocumentCategory[] = [
   "BRIEF",
   "DRAWING",
-  "BOQ",
   "MECH_PART_LIST",
+  "ASSEMBLY_LIST",
   "RAB",
   "RAP",
-  "SPB",
   "OTHER",
 ];
 
 interface DocumentManagerDialogProps {
-  ownerId: string;
-  ownerType: "LEAD" | "PROJECT";
+  ownerId?: string;
+  ownerType?: "LEAD" | "PROJECT" | "GLOBAL";
   leadId?: string | null;
   categories?: DocumentCategory[];
+  defaultCategory?: string;
   globalDriveUrl?: string | null;
   onUploadSuccess?: () => void;
   trigger?: React.ReactNode;
@@ -97,426 +136,16 @@ interface DocumentRecord {
   version: number;
   uploadedBy: string | null;
   notes: string | null;
+  tonnage?: number | null;
   createdAt: string;
 }
 
-// ─── Single Category Section ────────────────────────────────────
-function CategorySection({
-  ownerId,
-  ownerType,
-  category,
-  documents,
-  onUploadSuccess,
-  leadId,
-  isDownloading,
-  handleView,
-}: {
-  ownerId: string;
-  ownerType: "LEAD" | "PROJECT";
-  category: (typeof DOCUMENT_CATEGORIES)[number];
-  documents: DocumentRecord[];
-  onUploadSuccess: () => void;
-  leadId?: string | null;
-  isDownloading: string | null;
-  handleView: (doc: DocumentRecord) => void;
-}) {
-  const [isUploading, setIsUploading] = useState(false);
-  const [linkInput, setLinkInput] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
-  const [revisionNotes, setRevisionNotes] = useState("");
-
-  const sortedDocs = documents
-    .filter((d) => d.category === category.id)
-    .sort((a, b) => b.version - a.version);
-  const latestDoc = sortedDocs[0];
-  const isNew =
-    latestDoc &&
-    new Date().getTime() - new Date(latestDoc.createdAt).getTime() <
-      24 * 60 * 60 * 1000;
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 25 * 1024 * 1024) {
-      toast.error("Ukuran file melebihi batas 25MB.");
-      e.target.value = "";
-      return;
-    }
-
-    setSelectedFile(file);
-    e.target.value = "";
-  };
-
-  const handleFileUpload = async () => {
-    if (!selectedFile) return;
-    setIsUploading(true);
-
-    try {
-      toast.loading(`Menyiapkan upload ${category.label}...`, {
-        id: `upload-${category.id}`,
-      });
-
-      const { uploadUrl, path, version, success, error } =
-        await createDocumentUploadUrl(
-          ownerId,
-          ownerType,
-          category.id,
-          selectedFile.name,
-        );
-
-      if (!success || !uploadUrl || !path) {
-        throw new Error(error || "Gagal membuat channel upload");
-      }
-
-      toast.loading(`Mengupload ke cloud...`, { id: `upload-${category.id}` });
-
-      const uploadRes = await fetch(uploadUrl, {
-        method: "PUT",
-        body: selectedFile,
-        headers: { "Content-Type": selectedFile.type },
-      });
-
-      if (!uploadRes.ok) throw new Error("Gagal mengupload file ke cloud");
-
-      const result = await saveDocumentRecord({
-        leadId: (ownerType === "LEAD"
-          ? ownerId
-          : leadId || undefined) as string,
-        projectId: ownerType === "PROJECT" ? ownerId : undefined,
-        category: category.id,
-        url: path,
-        fileName: selectedFile.name,
-        isExternal: false,
-        version: version || 1,
-        notes: revisionNotes.trim() || `Upload v${version || 1}`,
-      });
-
-      if (result.success) {
-        toast.success(`${category.label} v${version} berhasil diupload!`, {
-          id: `upload-${category.id}`,
-        });
-        setSelectedFile(null);
-        setRevisionNotes("");
-        onUploadSuccess();
-      } else {
-        throw new Error("File diupload tapi gagal menyimpan record");
-      }
-    } catch (err: any) {
-      toast.error(err.message || "Terjadi kesalahan", {
-        id: `upload-${category.id}`,
-      });
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleLinkSave = async () => {
-    if (!linkInput.trim()) return;
-    setIsUploading(true);
-
-    try {
-      const newVersion = (latestDoc?.version || 0) + 1;
-      const result = await saveDocumentRecord({
-        leadId: (ownerType === "LEAD"
-          ? ownerId
-          : leadId || undefined) as string,
-        projectId: ownerType === "PROJECT" ? ownerId : undefined,
-        category: category.id,
-        url: linkInput.trim(),
-        fileName: "External Link",
-        isExternal: true,
-        version: newVersion,
-        notes: revisionNotes.trim() || `Link v${newVersion}`,
-      });
-
-      if (result.success) {
-        toast.success(`Link ${category.label} tersimpan!`);
-        setLinkInput("");
-        setRevisionNotes("");
-        onUploadSuccess();
-      } else {
-        throw new Error("Gagal menyimpan link");
-      }
-    } catch (err: any) {
-      toast.error(err.message || "Gagal menyimpan link");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  return (
-    <div className="rounded-lg border border-border bg-card/50 overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-muted/30">
-        <div className="flex items-center gap-2">
-          <span className="text-base">{category.icon}</span>
-          <span className="font-semibold text-sm">{category.label}</span>
-          {latestDoc && (
-            <div className="flex items-center gap-1.5">
-              <Badge
-                variant="outline"
-                className={cn(
-                  "text-xs font-semibold",
-                  isNew
-                    ? "bg-green-500/10 text-green-600 border-green-200"
-                    : "bg-muted text-muted-foreground",
-                )}
-              >
-                v{latestDoc.version}
-                {isNew && " • NEW"}
-              </Badge>
-              {sortedDocs.length > 1 && (
-                <Badge
-                  variant="outline"
-                  className="bg-orange-500/10 text-orange-600 border-orange-200 text-xs font-semibold animate-pulse"
-                >
-                  Ada Revisi / Tambahan
-                </Badge>
-              )}
-            </div>
-          )}
-        </div>
-        {sortedDocs.length > 1 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground cursor-pointer"
-            onClick={() => setShowHistory(!showHistory)}
-          >
-            <History className="w-3 h-3 mr-1" />
-            {sortedDocs.length} versi
-            {showHistory ? (
-              <ChevronDown className="w-3 h-3 ml-1" />
-            ) : (
-              <ChevronRight className="w-3 h-3 ml-1" />
-            )}
-          </Button>
-        )}
-      </div>
-
-      <div className="p-4 space-y-3">
-        {/* Active Document */}
-        {latestDoc ? (
-          <div className="flex items-center justify-between gap-2 p-2.5 rounded-md bg-background border border-border/50">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              {latestDoc.isExternal ? (
-                <ExternalLink className="w-4 h-4 text-blue-500 shrink-0" />
-              ) : (
-                <FileText className="w-4 h-4 text-primary shrink-0" />
-              )}
-              <div className="min-w-0">
-                <p className="text-xs font-semibold truncate">
-                  {latestDoc.fileName || "Document"}
-                </p>
-                <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-                  {format(new Date(latestDoc.createdAt), "dd MMM yyyy, HH:mm")}
-                  {latestDoc.uploadedBy && ` • ${latestDoc.uploadedBy}`}
-                  {sortedDocs.length > 1 && (
-                    <span className="text-orange-600 font-medium ml-1">
-                      (Revisi Terbaru / Ada Tambahan)
-                    </span>
-                  )}
-                </p>
-                {latestDoc.notes && (
-                  <p className="text-[10px] text-muted-foreground mt-1 bg-muted/30 px-1.5 py-0.5 rounded italic">
-                    Note: {latestDoc.notes}
-                  </p>
-                )}
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 px-2.5 text-xs flex items-center gap-1 cursor-pointer bg-background"
-              disabled={isDownloading === latestDoc.id}
-              onClick={() => handleView(latestDoc)}
-            >
-              {isDownloading === latestDoc.id ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : latestDoc.isExternal ? (
-                <>
-                  <ExternalLink className="w-3.5 h-3.5 text-primary" />
-                  <span>Buka Link</span>
-                </>
-              ) : (
-                <>
-                  <Eye className="w-3.5 h-3.5 text-primary" />
-                  <span>Lihat File</span>
-                </>
-              )}
-            </Button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 p-2.5 rounded-md bg-muted/20 border border-dashed border-border text-muted-foreground">
-            <AlertCircle className="w-4 h-4" />
-            <span className="text-xs">Belum ada dokumen</span>
-          </div>
-        )}
-
-        {/* Version History (collapsible) */}
-        {showHistory && sortedDocs.length > 1 && (
-          <div className="space-y-1 pl-2 border-l-2 border-border ml-2">
-            {sortedDocs.slice(1).map((doc) => (
-              <div
-                key={doc.id}
-                className="group flex flex-col gap-1 py-2 px-2 rounded-md hover:bg-muted/40 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-1.5 min-w-0 flex-1 text-xs text-muted-foreground">
-                    <Clock className="w-3.5 h-3.5 shrink-0" />
-                    <Badge
-                      variant="secondary"
-                      className="h-4 px-1 text-xs font-medium"
-                    >
-                      v{doc.version}
-                    </Badge>
-                    <span className="truncate max-w-[200px] font-medium text-foreground/80">
-                      {doc.fileName || "Document"}
-                    </span>
-                    <span className="shrink-0">•</span>
-                    <span className="shrink-0">
-                      {format(new Date(doc.createdAt), "dd/MM/yy HH:mm")}
-                    </span>
-                    {doc.uploadedBy && (
-                      <>
-                        <span className="shrink-0">•</span>
-                        <span className="font-semibold text-primary/70">
-                          by {doc.uploadedBy}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shrink-0 flex items-center gap-1"
-                    disabled={isDownloading === doc.id}
-                    onClick={() => handleView(doc)}
-                  >
-                    {isDownloading === doc.id ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : doc.isExternal ? (
-                      <>
-                        <ExternalLink className="w-3.5 h-3.5 text-primary" />
-                        <span>Buka</span>
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-3.5 h-3.5 text-primary" />
-                        <span>Lihat</span>
-                      </>
-                    )}
-                  </Button>
-                </div>
-                {doc.notes && (
-                  <p className="text-[10px] text-muted-foreground italic pl-5 line-clamp-1">
-                    ↳ Note: {doc.notes}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Upload Controls */}
-        <div className="flex flex-col sm:flex-row items-center gap-2">
-          {/* File Upload */}
-          <div className="w-full sm:flex-1">
-            {selectedFile ? (
-              <div className="flex items-center gap-2">
-                <div className="flex-1 text-xs truncate bg-muted/40 rounded px-2 py-1.5 border border-border/50">
-                  {selectedFile.name}
-                </div>
-                <Button
-                  size="sm"
-                  className="h-7 px-3 text-xs cursor-pointer"
-                  onClick={handleFileUpload}
-                  disabled={isUploading}
-                >
-                  {isUploading ? (
-                    <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                  ) : (
-                    <UploadCloud className="w-3 h-3 mr-1" />
-                  )}
-                  Upload
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-7 p-0 cursor-pointer"
-                  onClick={() => setSelectedFile(null)}
-                >
-                  <X className="w-3 h-3" />
-                </Button>
-              </div>
-            ) : (
-              <label
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded border border-dashed border-border text-xs cursor-pointer",
-                  "text-muted-foreground hover:bg-muted/30 hover:text-foreground transition-colors",
-                  isUploading && "pointer-events-none opacity-50",
-                )}
-              >
-                <UploadCloud className="w-3 h-3" />
-                Pilih File
-                <input
-                  type="file"
-                  className="hidden"
-                  onChange={handleFileSelect}
-                  disabled={isUploading}
-                />
-              </label>
-            )}
-          </div>
-
-          {/* Separator - Hidden on very small screens to save space */}
-          <span className="hidden sm:inline text-[10px] text-muted-foreground">
-            atau
-          </span>
-
-          {/* Link Input */}
-          <div className="flex items-center gap-1 w-full sm:flex-1">
-            <Input
-              placeholder="Paste URL..."
-              className="h-7 text-xs shadow-none"
-              value={linkInput}
-              onChange={(e) => setLinkInput(e.target.value)}
-              disabled={isUploading}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-xs cursor-pointer"
-              disabled={!linkInput.trim() || isUploading}
-              onClick={handleLinkSave}
-            >
-              <LinkIcon className="w-3 h-3" />
-            </Button>
-          </div>
-        </div>
-
-        {/* Notes Input (Optional) */}
-        <div className="pt-1">
-          <Input
-            placeholder="Catatan (opsional)..."
-            className="h-7 text-[10px] bg-background/50 border-dashed"
-            value={revisionNotes}
-            onChange={(e) => setRevisionNotes(e.target.value)}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Dialog Component ──────────────────────────────────────
 export function DocumentManagerDialog({
   ownerId,
-  ownerType,
+  ownerType = "PROJECT",
   leadId,
   categories,
+  defaultCategory,
   globalDriveUrl,
   onUploadSuccess,
   trigger,
@@ -533,10 +162,131 @@ export function DocumentManagerDialog({
   const [copied, setCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState<string | null>(null);
 
+  // Selected Category State untuk Drill-Down
+  const [selectedCatId, setSelectedCatId] = useState<DocumentCategory | null>(
+    defaultCategory ? (defaultCategory as DocumentCategory) : null,
+  );
+
+  // Active Tab di Level 2 ("latest" | "history")
+  const [activeLevel2Tab, setActiveLevel2Tab] = useState<string>("latest");
+
+  // Form Upload State
+  const [uploadType, setUploadType] = useState<"NEW" | "REVISION">("NEW");
+  const [revisionTargetLabel, setRevisionTargetLabel] = useState<string>("");
+  const [documentCustomLabel, setDocumentCustomLabel] = useState<string>("");
+  const [uploadMode, setUploadMode] = useState<"FILE" | "LINK">("FILE");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [linkInput, setLinkInput] = useState("");
+  const [revisionNotes, setRevisionNotes] = useState("");
+  const [documentTonnage, setDocumentTonnage] = useState<string>("");
+  const [isUploading, setIsUploading] = useState(false);
+
+  // History Tab Filter States
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyDocFilter, setHistoryDocFilter] = useState("ALL");
+
   // Preview States
   const [previewDoc, setPreviewDoc] = useState<DocumentRecord | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  // Global Drive Link States
+  const [isUpdatingDrive, setIsUpdatingDrive] = useState(false);
+  const [driveUrl, setDriveUrl] = useState(globalDriveUrl || "");
+  const [isEditingDrive, setIsEditingDrive] = useState(false);
+
+  useEffect(() => {
+    setDriveUrl(globalDriveUrl || "");
+  }, [globalDriveUrl]);
+
+  // Reset category view when dialog opens/closes
+  useEffect(() => {
+    if (open) {
+      if (defaultCategory) {
+        setSelectedCatId(defaultCategory as DocumentCategory);
+      } else {
+        setSelectedCatId(null);
+      }
+      setActiveLevel2Tab("latest");
+      setUploadType("NEW");
+      setRevisionTargetLabel("");
+      setDocumentCustomLabel("");
+      setSelectedFile(null);
+      setLinkInput("");
+      setRevisionNotes("");
+      setDocumentTonnage("");
+      setHistorySearch("");
+      setHistoryDocFilter("ALL");
+    }
+  }, [open, defaultCategory]);
+
+  const activeCategories = categories
+    ? DOCUMENT_CATEGORIES.filter((c) => categories.includes(c.id))
+    : DOCUMENT_CATEGORIES.filter((c) =>
+        (DEFAULT_CATEGORIES as string[]).includes(c.id),
+      );
+
+  const fetchDocuments = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const result = await getDocumentsByOwner(
+        ownerId || "",
+        ownerType === "LEAD" ? "LEAD" : "PROJECT",
+        leadId || undefined,
+      );
+      if (result.success && result.data) {
+        const filteredDocs = (
+          result.data as unknown as DocumentRecord[]
+        ).filter((doc) => doc.category !== "PO" && doc.category !== "OFFERING");
+        setDocuments(filteredDocs);
+      }
+    } catch (err) {
+      console.error("Failed to fetch documents:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [ownerId, ownerType, leadId]);
+
+  useEffect(() => {
+    if (open) {
+      fetchDocuments();
+    }
+  }, [open, fetchDocuments]);
+
+  // Kelompokkan dokumen pada kategori aktif berdasarkan label / kelompok berkas
+  const currentCatDocs = useMemo(() => {
+    if (!selectedCatId) return [];
+    return documents
+      .filter((d) => d.category === selectedCatId)
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+  }, [documents, selectedCatId]);
+
+  // Mengambil daftar dokumen terbaru (unique per label atau nama file)
+  const latestDocsGrouped = useMemo(() => {
+    if (!currentCatDocs.length) return [];
+    const map = new Map<string, DocumentRecord>();
+
+    for (const doc of currentCatDocs) {
+      const key = doc.label || doc.fileName || doc.id;
+      const existing = map.get(key);
+      if (!existing || doc.version > existing.version) {
+        map.set(key, doc);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.version - a.version);
+  }, [currentCatDocs]);
+
+  // Daftar unik label dokumen yang ada untuk pilihan dropdown revisi
+  const existingDocumentLabels = useMemo(() => {
+    return latestDocsGrouped.map((doc) => ({
+      key: doc.label || doc.fileName || doc.id,
+      label: doc.label || doc.fileName || "Dokumen",
+      latestVersion: doc.version,
+    }));
+  }, [latestDocsGrouped]);
 
   const getFileExtension = (fileName: string | null) => {
     if (!fileName) return "";
@@ -598,28 +348,202 @@ export function DocumentManagerDialog({
     }
   };
 
-  const activeCategories = categories
-    ? DOCUMENT_CATEGORIES.filter((c) => categories.includes(c.id))
-    : DOCUMENT_CATEGORIES.filter((c) => (DEFAULT_CATEGORIES as string[]).includes(c.id));
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  const [isUpdatingDrive, setIsUpdatingDrive] = useState(false);
-  const [driveUrl, setDriveUrl] = useState(globalDriveUrl || "");
-  const [isEditingDrive, setIsEditingDrive] = useState(false);
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error("Ukuran file melebihi batas maksimal 25MB.");
+      e.target.value = "";
+      return;
+    }
 
-  useEffect(() => {
-    setDriveUrl(globalDriveUrl || "");
-  }, [globalDriveUrl]);
+    setSelectedFile(file);
+    e.target.value = "";
+  };
+
+  // Shortcut untuk langsung memulai revisi dokumen dari tombol card
+  const handleStartRevisionForDoc = (doc: DocumentRecord) => {
+    const key = doc.label || doc.fileName || doc.id;
+    setUploadType("REVISION");
+    setRevisionTargetLabel(key);
+    setActiveLevel2Tab("latest");
+  };
+
+  const handleSaveUpload = async () => {
+    if (!selectedCatId) return;
+    const catObj = DOCUMENT_CATEGORIES.find((c) => c.id === selectedCatId);
+    const catLabel = catObj?.label || selectedCatId;
+
+    if (uploadMode === "FILE" && !selectedFile) {
+      toast.error("Pilih file yang ingin diunggah terlebih dahulu.");
+      return;
+    }
+    if (uploadMode === "LINK" && !linkInput.trim()) {
+      toast.error("Masukkan link URL dokumen.");
+      return;
+    }
+
+    if (selectedCatId === "DRAWING" && (!documentTonnage || Number(documentTonnage) <= 0)) {
+      toast.error("Tonase Drawing (Ton) wajib diisi untuk dokumen Drawing.");
+      return;
+    }
+
+    // Tentukan versi dan label yang sesuai
+    let targetVersion = 1;
+    let finalLabel = documentCustomLabel.trim();
+
+    if (uploadType === "REVISION") {
+      if (!revisionTargetLabel) {
+        toast.error("Pilih dokumen induk yang ingin direvisi.");
+        return;
+      }
+      finalLabel = revisionTargetLabel;
+      const matchingDocs = currentCatDocs.filter(
+        (d) => (d.label || d.fileName || d.id) === revisionTargetLabel,
+      );
+      if (matchingDocs.length > 0) {
+        const maxVersion = Math.max(...matchingDocs.map((d) => d.version));
+        targetVersion = maxVersion + 1;
+      } else {
+        targetVersion = 2;
+      }
+    } else {
+      if (!finalLabel) {
+        finalLabel =
+          uploadMode === "FILE"
+            ? selectedFile?.name || `${catLabel} Dokumen`
+            : "Tautan Eksternal";
+      }
+      targetVersion = 1;
+    }
+
+    setIsUploading(true);
+    const toastId = `upload-${selectedCatId}`;
+
+    try {
+      if (uploadMode === "FILE" && selectedFile) {
+        toast.loading(`Menyiapkan upload ${catLabel}...`, { id: toastId });
+
+        const { uploadUrl, path, success, error } =
+          await createDocumentUploadUrl(
+            ownerId || "",
+            ownerType === "LEAD" ? "LEAD" : "PROJECT",
+            selectedCatId,
+            selectedFile.name,
+          );
+
+        if (!success || !uploadUrl || !path) {
+          throw new Error(error || "Gagal membuat channel upload");
+        }
+
+        toast.loading(`Mengunggah berkas ke cloud...`, { id: toastId });
+
+        const uploadRes = await fetch(uploadUrl, {
+          method: "PUT",
+          body: selectedFile,
+          headers: { "Content-Type": selectedFile.type },
+        });
+
+        if (!uploadRes.ok) throw new Error("Gagal mengunggah file ke cloud");
+
+        const result = await saveDocumentRecord({
+          leadId: (ownerType === "LEAD"
+            ? ownerId
+            : leadId || undefined) as string,
+          projectId: ownerType === "PROJECT" ? ownerId : undefined,
+          category: selectedCatId,
+          label: finalLabel,
+          url: path,
+          fileName: selectedFile.name,
+          isExternal: false,
+          version: targetVersion,
+          tonnage: Number(documentTonnage) || 0,
+          notes:
+            revisionNotes.trim() ||
+            (uploadType === "REVISION"
+              ? `Revisi v${targetVersion}`
+              : `Upload awal v${targetVersion}`),
+        });
+
+        if (result.success) {
+          toast.success(
+            `${catLabel} ${uploadType === "REVISION" ? `Revisi v${targetVersion}` : "Dokumen Baru"} berhasil disimpan!`,
+            { id: toastId },
+          );
+          setSelectedFile(null);
+          setRevisionNotes("");
+          setDocumentCustomLabel("");
+          setDocumentTonnage("");
+          await fetchDocuments();
+          onUploadSuccess?.();
+        } else {
+          throw new Error(result.error || "Gagal menyimpan data dokumen");
+        }
+      } else if (uploadMode === "LINK" && linkInput.trim()) {
+        toast.loading(`Menyimpan tautan ${catLabel}...`, { id: toastId });
+
+        let displayUrl = linkInput.trim();
+        try {
+          const urlObj = new URL(displayUrl);
+          displayUrl = urlObj.hostname + urlObj.pathname;
+        } catch {}
+
+        const result = await saveDocumentRecord({
+          leadId: (ownerType === "LEAD"
+            ? ownerId
+            : leadId || undefined) as string,
+          projectId: ownerType === "PROJECT" ? ownerId : undefined,
+          category: selectedCatId,
+          label: finalLabel,
+          url: linkInput.trim(),
+          fileName: displayUrl,
+          isExternal: true,
+          version: targetVersion,
+          tonnage: Number(documentTonnage) || 0,
+          notes:
+            revisionNotes.trim() ||
+            (uploadType === "REVISION"
+              ? `Revisi tautan v${targetVersion}`
+              : `Tautan awal v${targetVersion}`),
+        });
+
+        if (result.success) {
+          toast.success(
+            `Tautan ${catLabel} ${uploadType === "REVISION" ? `Revisi v${targetVersion}` : "Dokumen Baru"} berhasil disimpan!`,
+            { id: toastId },
+          );
+          setLinkInput("");
+          setRevisionNotes("");
+          setDocumentCustomLabel("");
+          setDocumentTonnage("");
+          await fetchDocuments();
+          onUploadSuccess?.();
+        } else {
+          throw new Error(result.error || "Gagal menyimpan tautan dokumen");
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Gagal memproses dokumen", { id: toastId });
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleUpdateDrive = async () => {
     setIsUpdatingDrive(true);
     try {
-      const result = await updateGlobalDriveLink(ownerId, ownerType, driveUrl);
+      const result = await updateGlobalDriveLink(
+        ownerId || "",
+        ownerType === "LEAD" ? "LEAD" : "PROJECT",
+        driveUrl,
+      );
       if (result.success) {
-        toast.success("Link Drive Terpusat berhasil diperbarui");
+        toast.success("Link Google Drive berhasil diperbarui!");
         setIsEditingDrive(false);
-        if (onUploadSuccess) onUploadSuccess();
+        onUploadSuccess?.();
       } else {
-        toast.error(result.error);
+        toast.error(result.error || "Gagal memperbarui link drive");
       }
     } catch (err) {
       toast.error("Gagal memperbarui link drive");
@@ -628,68 +552,46 @@ export function DocumentManagerDialog({
     }
   };
 
-  const fetchDocuments = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const result = await getDocumentsByOwner(
-        ownerId,
-        ownerType,
-        leadId || undefined,
-      );
-      if (result.success && result.data) {
-        // Exclude PO and OFFERING from document manager to keep them in SalesDocumentsDialog only
-        const filteredDocs = (
-          result.data as unknown as DocumentRecord[]
-        ).filter((doc) => doc.category !== "PO" && doc.category !== "OFFERING");
-        setDocuments(filteredDocs);
-      }
-    } catch (err) {
-      console.error("Failed to fetch documents:", err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [ownerId, ownerType]);
-
-  useEffect(() => {
-    if (open) {
-      fetchDocuments();
-    }
-  }, [open, fetchDocuments]);
-
-  const handleUploadSuccess = () => {
-    fetchDocuments();
-    onUploadSuccess?.();
-  };
-
   const handleCopyDriveUrl = () => {
-    if (globalDriveUrl) {
+    const targetUrl = driveUrl || globalDriveUrl;
+    if (targetUrl) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(globalDriveUrl);
+        navigator.clipboard.writeText(targetUrl);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-        toast.success("Link Drive di-copy!");
+        toast.success("Link Google Drive berhasil disalin!");
       } else {
-        // Fallback for insecure contexts (HTTP / IP)
-        try {
-          const textArea = document.createElement("textarea");
-          textArea.value = globalDriveUrl;
-          document.body.appendChild(textArea);
-          textArea.focus();
-          textArea.select();
-          document.execCommand("copy");
-          document.body.removeChild(textArea);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-          toast.success("Link Drive di-copy!");
-        } catch (err) {
-          toast.error("Gagal menyalin link secara otomatis");
-        }
+        toast.success("Link Google Drive berhasil disalin!");
       }
     }
   };
 
   const totalDocs = documents.length;
-  const categoriesWithDocs = new Set(documents.map((d) => d.category)).size;
+  const currentCategoryObj = DOCUMENT_CATEGORIES.find(
+    (c) => c.id === selectedCatId,
+  );
+
+  // Filter Riwayat Lengkap
+  const filteredHistoryDocs = useMemo(() => {
+    return currentCatDocs.filter((doc) => {
+      const matchSearch =
+        !historySearch.trim() ||
+        (doc.fileName &&
+          doc.fileName.toLowerCase().includes(historySearch.toLowerCase())) ||
+        (doc.label &&
+          doc.label.toLowerCase().includes(historySearch.toLowerCase())) ||
+        (doc.notes &&
+          doc.notes.toLowerCase().includes(historySearch.toLowerCase())) ||
+        (doc.uploadedBy &&
+          doc.uploadedBy.toLowerCase().includes(historySearch.toLowerCase()));
+
+      const docGroupKey = doc.label || doc.fileName || doc.id;
+      const matchDoc =
+        historyDocFilter === "ALL" || docGroupKey === historyDocFilter;
+
+      return matchSearch && matchDoc;
+    });
+  }, [currentCatDocs, historySearch, historyDocFilter]);
 
   return (
     <>
@@ -702,14 +604,14 @@ export function DocumentManagerDialog({
               <Button
                 variant="outline"
                 size="sm"
-                className="gap-2 cursor-pointer"
+                className="gap-2 cursor-pointer rounded-xl font-semibold text-xs"
               >
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className="w-4 h-4 text-primary" />
                 Documents
                 {totalDocs > 0 && (
                   <Badge
                     variant="secondary"
-                    className="h-5 px-1.5 text-[10px] font-bold"
+                    className="h-5 px-1.5 text-[10px] font-bold bg-primary/10 text-primary"
                   >
                     {totalDocs}
                   </Badge>
@@ -718,250 +620,796 @@ export function DocumentManagerDialog({
             }
           />
         )}
-        <DialogContent className="md:max-w-[900px]! max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <FolderOpen className="w-5 h-5 text-primary" />
-              Document Manager
-            </DialogTitle>
-            <DialogDescription>
-              Upload, kelola, dan lihat riwayat versi dokumen.{" "}
-              {totalDocs > 0 && (
-                <span className="font-medium text-foreground">
-                  {totalDocs} dokumen di {categoriesWithDocs} kategori
-                </span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
 
-          {/* Global Drive URL */}
-          <div className="space-y-1.5 px-0.5">
-            <div className="flex items-center justify-between ml-1">
-              <Label className="text-xs font-semibold text-muted-foreground">
-                Global Drive Link
-              </Label>
-              {!isEditingDrive && (
-                <button
-                  onClick={() => setIsEditingDrive(true)}
-                  className="text-xs font-semibold text-primary hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <Edit className="w-2.5 h-2.5" />
-                  {globalDriveUrl ? "Edit Link" : "Set Link"}
-                </button>
-              )}
-            </div>
-
-            {isEditingDrive ? (
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    value={driveUrl}
-                    onChange={(e) => setDriveUrl(e.target.value)}
-                    placeholder="Paste link Google Drive folder di sini..."
-                    className="h-9 pl-8 text-xs bg-muted/20 border-primary/20 focus-visible:ring-primary"
-                    autoFocus
-                  />
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-9 px-3 text-xs font-semibold cursor-pointer"
-                    onClick={() => {
-                      setIsEditingDrive(false);
-                      setDriveUrl(globalDriveUrl || "");
-                    }}
-                    disabled={isUpdatingDrive}
-                  >
-                    Batal
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-9 px-3 text-xs font-semibold bg-primary hover:bg-primary/95 text-primary-foreground cursor-pointer"
-                    disabled={isUpdatingDrive || driveUrl === globalDriveUrl}
-                    onClick={handleUpdateDrive}
-                  >
-                    {isUpdatingDrive ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      "Simpan"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            ) : globalDriveUrl ? (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/5 border border-blue-200 text-sm">
-                <Globe className="w-4 h-4 text-blue-500 shrink-0" />
-                <a
-                  href={globalDriveUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline truncate flex-1 text-xs"
-                >
-                  {globalDriveUrl}
-                </a>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0 shrink-0 cursor-pointer"
-                  onClick={handleCopyDriveUrl}
-                >
-                  {copied ? (
-                    <Check className="w-3 h-3 text-green-500" />
-                  ) : (
-                    <Copy className="w-3 h-3" />
+        <DialogContent className="w-[96vw] sm:max-w-4xl max-h-[90vh] flex flex-col p-4 sm:p-6 rounded-2xl overflow-hidden border border-border/80 shadow-2xl">
+          {/* LEVEL 1: HUB OVERVIEW (Card Grid) */}
+          {!selectedCatId ? (
+            <>
+              <DialogHeader className="border-b border-border/50 pb-3.5 shrink-0">
+                <div className="flex items-center justify-between">
+                  <DialogTitle className="text-base sm:text-lg font-bold text-foreground flex items-center gap-2">
+                    <FolderOpen className="w-5 h-5 text-primary" />
+                    Document Hub
+                  </DialogTitle>
+                  {totalDocs > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="bg-primary/10 text-primary border-primary/20 text-xs font-bold px-2 py-0.5"
+                    >
+                      {totalDocs} Dokumen Terdaftar
+                    </Badge>
                   )}
-                </Button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 px-3 py-4 rounded-lg bg-muted/30 border border-dashed border-border text-sm justify-center">
-                <p className="text-xs text-muted-foreground italic">
-                  Link Drive Terpusat belum diatur.{" "}
-                  <button
-                    onClick={() => setIsEditingDrive(true)}
-                    className="text-primary font-medium underline cursor-pointer"
-                  >
-                    Set Sekarang
-                  </button>
-                </p>
-              </div>
-            )}
-          </div>
-
-          <Separator />
-
-          {/* Document Categories */}
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-            {isLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : (
-              activeCategories.map((cat) => (
-                <CategorySection
-                  key={cat.id}
-                  ownerId={ownerId}
-                  ownerType={ownerType}
-                  leadId={leadId}
-                  category={cat}
-                  documents={documents}
-                  onUploadSuccess={handleUploadSuccess}
-                  isDownloading={isDownloading}
-                  handleView={handleView}
-                />
-              ))
-            )}
-          </div>
-
-          {/* Document Preview Dialog - Nested inside Parent DialogContent to avoid pointer-events/focus conflict */}
-          <Dialog
-            open={!!previewDoc}
-            onOpenChange={(open) => {
-              if (!open) {
-                setPreviewDoc(null);
-                setPreviewUrl(null);
-              }
-            }}
-          >
-            <DialogContent 
-              className="max-w-xl md:max-w-[800px]! w-full max-h-[90vh] flex flex-col p-6 rounded-2xl"
-              forceRenderOverlay
-            >
-              <DialogHeader className="pb-2">
-                <DialogTitle className="text-base font-bold flex items-center gap-2 truncate pr-6">
-                  <FileText className="w-5 h-5 text-primary shrink-0" />
-                  <span className="truncate">Preview: {previewDoc?.fileName}</span>
-                </DialogTitle>
-                <DialogDescription className="text-xs">
-                  Versi {previewDoc?.version} • Diupload oleh{" "}
-                  {previewDoc?.uploadedBy || "Seseorang"} pada{" "}
-                  {previewDoc &&
-                    format(new Date(previewDoc.createdAt), "dd MMM yyyy, HH:mm")}
+                </div>
+                <DialogDescription className="text-xs text-muted-foreground pt-0.5">
+                  Pusat berkas proyek. Pilih kategori dokumen di bawah untuk
+                  melihat dokumen terbaru, riwayat versi, atau menambah berkas
+                  baru.
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="flex-1 min-h-[350px] bg-muted/20 border rounded-xl flex items-center justify-center overflow-hidden p-2 relative">
-                {isPreviewLoading ? (
-                  <div className="flex flex-col items-center gap-2">
-                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                    <span className="text-xs text-muted-foreground font-medium">
-                      Memuat dokumen...
+              {/* Global Drive Link Baris Ringkas */}
+              <div className="bg-muted/30 p-2.5 sm:p-3 rounded-xl border border-border/60 flex items-center justify-between gap-2 my-2 text-xs">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <Globe className="w-4 h-4 text-primary shrink-0" />
+                  <span className="font-semibold text-foreground shrink-0">
+                    Global Drive:
+                  </span>
+                  {isEditingDrive ? (
+                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                      <Input
+                        value={driveUrl}
+                        onChange={(e) => setDriveUrl(e.target.value)}
+                        placeholder="https://drive.google.com/..."
+                        className="h-7 text-xs bg-background"
+                      />
+                      <Button
+                        size="xs"
+                        onClick={handleUpdateDrive}
+                        disabled={isUpdatingDrive}
+                        className="h-7 text-xs font-bold px-2 bg-primary text-white cursor-pointer"
+                      >
+                        Simpan
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => setIsEditingDrive(false)}
+                        className="h-7 text-xs cursor-pointer"
+                      >
+                        Batal
+                      </Button>
+                    </div>
+                  ) : driveUrl ? (
+                    <a
+                      href={driveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline truncate font-medium flex items-center gap-1"
+                    >
+                      {driveUrl}
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground italic">
+                      Link Google Drive belum diatur.
                     </span>
-                  </div>
-                ) : previewUrl ? (
-                  (() => {
-                    const ext = getFileExtension(previewDoc?.fileName || "");
-                    if (["jpg", "jpeg", "png"].includes(ext)) {
-                      return (
-                        <div className="w-full h-full flex items-center justify-center p-2">
-                          <img
-                            src={previewUrl}
-                            alt={previewDoc?.fileName || "Preview"}
-                            className="max-w-full max-h-[55vh] object-contain rounded-lg shadow-sm bg-background"
-                          />
-                        </div>
-                      );
-                    } else if (ext === "pdf") {
-                      return (
-                        <iframe
-                          src={previewUrl}
-                          title={previewDoc?.fileName || "Preview PDF"}
-                          className="w-full h-[55vh] rounded-lg border-0 bg-background"
-                        />
-                      );
-                    }
-                    return null;
-                  })()
-                ) : (
-                  <div className="flex flex-col items-center gap-1.5 text-muted-foreground text-xs p-4">
-                    <AlertCircle className="w-8 h-8 text-destructive/80" />
-                    <span>Gagal menampilkan preview</span>
+                  )}
+                </div>
+
+                {!isEditingDrive && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    {driveUrl && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleCopyDriveUrl}
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground cursor-pointer"
+                        title="Copy Link Drive"
+                      >
+                        {copied ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setIsEditingDrive(true)}
+                      className="h-7 text-xs text-primary font-semibold hover:bg-primary/10 cursor-pointer"
+                    >
+                      {driveUrl ? "Ubah" : "Atur Link"}
+                    </Button>
                   </div>
                 )}
               </div>
 
-              {previewDoc?.notes && (
-                <div className="mt-2 text-xs bg-muted/40 p-2.5 rounded-lg border border-border/40 italic text-muted-foreground">
-                  Catatan: "{previewDoc.notes}"
-                </div>
-              )}
+              {/* Grid Category Cards */}
+              <div className="flex-1 overflow-y-auto min-h-0 pr-1 my-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {activeCategories.map((cat) => {
+                    const catDocs = documents.filter(
+                      (d) => d.category === cat.id,
+                    );
+                    const hasDocs = catDocs.length > 0;
 
-              <DialogFooter className="flex flex-row items-center justify-end gap-2 pt-4 border-t mt-4 shrink-0 font-sans">
+                    const uniqueLabelsCount = new Set(
+                      catDocs.map((d) => d.label || d.fileName || d.id),
+                    ).size;
+
+                    return (
+                      <div
+                        key={cat.id}
+                        onClick={() => {
+                          setSelectedCatId(cat.id);
+                          setActiveLevel2Tab("latest");
+                        }}
+                        className={cn(
+                          "p-3.5 rounded-xl border transition-all cursor-pointer text-left flex flex-col justify-between group",
+                          hasDocs
+                            ? "bg-card hover:bg-muted/40 border-border/80 hover:border-primary/50 shadow-2xs"
+                            : "bg-muted/15 hover:bg-muted/30 border-border/40 hover:border-border/80",
+                        )}
+                      >
+                        <div>
+                          {/* Top: Icon + Name + Badge Count */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-base sm:text-lg shrink-0">
+                                {cat.icon}
+                              </span>
+                              <span className="font-bold text-xs sm:text-sm text-foreground truncate group-hover:text-primary transition-colors">
+                                {cat.label}
+                              </span>
+                            </div>
+
+                            {hasDocs ? (
+                              <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 text-[10px] font-bold px-1.5 py-0 shrink-0">
+                                {uniqueLabelsCount} Berkas ({catDocs.length}{" "}
+                                Versi)
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className="text-muted-foreground/70 border-dashed text-[10px] px-1.5 py-0 shrink-0"
+                              >
+                                Kosong
+                              </Badge>
+                            )}
+                          </div>
+
+                          {/* Description / Summary */}
+                          <div className="mt-2 text-[11px] leading-relaxed">
+                            {hasDocs ? (
+                              <p className="text-muted-foreground line-clamp-2">
+                                Terdapat {uniqueLabelsCount} item dokumen aktif
+                                dengan total {catDocs.length} riwayat revisi.
+                              </p>
+                            ) : (
+                              <p className="text-muted-foreground/80 line-clamp-2">
+                                {cat.desc}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Bottom Action Hint */}
+                        <div className="mt-3 pt-2 border-t border-border/40 flex items-center justify-between text-[11px] font-semibold text-muted-foreground group-hover:text-primary">
+                          <span>
+                            {hasDocs
+                              ? "Lihat & Kelola Berkas"
+                              : "Tambah Dokumen"}
+                          </span>
+                          <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <DialogFooter className="pt-2 border-t border-border/40 flex justify-end shrink-0">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="text-xs h-9 cursor-pointer"
-                  onClick={() => {
-                    setPreviewDoc(null);
-                    setPreviewUrl(null);
-                  }}
+                  onClick={() => setOpen(false)}
+                  className="rounded-xl text-xs font-semibold cursor-pointer"
                 >
                   Tutup
                 </Button>
-                {previewDoc && (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="text-xs h-9 bg-primary hover:bg-primary/95 text-primary-foreground font-bold shadow-sm cursor-pointer flex items-center gap-1.5"
-                    disabled={isDownloading === previewDoc.id}
-                    onClick={() => handleDownload(previewDoc)}
-                  >
-                    {isDownloading === previewDoc.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Download className="w-4 h-4" />
-                        <span>Unduh File</span>
-                      </>
-                    )}
-                  </Button>
-                )}
               </DialogFooter>
-            </DialogContent>
-          </Dialog>
+            </>
+          ) : (
+            /* LEVEL 2: FOCUSED DETAIL VIEW DENGAN 2 TAB (DOKUMEN TERBARU & UPLOAD vs RIWAYAT VERSI) */
+            <>
+              <DialogHeader className="border-b border-border/50 pb-3 shrink-0">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setSelectedCatId(null);
+                        setSelectedFile(null);
+                        setLinkInput("");
+                        setRevisionNotes("");
+                      }}
+                      className="h-8 px-2 text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground cursor-pointer rounded-lg -ml-1"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      <span>Semua Dokumen</span>
+                    </Button>
+                    <span className="text-muted-foreground/40">/</span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-base">
+                        {currentCategoryObj?.icon}
+                      </span>
+                      <DialogTitle className="text-sm sm:text-base font-bold text-foreground truncate">
+                        {currentCategoryObj?.label}
+                      </DialogTitle>
+                    </div>
+                  </div>
+                </div>
+              </DialogHeader>
+
+              {/* 2 Tabs Navigation di Level 2 */}
+              <Tabs
+                value={activeLevel2Tab}
+                onValueChange={setActiveLevel2Tab}
+                className="flex-1 flex flex-col min-h-0"
+              >
+                <div className="px-0.5 pt-2 shrink-0">
+                  <TabsList className="grid grid-cols-2 w-full sm:w-auto h-9 bg-muted/60 p-1 rounded-xl">
+                    <TabsTrigger
+                      value="latest"
+                      className="text-xs font-bold gap-1.5 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-xs cursor-pointer"
+                    >
+                      <UploadCloud className="w-3.5 h-3.5 text-primary" />
+                      <span>Upload Dokumen</span>
+                    </TabsTrigger>
+
+                    <TabsTrigger
+                      value="history"
+                      className="text-xs font-semibold gap-1.5 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-xs cursor-pointer"
+                    >
+                      <History className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>Riwayat Versi</span>
+                      {currentCatDocs.length > 0 && (
+                        <span className="ml-1 px-1.5 py-0.2 rounded-full bg-muted text-foreground text-xs">
+                          {currentCatDocs.length}
+                        </span>
+                      )}
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+
+                {/* TAB 1: FORM UNGGAH / TAMBAH / REVISI BERKAS */}
+                <TabsContent
+                  value="latest"
+                  className="flex-1 overflow-y-auto min-h-0 space-y-4 py-3 pr-1 mt-0"
+                >
+                  <div className="p-4 sm:p-5 rounded-xl border border-border/80 bg-card space-y-4 shadow-2xs">
+                    <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <UploadCloud className="w-4 h-4 text-primary" />
+                        <span>Unggah Berkas / Revisi Dokumen</span>
+                      </Label>
+                    </div>
+
+                    {/* 1. SWITCHER TIPE UNGGAHAN: DOKUMEN BARU VS REVISI */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Tipe Tindakan
+                      </Label>
+                      <div className="grid grid-cols-2 gap-2 bg-muted/60 p-1 rounded-xl border border-border/60">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUploadType("NEW");
+                            setRevisionTargetLabel("");
+                          }}
+                          className={cn(
+                            "flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                            uploadType === "NEW"
+                              ? "bg-background text-foreground shadow-xs border border-border/40"
+                              : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Plus className="w-3.5 h-3.5 text-primary" />
+                          <span>Dokumen Baru / Tambahan</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={existingDocumentLabels.length === 0}
+                          onClick={() => {
+                            setUploadType("REVISION");
+                            if (
+                              existingDocumentLabels.length > 0 &&
+                              !revisionTargetLabel
+                            ) {
+                              setRevisionTargetLabel(
+                                existingDocumentLabels[0].key,
+                              );
+                            }
+                          }}
+                          className={cn(
+                            "flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                            uploadType === "REVISION"
+                              ? "bg-background text-amber-700 dark:text-amber-300 shadow-xs border border-amber-200"
+                              : "text-muted-foreground hover:text-foreground",
+                            existingDocumentLabels.length === 0 &&
+                              "opacity-50 cursor-not-allowed",
+                          )}
+                        >
+                          <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Unggah Revisi Dokumen</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Jika memilih REVISI: Tampilkan pilihan dokumen target */}
+                    {uploadType === "REVISION" ? (
+                      <div className="p-3 bg-amber-500/10 border border-amber-200 rounded-xl space-y-1.5 animate-in fade-in-50">
+                        <Label className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                          Pilih Dokumen Induk yang Ingin Direvisi
+                        </Label>
+                        <select
+                          value={revisionTargetLabel}
+                          onChange={(e) =>
+                            setRevisionTargetLabel(e.target.value)
+                          }
+                          className="w-full h-9 text-xs bg-background border border-amber-300 rounded-lg px-2.5 text-foreground font-semibold cursor-pointer"
+                        >
+                          {existingDocumentLabels.map((item) => (
+                            <option key={item.key} value={item.key}>
+                              {item.label} (Versi saat ini: v
+                              {item.latestVersion} → Akan menjadi v
+                              {item.latestVersion + 1})
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                          Berkas yang diunggah akan otomatis menaikkan versi
+                          berkas di atas dan menyimpan versi sebelumnya ke tab
+                          Riwayat Versi.
+                        </p>
+                      </div>
+                    ) : (
+                      /* Jika Dokumen Baru: Input Judul / Label Berkas */
+                      <div className="space-y-1">
+                        <Label className="text-xs font-bold text-foreground">
+                          Nama / Label Dokumen (Opsional)
+                        </Label>
+                        <Input
+                          placeholder="Contoh: Layout 2D Jalur Pabrik, Skema Wiring, dll..."
+                          value={documentCustomLabel}
+                          onChange={(e) =>
+                            setDocumentCustomLabel(e.target.value)
+                          }
+                          className="h-8.5 text-xs rounded-lg"
+                        />
+                        <p className="text-[10px] text-muted-foreground">
+                          Jika dikosongkan, nama file asli akan digunakan
+                          sebagai judul dokumen.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Jika Kategori DRAWING: Input Tonase Gambar (Ton) */}
+                    {selectedCatId === "DRAWING" && (
+                      <div className="space-y-1 bg-amber-500/10 p-3 rounded-xl border border-amber-300">
+                        <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <span>⚖️ Tonase Drawing (Ton) <span className="text-red-500 font-bold">* Wajib</span></span>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          placeholder="Contoh: 12.5 (wajib diisi dalam satuan Ton)"
+                          value={documentTonnage}
+                          onChange={(e) => setDocumentTonnage(e.target.value)}
+                          className="h-8.5 text-xs rounded-lg bg-background border-amber-300 font-semibold"
+                        />
+                        <p className="text-[10px] text-amber-800 dark:text-amber-300">
+                          Tonase gambar wajib diisi untuk kalkulasi presisi progress fase Engineering di Masterplan.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* 2. MODE PILIHAN: FILE VS TAUTAN */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-bold text-foreground">
+                          Metode Unggah
+                        </Label>
+                        <div className="flex items-center bg-muted p-0.5 rounded-lg border border-border/60">
+                          <button
+                            type="button"
+                            onClick={() => setUploadMode("FILE")}
+                            className={cn(
+                              "px-2.5 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer",
+                              uploadMode === "FILE"
+                                ? "bg-background text-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            Upload File
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setUploadMode("LINK")}
+                            className={cn(
+                              "px-2.5 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer",
+                              uploadMode === "LINK"
+                                ? "bg-background text-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            Paste Link URL
+                          </button>
+                        </div>
+                      </div>
+
+                      {uploadMode === "FILE" ? (
+                        <div className="border-2 border-dashed border-border/80 rounded-xl p-4 sm:p-5 text-center hover:border-primary/40 bg-muted/10 transition-colors relative">
+                          <input
+                            type="file"
+                            onChange={handleFileSelect}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
+                            disabled={isUploading}
+                          />
+                          <div className="flex flex-col items-center justify-center gap-1.5 pointer-events-none">
+                            <UploadCloud className="w-6 h-6 text-primary" />
+                            {selectedFile ? (
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-xs text-foreground block">
+                                  {selectedFile.name}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  (
+                                  {(selectedFile.size / 1024 / 1024).toFixed(2)}{" "}
+                                  MB)
+                                </span>
+                              </div>
+                            ) : (
+                              <div>
+                                <span className="font-semibold text-xs text-foreground block">
+                                  Klik untuk memilih berkas atau seret file ke
+                                  sini
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  Maksimal 25MB (PDF, PNG, JPG, ZIP, CAD, DWG,
+                                  XLSX, dll)
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <div className="relative">
+                            <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                            <Input
+                              placeholder="https://drive.google.com/file/d/..."
+                              value={linkInput}
+                              onChange={(e) => setLinkInput(e.target.value)}
+                              className="pl-8 text-xs h-9 rounded-lg"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 3. INPUT CATATAN REVISI / PERUBAHAN */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold text-foreground">
+                        Catatan Perubahan / Keterangan (Opsional)
+                      </Label>
+                      <Input
+                        placeholder="Contoh: Perubahan dimensi diameter pulley 300mm sesuai request QC..."
+                        value={revisionNotes}
+                        onChange={(e) => setRevisionNotes(e.target.value)}
+                        className="text-xs h-8.5 rounded-lg"
+                      />
+                    </div>
+
+                    {/* 4. TOMBOL SIMPAN */}
+                    <div className="pt-2 flex justify-end">
+                      <Button
+                        size="sm"
+                        onClick={handleSaveUpload}
+                        disabled={
+                          isUploading ||
+                          (uploadMode === "FILE" && !selectedFile) ||
+                          (uploadMode === "LINK" && !linkInput.trim()) ||
+                          (uploadType === "REVISION" && !revisionTargetLabel)
+                        }
+                        className="rounded-xl text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5 cursor-pointer shadow-md shadow-primary/20"
+                      >
+                        {isUploading ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Menyimpan Dokumen...</span>
+                          </>
+                        ) : (
+                          <>
+                            <UploadCloud className="w-3.5 h-3.5" />
+                            <span>
+                              {uploadType === "REVISION"
+                                ? "Simpan Dokumen Revisi"
+                                : "Simpan Dokumen Baru"}
+                            </span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </TabsContent>
+
+                {/* TAB 2: RIWAYAT VERSI LENGKAP (TAMPILAN CARD INDEKS DOKUMEN) */}
+                <TabsContent
+                  value="history"
+                  className="flex-1 overflow-y-auto min-h-0 space-y-3 py-3 pr-1 mt-0"
+                >
+                  {/* Filter & Search Bar */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 bg-muted/30 p-2.5 rounded-xl border border-border/60">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                      <Input
+                        placeholder="Cari nama file, catatan, atau uploader..."
+                        value={historySearch}
+                        onChange={(e) => setHistorySearch(e.target.value)}
+                        className="h-8 pl-8 text-xs bg-background rounded-lg"
+                      />
+                    </div>
+
+                    {existingDocumentLabels.length > 1 && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <select
+                          value={historyDocFilter}
+                          onChange={(e) => setHistoryDocFilter(e.target.value)}
+                          className="h-8 text-xs bg-background border border-border rounded-lg px-2 text-foreground font-medium cursor-pointer"
+                        >
+                          <option value="ALL">
+                            Semua Berkas ({currentCatDocs.length})
+                          </option>
+                          {existingDocumentLabels.map((item) => (
+                            <option key={item.key} value={item.key}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* List Riwayat Versi dalam Bentuk Card Elegan dengan Nomor Indeks */}
+                  {filteredHistoryDocs.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {filteredHistoryDocs.map((doc, idx) => (
+                        <div
+                          key={doc.id}
+                          className="p-3.5 sm:p-4 rounded-xl border border-border/80 bg-card shadow-2xs hover:border-border transition-all space-y-2"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                              {/* Nomor Indeks Simpel */}
+                              <span className="text-xs font-bold text-muted-foreground/70 min-w-5 shrink-0 pt-0.5">
+                                {idx + 1}.
+                              </span>
+
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-xs sm:text-sm text-foreground break-all">
+                                    {doc.label || doc.fileName || "Dokumen"}
+                                  </span>
+                                  <Badge className="bg-primary/10 text-primary border-primary/20 text-[10px] font-bold px-1.5 py-0">
+                                    v{doc.version}
+                                  </Badge>
+                                  {doc.tonnage && doc.tonnage > 0 ? (
+                                    <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300 text-[10px] font-bold px-1.5 py-0">
+                                      ⚖️ {doc.tonnage} Ton
+                                    </Badge>
+                                  ) : null}
+                                  {doc.isExternal && (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] px-1.5 py-0"
+                                    >
+                                      External Link
+                                    </Badge>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2 text-[11px] text-muted-foreground mt-1 flex-wrap">
+                                  <span>File: {doc.fileName || "-"}</span>
+                                  <span>•</span>
+                                  <span>
+                                    Diupdate:{" "}
+                                    {formatJakartaDate(
+                                      doc.createdAt,
+                                      "datetime",
+                                    )}
+                                  </span>
+                                  {doc.uploadedBy && (
+                                    <>
+                                      <span>•</span>
+                                      <span>Oleh: {doc.uploadedBy}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => handleStartRevisionForDoc(doc)}
+                                className="h-8 text-xs font-semibold gap-1 rounded-lg border-amber-300 text-amber-700 bg-amber-500/10 hover:bg-amber-500/20 cursor-pointer"
+                                title="Unggah revisi untuk dokumen ini (menaikkan versi)"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                <span>Revisi</span>
+                              </Button>
+
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => handleView(doc)}
+                                disabled={isPreviewLoading}
+                                className="h-8 text-xs font-semibold gap-1 rounded-lg border-primary/40 text-primary hover:bg-primary/10 cursor-pointer"
+                              >
+                                {isPreviewLoading ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : doc.isExternal ? (
+                                  <ExternalLink className="w-3 h-3" />
+                                ) : (
+                                  <Eye className="w-3 h-3" />
+                                )}
+                                <span>{doc.isExternal ? "Buka" : "Lihat"}</span>
+                              </Button>
+
+                              {!doc.isExternal && (
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={() => handleDownload(doc)}
+                                  disabled={isDownloading === doc.id}
+                                  className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground cursor-pointer rounded-lg"
+                                  title="Download File"
+                                >
+                                  {isDownloading === doc.id ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Download className="w-3.5 h-3.5" />
+                                  )}
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          {doc.notes && (
+                            <div className="text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-lg border border-border/40 ml-7">
+                              <span className="font-semibold text-foreground">
+                                Catatan Versi Ini:{" "}
+                              </span>
+                              {doc.notes}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-6 rounded-xl border border-dashed border-border/80 text-center bg-muted/10">
+                      <p className="text-xs text-muted-foreground">
+                        {historySearch
+                          ? "Tidak ada riwayat dokumen yang cocok dengan pencarian."
+                          : "Belum ada riwayat versi untuk kategori ini."}
+                      </p>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+
+              <DialogFooter className="pt-2 border-t border-border/40 flex justify-between items-center shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedCatId(null)}
+                  className="rounded-xl text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Kembali ke Daftar Dokumen
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setOpen(false)}
+                  className="rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  Tutup
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
+
+      {/* MODAL PREVIEW DOKUMEN (PDF / GAMBAR) */}
+      {previewDoc && (
+        <Dialog
+          open={!!previewDoc}
+          onOpenChange={(o) => !o && setPreviewDoc(null)}
+        >
+          <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-4 rounded-2xl">
+            <DialogHeader className="border-b pb-2 flex flex-row items-center justify-between">
+              <div>
+                <DialogTitle className="text-sm font-bold truncate">
+                  {previewDoc.fileName || "Preview Dokumen"}
+                </DialogTitle>
+                <DialogDescription className="text-xs">
+                  Versi {previewDoc.version} •{" "}
+                  {formatJakartaDate(previewDoc.createdAt, "datetime")}
+                </DialogDescription>
+              </div>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-hidden rounded-xl bg-muted/20 flex items-center justify-center min-h-0 relative">
+              {isPreviewLoading ? (
+                <div className="flex flex-col items-center gap-2">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                  <span className="text-xs text-muted-foreground font-semibold">
+                    Memuat berkas...
+                  </span>
+                </div>
+              ) : previewUrl ? (
+                getFileExtension(previewDoc.fileName) === "pdf" ? (
+                  <iframe
+                    src={previewUrl}
+                    className="w-full h-full border-0 rounded-xl"
+                  />
+                ) : (
+                  <img
+                    src={previewUrl}
+                    alt="Preview"
+                    className="max-w-full max-h-full object-contain rounded-xl"
+                  />
+                )
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  Tidak dapat menampilkan preview
+                </span>
+              )}
+            </div>
+
+            <DialogFooter className="pt-2 flex justify-between items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleDownload(previewDoc)}
+                className="gap-1 text-xs font-semibold cursor-pointer rounded-lg"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPreviewDoc(null)}
+                className="text-xs font-semibold cursor-pointer rounded-lg"
+              >
+                Tutup
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }

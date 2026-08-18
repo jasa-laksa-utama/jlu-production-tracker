@@ -15,7 +15,7 @@ export async function getWarehouseItems() {
         name: "asc",
       },
     });
-    return items;
+    return JSON.parse(JSON.stringify(items));
   } catch (error) {
     console.error("Error fetching warehouse items:", error);
     return [];
@@ -30,7 +30,7 @@ export async function getUnits() {
         name: "asc",
       },
     });
-    return units;
+    return JSON.parse(JSON.stringify(units));
   } catch (error) {
     console.error("Error fetching units:", error);
     return [];
@@ -63,7 +63,7 @@ export async function getLowStockItems() {
         return aRatio - bRatio;
       });
 
-    return lowStockItems.slice(0, 5);
+    return JSON.parse(JSON.stringify(lowStockItems.slice(0, 5)));
   } catch (error) {
     console.error("Error fetching low stock items:", error);
     return [];

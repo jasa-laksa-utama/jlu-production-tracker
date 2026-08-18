@@ -26,14 +26,24 @@ import {
   Download,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Pencil,
   AlertTriangle,
   Printer,
   X,
   Eye,
+  RotateCcw,
+  Calendar,
+  FileImage,
+  Layers,
+  UploadCloud,
+  CheckCircle,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, formatRupiah } from "@/lib/utils";
+import { formatJakartaDate } from "@/lib/date-utils";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { getWarehouseItems, getUnits } from "@/app/actions/inventory";
@@ -45,9 +55,89 @@ import {
   getSPBHistory,
   deleteSPB,
   updateSPB,
+  resubmitSpb,
+  updateSPBItemStatus,
 } from "@/app/actions/spb";
+import {
+  createSPBImageUploadUrl,
+  getSPBImageUrl,
+  getSPBImageUrls,
+} from "@/app/actions/documents";
+import { parseSPBImageUrls } from "@/lib/utils";
+
+interface ImageItem {
+  id: string;
+  file?: File;
+  previewUrl: string;
+  path?: string;
+  isExisting?: boolean;
+}
+import { SPBSubstitutionCard } from "@/components/trackers/spb-substitution-card";
 import { SPBPDFDocument } from "./spb-pdf-document";
 import { BoQPDFDocument } from "./boq-pdf-document";
+import { SPBSmartImportDialog } from "./spb-smart-import-dialog";
+
+/**
+ * Helper to compress image client-side via Canvas API
+ * Resizes max dimension to 1280px and converts to WebP quality 0.8
+ */
+async function compressImageFile(
+  file: File,
+  maxDimension = 1280,
+  quality = 0.8,
+): Promise<File> {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith("image/") || file.size < 200 * 1024) {
+      resolve(file);
+      return;
+    }
+    const img = new window.Image();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const outputMime = "image/jpeg";
+        const fileName = file.name.replace(/\.[^/.]+$/, "") + ".jpg";
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            const compressedFile = new File([blob], fileName, {
+              type: outputMime,
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          },
+          outputMime,
+          quality,
+        );
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 import {
   Popover,
   PopoverContent,
@@ -67,7 +157,7 @@ const PDFViewer = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="h-[500px] w-full flex flex-col items-center justify-center text-muted-foreground gap-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+      <div className="h-125 w-full flex flex-col items-center justify-center text-muted-foreground gap-3 bg-zinc-900 border border-zinc-800 rounded-lg">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
         <span className="text-sm font-semibold">Memuat PDF Viewer...</span>
       </div>
@@ -97,7 +187,8 @@ interface CreateSPBDialogProps {
 }
 
 const getItemStatusDetails = (status: string, source: string) => {
-  switch (status) {
+  const s = (status || "").toUpperCase();
+  switch (s) {
     case "PENDING":
       return {
         label: "Menunggu Verifikasi",
@@ -105,6 +196,7 @@ const getItemStatusDetails = (status: string, source: string) => {
           "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700",
       };
     case "REJECTED":
+    case "DITOLAK":
       return {
         label: "Ditolak",
         className:
@@ -123,6 +215,7 @@ const getItemStatusDetails = (status: string, source: string) => {
           "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/20 dark:text-indigo-400 dark:border-indigo-900/50",
       };
     case "PARTIALLY_ISSUED":
+    case "PARTIALLY ISSUED":
       return {
         label: "Diproses Sebagian",
         className:
@@ -131,6 +224,13 @@ const getItemStatusDetails = (status: string, source: string) => {
     case "FULFILLED":
       return {
         label: "Sudah Dikeluarkan",
+        className:
+          "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50",
+      };
+    case "COMPLETED":
+    case "ISSUED":
+      return {
+        label: "Selesai",
         className:
           "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50",
       };
@@ -163,13 +263,21 @@ const getItemStatusDetails = (status: string, source: string) => {
 
 const getSpbStatusLabel = (status?: string) => {
   if (!status) return "Disetujui";
-  switch (status.toUpperCase()) {
+  const s = status.toUpperCase();
+  switch (s) {
     case "PENDING_APPROVAL":
       return "Menunggu Persetujuan";
     case "APPROVED":
       return "Disetujui";
     case "REJECTED":
       return "Ditolak";
+    case "COMPLETED":
+    case "ISSUED":
+    case "FULFILLED":
+      return "Completed";
+    case "PARTIALLY_ISSUED":
+    case "PARTIALLY ISSUED":
+      return "Partially Issued";
     default:
       return status.replace(/_/g, " ");
   }
@@ -178,11 +286,17 @@ const getSpbStatusLabel = (status?: string) => {
 const getSpbStatusColor = (status?: string) => {
   if (!status)
     return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20";
-  switch (status.toUpperCase()) {
+  const s = status.toUpperCase();
+  switch (s) {
     case "PENDING_APPROVAL":
       return "bg-amber-500/10 text-amber-700 border-amber-500/20 dark:text-amber-400";
     case "APPROVED":
+    case "COMPLETED":
+    case "ISSUED":
       return "bg-emerald-500/10 text-emerald-700 border-emerald-500/20 dark:text-emerald-450";
+    case "PARTIALLY_ISSUED":
+    case "PARTIALLY ISSUED":
+      return "bg-orange-500/10 text-orange-700 border-orange-500/20 dark:text-orange-400";
     case "REJECTED":
       return "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400";
     default:
@@ -216,6 +330,32 @@ export function CreateSPBDialog({
   >(null);
   const [isBoqDetailOpen, setIsBoqDetailOpen] = useState(false);
   const [isPreviewBoqPdfOpen, setIsPreviewBoqPdfOpen] = useState(false);
+  const [isSmartImportOpen, setIsSmartImportOpen] = useState(false);
+
+  // Handler untuk hasil import Excel Smart SPB
+  const handleConfirmSmartImport = (importedItems: any[]) => {
+    if (!importedItems || importedItems.length === 0) return;
+
+    // Convert imported items ke format inputRows
+    const newRows: SPBItem[] = importedItems.map((item) => ({
+      id: Math.random().toString(),
+      materialName: item.name,
+      typeMerk: item.typeMerk || "",
+      qty: String(item.qty || "1"),
+      unit: item.unit || "pcs",
+      source: "WAREHOUSE",
+      note: item.note || "",
+      materialId: item.materialId || undefined,
+    }));
+
+    setInputRows((prev) => {
+      // Jika baris pertama kosong, timpa baris pertama
+      if (prev.length === 1 && !prev[0].materialName) {
+        return newRows;
+      }
+      return [...prev, ...newRows];
+    });
+  };
 
   // State untuk item yang sedang diinput (Bisa multiple baris)
   const [inputRows, setInputRows] = useState<SPBItem[]>([
@@ -249,6 +389,129 @@ export function CreateSPBDialog({
   >(null);
   const [historySpbSearchQuery, setHistorySpbSearchQuery] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // New SPB Feature States: Deadline, Auto-Split, Image Upload (Multiple)
+  const [deadlineDate, setDeadlineDate] = useState<string>("");
+  const [autoSplit, setAutoSplit] = useState<boolean>(true);
+  const [imageItems, setImageItems] = useState<ImageItem[]>([]);
+  const [isCompressingImage, setIsCompressingImage] = useState<boolean>(false);
+
+  // Modal Preview Image State
+  const [previewModalImages, setPreviewModalImages] = useState<string[]>([]);
+  const [activeImageIndex, setActiveImageIndex] = useState<number>(0);
+
+  /**
+   * Auto-split logic: Splits requested qty into WAREHOUSE and TRADING rows based on available stock.
+   */
+  const processAutoSplitRows = (rows: SPBItem[]): SPBItem[] => {
+    if (!autoSplit) return rows;
+    const processed: SPBItem[] = [];
+
+    for (const row of rows) {
+      if (!row.materialId) {
+        processed.push(row);
+        continue;
+      }
+
+      const whItem = warehouseItems.find((w) => w.id === row.materialId);
+      const totalQty = parseFloat(row.qty || "0");
+
+      if (!whItem || isNaN(totalQty) || totalQty <= 0) {
+        processed.push(row);
+        continue;
+      }
+
+      const availableStock = Math.max(
+        0,
+        (whItem.currentStock || 0) - (whItem.reservedStock || 0),
+      );
+
+      if (availableStock >= totalQty) {
+        processed.push({
+          ...row,
+          source: "WAREHOUSE",
+          currentStock: whItem.currentStock,
+          reservedStock: whItem.reservedStock,
+        });
+      } else if (availableStock > 0) {
+        const warehouseQty = availableStock;
+        const tradingQty = totalQty - availableStock;
+
+        processed.push({
+          ...row,
+          id: Math.random().toString(),
+          source: "WAREHOUSE",
+          qty: String(warehouseQty),
+          currentStock: whItem.currentStock,
+          reservedStock: whItem.reservedStock,
+          note: row.note,
+        });
+
+        processed.push({
+          ...row,
+          id: Math.random().toString(),
+          source: "TRADING",
+          qty: String(tradingQty),
+          currentStock: whItem.currentStock,
+          reservedStock: whItem.reservedStock,
+          note: row.note,
+        });
+      } else {
+        processed.push({
+          ...row,
+          source: "TRADING",
+          currentStock: whItem.currentStock,
+          reservedStock: whItem.reservedStock,
+          note: row.note,
+        });
+      }
+    }
+
+    return processed;
+  };
+
+  const handleImagesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const validFiles = files.filter((f) => f.type.startsWith("image/"));
+    if (validFiles.length === 0) {
+      toast.error("File harus berupa gambar (JPG, PNG, WEBP)");
+      return;
+    }
+
+    try {
+      setIsCompressingImage(true);
+      toast.loading(`Mengompres ${validFiles.length} gambar...`, {
+        id: "compress-spb-img",
+      });
+
+      const newItems: ImageItem[] = [];
+      for (const file of validFiles) {
+        const compressed = await compressImageFile(file, 1280, 0.8);
+        newItems.push({
+          id: Math.random().toString(),
+          file: compressed,
+          previewUrl: URL.createObjectURL(compressed),
+        });
+      }
+
+      setImageItems((prev) => [...prev, ...newItems]);
+      toast.success(`${newItems.length} foto lampiran berhasil ditambahkan`, {
+        id: "compress-spb-img",
+      });
+    } catch (err) {
+      console.error("Gagal mengompresi gambar:", err);
+      toast.error("Gagal mengompresi gambar", { id: "compress-spb-img" });
+    } finally {
+      setIsCompressingImage(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleRemoveImageItem = (id: string) => {
+    setImageItems((prev) => prev.filter((item) => item.id !== id));
+  };
 
   const toggleSpb = (id: string) => {
     setExpandedSpbs((prev) => ({
@@ -416,36 +679,13 @@ export function CreateSPBDialog({
       return;
     }
 
-    // Check duplicates
-    const duplicateCheck = new Set<string>();
-    for (const item of pendingItems) {
-      if (item.materialId) {
-        duplicateCheck.add(item.materialId);
-      } else {
-        duplicateCheck.add(item.materialName.toLowerCase().trim());
-      }
-    }
-
-    for (const row of validRows) {
-      const key = row.materialId
-        ? row.materialId
-        : row.materialName.toLowerCase().trim();
-      if (duplicateCheck.has(key)) {
-        toast.error(
-          `Barang "${row.materialName}" sudah diinput ke dalam SPB ini!`,
-        );
-        return;
-      }
-      duplicateCheck.add(key);
-    }
-
     const hasInvalidQty = validRows.some((i) => parseFloat(i.qty) <= 0);
     if (hasInvalidQty) {
       toast.error("Qty harus lebih besar dari 0");
       return;
     }
 
-    // Validate against Project BoQ items
+    // Validate against Project BoQ items & remaining quota
     if (boqItems.length === 0) {
       toast.error(
         "Proyek ini belum memiliki BoQ. SPB tidak dapat diterbitkan.",
@@ -461,37 +701,52 @@ export function CreateSPBDialog({
           const pendingQty = pendingItems
             .filter((p) => p.materialId === row.materialId)
             .reduce((sum, p) => sum + parseFloat(p.qty || "0"), 0);
+          const sameMaterialValidRowsQty = validRows
+            .filter((v) => v.materialId === row.materialId)
+            .reduce((sum, v) => sum + parseFloat(v.qty || "0"), 0);
+
           const limit = boqItem.qty - alreadyRequested - pendingQty;
-          return parseFloat(row.qty) > limit;
+          return sameMaterialValidRowsQty > limit;
         }
       }
-      return true; // If materialId is not found in BoQItems, fail validation!
+      return false;
     });
 
     if (hasOverBoq) {
       toast.error(
-        "Kuantitas barang melebihi batas BoQ (atau barang tidak terdaftar di BoQ)!",
+        "Kuantitas barang melebihi sisa batas BoQ!",
       );
       return;
     }
 
     // Validate available stock for warehouse items
-    const hasOverStock = validRows.some((row) => {
-      if (row.source === "WAREHOUSE" && row.currentStock !== undefined) {
-        const available = row.currentStock - (row.reservedStock || 0);
-        return parseFloat(row.qty) > available;
-      }
-      return false;
-    });
+    let finalRowsToAdd: SPBItem[] = [];
+    if (autoSplit) {
+      finalRowsToAdd = processAutoSplitRows(validRows);
+    } else {
+      const hasOverStock = validRows.some((row) => {
+        if (row.source === "WAREHOUSE" && row.currentStock !== undefined) {
+          const available = Math.max(
+            0,
+            row.currentStock - (row.reservedStock || 0),
+          );
+          return parseFloat(row.qty) > available;
+        }
+        return false;
+      });
 
-    if (hasOverStock) {
-      toast.error("Jumlah permintaan melebihi stok yang tersedia!");
-      return;
+      if (hasOverStock) {
+        toast.error(
+          "Jumlah permintaan melebihi stok yang tersedia! Aktifkan Auto-Split atau ubah sumber ke TRADING.",
+        );
+        return;
+      }
+      finalRowsToAdd = validRows;
     }
 
     setPendingItems([
       ...pendingItems,
-      ...validRows.map((v) => ({ ...v, id: Math.random().toString() })),
+      ...finalRowsToAdd.map((v) => ({ ...v, id: Math.random().toString() })),
     ]);
 
     // Reset input form
@@ -506,7 +761,7 @@ export function CreateSPBDialog({
         unit: "PCS",
       },
     ]);
-    toast.success(`${validRows.length} barang masuk antrean`);
+    toast.success(`${finalRowsToAdd.length} barang masuk antrean`);
   };
 
   const removeFromQueue = (id: string) => {
@@ -560,6 +815,38 @@ export function CreateSPBDialog({
     setEditingSpbId(spb.dbId);
     setEditingSpbNumber(spb.id);
     setSpbNumberInput(spb.id);
+
+    if (spb.deadlineDate) {
+      try {
+        setDeadlineDate(format(new Date(spb.deadlineDate), "yyyy-MM-dd"));
+      } catch {
+        setDeadlineDate("");
+      }
+    } else {
+      setDeadlineDate("");
+    }
+
+    if (spb.imageUrl) {
+      const paths = parseSPBImageUrls(spb.imageUrl);
+      if (paths.length > 0) {
+        getSPBImageUrls(paths).then((res) => {
+          if (res.success && res.urls) {
+            const existingItems: ImageItem[] = paths.map((p, index) => ({
+              id: Math.random().toString(),
+              path: p,
+              previewUrl: res.urls[index] || p,
+              isExisting: true,
+            }));
+            setImageItems(existingItems);
+          }
+        });
+      } else {
+        setImageItems([]);
+      }
+    } else {
+      setImageItems([]);
+    }
+
     toast.info(`Mengedit SPB: ${spb.id}`);
   };
 
@@ -567,6 +854,8 @@ export function CreateSPBDialog({
     setEditingSpbId(null);
     setEditingSpbNumber(null);
     setSpbNumberInput("");
+    setDeadlineDate("");
+    setImageItems([]);
     setPendingItems([]);
     toast.info("Edit SPB dibatalkan.");
   };
@@ -606,6 +895,65 @@ export function CreateSPBDialog({
 
     setIsSubmitting(true);
     try {
+      const finalImagePaths: string[] = [];
+
+      for (const item of imageItems) {
+        if (item.isExisting && item.path) {
+          finalImagePaths.push(item.path);
+        } else if (item.file) {
+          toast.loading(`Mengupload foto ${item.file.name}...`, {
+            id: "spb-image-upload",
+          });
+          const uploadRes = await createSPBImageUploadUrl(
+            project.id,
+            item.file.name,
+          );
+          if (!uploadRes.success || !uploadRes.uploadUrl || !uploadRes.path) {
+            toast.error(
+              uploadRes.error ||
+                `Gagal membuat URL upload foto ${item.file.name}`,
+              { id: "spb-image-upload" },
+            );
+            setIsSubmitting(false);
+            return;
+          }
+
+          const putRes = await fetch(uploadRes.uploadUrl, {
+            method: "PUT",
+            body: item.file,
+            headers: { "Content-Type": item.file.type },
+          });
+
+          if (!putRes.ok) {
+            toast.error(
+              `Gagal mengirim foto ${item.file.name} ke cloud storage`,
+              {
+                id: "spb-image-upload",
+              },
+            );
+            setIsSubmitting(false);
+            return;
+          }
+
+          finalImagePaths.push(uploadRes.path);
+        }
+      }
+
+      if (imageItems.length > 0) {
+        toast.success(
+          `${finalImagePaths.length} foto lampiran berhasil diupload!`,
+          {
+            id: "spb-image-upload",
+          },
+        );
+      }
+
+      const options = {
+        deadlineDate: deadlineDate ? new Date(deadlineDate) : null,
+        imageUrl:
+          finalImagePaths.length > 0 ? JSON.stringify(finalImagePaths) : null,
+      };
+
       const itemsInput = pendingItems.map((p) => ({
         name: p.materialName,
         typeMerk: p.typeMerk || undefined,
@@ -618,9 +966,14 @@ export function CreateSPBDialog({
 
       let res;
       if (editingSpbId) {
-        res = await updateSPB(editingSpbId, itemsInput, spbNumberInput);
+        res = await updateSPB(
+          editingSpbId,
+          itemsInput,
+          spbNumberInput,
+          options,
+        );
       } else {
-        res = await createSPB(project.id, itemsInput, spbNumberInput);
+        res = await createSPB(project.id, itemsInput, spbNumberInput, options);
       }
 
       if (res.success) {
@@ -628,6 +981,8 @@ export function CreateSPBDialog({
         setEditingSpbId(null);
         setEditingSpbNumber(null);
         setSpbNumberInput("");
+        setDeadlineDate("");
+        setImageItems([]);
         toast.success(
           editingSpbId
             ? "SPB berhasil diperbarui!"
@@ -664,34 +1019,6 @@ export function CreateSPBDialog({
     }
   };
 
-  // Check if any row in inputRows is a duplicate of pendingItems or other inputRows
-  const duplicateMap = new Set<string>();
-  for (const item of pendingItems) {
-    if (item.materialId) {
-      duplicateMap.add(item.materialId);
-    } else {
-      duplicateMap.add(item.materialName.toLowerCase().trim());
-    }
-  }
-
-  const inputRowOccurrences = new Map<string, number>();
-  for (const ir of inputRows) {
-    if (ir.materialName) {
-      const key = ir.materialId
-        ? ir.materialId
-        : ir.materialName.toLowerCase().trim();
-      inputRowOccurrences.set(key, (inputRowOccurrences.get(key) || 0) + 1);
-    }
-  }
-
-  const hasAnyInputRowDuplicate = inputRows.some((ir) => {
-    if (!ir.materialName) return false;
-    const key = ir.materialId
-      ? ir.materialId
-      : ir.materialName.toLowerCase().trim();
-    return duplicateMap.has(key) || (inputRowOccurrences.get(key) || 0) > 1;
-  });
-
   const hasAnyZeroBoqRemaining = inputRows.some((ir) => {
     if (!ir.materialId) return false;
     const boqItem = boqItems.find((b) => b.itemId === ir.materialId);
@@ -707,24 +1034,24 @@ export function CreateSPBDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="md:max-w-[1000px]! max-h-[90vh] flex flex-col p-0 overflow-hidden">
+        <DialogContent className="w-[95vw] sm:w-full md:max-w-250! max-h-[92vh] flex flex-col p-0 overflow-hidden rounded-2xl sm:rounded-3xl">
           <Tabs
             value={activeTab}
             onValueChange={setActiveTab}
             className="flex flex-col flex-1 overflow-hidden"
           >
-            <DialogHeader className="p-6 pb-2 shrink-0">
-              <div className="flex items-center justify-between">
+            <DialogHeader className="p-4 sm:p-6 pb-2 shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="space-y-0.5">
-                  <DialogTitle className="flex items-center gap-2 text-xl font-semibold">
-                    <FileText className="w-6 h-6 text-primary" />
+                  <DialogTitle className="flex items-center gap-2 text-lg sm:text-xl font-semibold">
+                    <FileText className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
                     Surat Permintaan Barang (SPB)
                   </DialogTitle>
                   <DialogDescription className="text-xs">
                     Kelola dan cetak permintaan barang untuk project ini.
                   </DialogDescription>
                 </div>
-                <TabsList className="grid w-[420px] grid-cols-3 bg-muted/50 p-1">
+                <TabsList className="grid w-full sm:w-105 grid-cols-3 bg-muted/50 p-1">
                   <TabsTrigger
                     value="create"
                     className="text-xs font-semibold data-[state=active]:bg-primary data-[state=active]:text-white transition-all cursor-pointer"
@@ -747,7 +1074,7 @@ export function CreateSPBDialog({
               </div>
             </DialogHeader>
 
-            <div className="mx-6 mb-4 p-4 rounded-xl bg-muted/30 border border-border/50 grid grid-cols-4 gap-6 text-xs shrink-0">
+            <div className="mx-3 sm:mx-6 mb-3 sm:mb-4 p-3 sm:p-4 rounded-xl bg-muted/30 border border-border/50 grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-6 text-xs shrink-0">
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground font-semibold">
                   Project Name
@@ -756,7 +1083,7 @@ export function CreateSPBDialog({
                   {project?.projectName || "-"}
                 </p>
               </div>
-              <div className="space-y-1 border-l pl-6">
+              <div className="space-y-1 sm:border-l sm:pl-6">
                 <Label className="text-xs text-muted-foreground font-semibold">
                   Nomor Project
                 </Label>
@@ -765,7 +1092,7 @@ export function CreateSPBDialog({
                     project?.id?.slice(-8).toUpperCase()}
                 </p>
               </div>
-              <div className="space-y-1 border-l pl-6">
+              <div className="space-y-1 md:border-l md:pl-6">
                 <Label className="text-xs text-muted-foreground font-semibold">
                   Client
                 </Label>
@@ -773,7 +1100,7 @@ export function CreateSPBDialog({
                   {project?.customer?.company || project?.customer?.name || "-"}
                 </p>
               </div>
-              <div className="space-y-1 border-l pl-6">
+              <div className="space-y-1 sm:border-l sm:pl-6">
                 <Label className="text-xs text-muted-foreground font-semibold">
                   Status
                 </Label>
@@ -787,27 +1114,134 @@ export function CreateSPBDialog({
               value="create"
               className="flex-1 overflow-hidden flex flex-col m-0 p-0 border-0 outline-none"
             >
-              <div className="flex-1 overflow-y-auto px-6 py-2">
+              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-2">
                 <div className="space-y-8 pb-6">
-                  {/* SPB Document Number Input */}
+                  {/* SPB Header Inputs: Nomor SPB, Tenggat Waktu, Auto-Split Toggle, Upload Gambar */}
                   {boqItems.length > 0 && (
-                    <div className="p-5 rounded-2xl border-2 border-border/40 bg-background space-y-3 shadow-xs">
-                      <div className="flex flex-col gap-1.5">
-                        <Label
-                          htmlFor="spbNumberInput"
-                          className="text-xs font-semibold text-muted-foreground"
-                        >
-                          Nomor SPB *
-                        </Label>
-                        <Input
-                          id="spbNumberInput"
-                          type="text"
-                          placeholder="e.g. SPB/JLU/2026/001"
-                          value={spbNumberInput}
-                          onChange={(e) => setSpbNumberInput(e.target.value)}
-                          className="h-10 bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-semibold px-3 focus-visible:ring-primary/20"
-                        />
+                    <div className="p-3.5 sm:p-5 rounded-2xl border-2 border-border/40 bg-background space-y-4 shadow-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <Label
+                            htmlFor="spbNumberInput"
+                            className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-primary" />{" "}
+                            Nomor SPB *
+                          </Label>
+                          <Input
+                            id="spbNumberInput"
+                            type="text"
+                            placeholder="e.g. SPB/PROJECT-2026-07-001/001"
+                            value={spbNumberInput}
+                            onChange={(e) => setSpbNumberInput(e.target.value)}
+                            className="h-10 bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-semibold px-3 focus-visible:ring-primary/20"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <Label
+                            htmlFor="spbDeadlineInput"
+                            className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5"
+                          >
+                            <Calendar className="w-3.5 h-3.5 text-primary" />{" "}
+                            Tenggat Waktu / Due Date
+                          </Label>
+                          <Input
+                            id="spbDeadlineInput"
+                            type="date"
+                            value={deadlineDate}
+                            onChange={(e) => setDeadlineDate(e.target.value)}
+                            className="h-10 bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-semibold px-3 focus-visible:ring-primary/20"
+                          />
+                        </div>
                       </div>
+
+                      {/* Row 1: 2 Columns side-by-side (Auto-Split Toggle & Button Upload Gambar) */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center pt-2 border-t border-border/30">
+                        {/* Left: Auto-Split Stock Toggle */}
+                        <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-primary/20 bg-primary/5 h-10">
+                          <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5 cursor-pointer">
+                            <Layers className="w-3.5 h-3.5 text-primary shrink-0" />{" "}
+                            Auto-Split Stok Gudang
+                          </Label>
+                          <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                            <input
+                              type="checkbox"
+                              checked={autoSplit}
+                              onChange={(e) => setAutoSplit(e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-9 h-5 bg-muted peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                          </label>
+                        </div>
+
+                        {/* Right: Button Upload File Gambar */}
+                        <div>
+                          <label className="flex items-center justify-center gap-2 h-10 px-3 border-2 border-dashed border-border/60 hover:border-primary/40 rounded-xl bg-muted/10 hover:bg-muted/20 cursor-pointer transition-colors text-xs font-semibold text-muted-foreground">
+                            <UploadCloud className="w-4 h-4 text-primary" />
+                            <span>
+                              {isCompressingImage
+                                ? "Mengompres Gambar..."
+                                : "+ Upload Lampiran Gambar (JPG/JPEG/PNG)"}
+                            </span>
+                            <input
+                              type="file"
+                              multiple
+                              accept="image/jpeg,image/png,image/webp"
+                              onChange={handleImagesChange}
+                              disabled={isCompressingImage}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Row 2: List Preview Gambar Lampiran yang diupload (2 Kolom) */}
+                      {imageItems.length > 0 && (
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                              <FileImage className="w-3.5 h-3.5 text-primary" />{" "}
+                              Lampiran Gambar SPB ({imageItems.length} Foto
+                              Terpilih)
+                            </Label>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                            {imageItems.map((item, idx) => (
+                              <div
+                                key={item.id}
+                                className="flex items-center gap-2 p-1.5 rounded-xl border border-primary/20 bg-primary/5 relative group"
+                              >
+                                <div className="w-9 h-9 rounded-lg overflow-hidden border border-border shrink-0 bg-background">
+                                  <img
+                                    src={item.previewUrl}
+                                    alt={`Preview Lampiran ${idx + 1}`}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[11px] font-semibold truncate text-foreground flex items-center gap-1">
+                                    <CheckCircle className="w-3 h-3 text-emerald-600 shrink-0" />
+                                    {item.file
+                                      ? item.file.name
+                                      : `Foto ${idx + 1}`}
+                                  </p>
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleRemoveImageItem(item.id)}
+                                  className="h-6 w-6 text-muted-foreground hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer shrink-0"
+                                  title="Hapus Foto"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -869,12 +1303,11 @@ export function CreateSPBDialog({
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-bold truncate flex items-center gap-1.5">
-                                {item.source === "WAREHOUSE" &&
-                                  item.materialCode && (
-                                    <span className="text-xs font-bold text-primary shrink-0">
-                                      {item.materialCode}
-                                    </span>
-                                  )}
+                                {item.materialCode && (
+                                  <span className="text-xs font-bold text-primary shrink-0">
+                                    {item.materialCode}
+                                  </span>
+                                )}
                                 <span>{item.materialName}</span>
                                 {item.typeMerk && (
                                   <span className="text-xs text-muted-foreground font-semibold">
@@ -920,25 +1353,34 @@ export function CreateSPBDialog({
 
                   {boqItems.length > 0 ? (
                     <div className="space-y-4">
-                      <Label className="text-sm font-bold text-muted-foreground flex items-center gap-2 px-2">
-                        Input Material Baru
-                      </Label>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-2">
+                        <Label className="text-sm font-bold text-muted-foreground flex items-center gap-2">
+                          Input Material Baru
+                        </Label>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsSmartImportOpen(true)}
+                          className="h-8.5 border-2 border-emerald-500/40 text-emerald-700 bg-emerald-50/50 hover:bg-emerald-100/60 font-semibold text-xs gap-1.5 transition-all cursor-pointer rounded-xl shrink-0"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                          Import Excel (BoQ Match)
+                        </Button>
+                      </div>
                       <div className="space-y-4">
                         {inputRows.map((row, index) => {
                           const available =
                             row.currentStock !== undefined
-                              ? row.currentStock - (row.reservedStock || 0)
+                              ? Math.max(
+                                  0,
+                              row.currentStock - (row.reservedStock || 0),
+                                )
                               : Infinity;
                           const isOverStock =
                             row.source === "WAREHOUSE" &&
                             parseFloat(row.qty || "0") > available;
-                          const key = row.materialId
-                            ? row.materialId
-                            : row.materialName.toLowerCase().trim();
-                          const isRowDuplicate = row.materialName
-                            ? duplicateMap.has(key) ||
-                              (inputRowOccurrences.get(key) || 0) > 1
-                            : false;
+                          const isRowDuplicate = false;
 
                           const boqItem = row.materialId
                             ? boqItems.find((b) => b.itemId === row.materialId)
@@ -967,9 +1409,9 @@ export function CreateSPBDialog({
                           return (
                             <div
                               key={row.id}
-                              className="p-5 rounded-2xl border-2 border-border/50 bg-background hover:border-primary/30 transition-all space-y-5 relative group"
+                              className="p-3.5 sm:p-5 rounded-2xl border-2 border-border/50 bg-background hover:border-primary/30 transition-all space-y-4 sm:space-y-5 relative group"
                             >
-                              <div className="absolute -left-3 top-6 w-7 h-7 rounded-full bg-background border-2 border-muted flex items-center justify-center text-[12px] font-black text-muted-foreground group-hover:border-primary group-hover:text-primary transition-colors shadow-sm">
+                              <div className="absolute -left-2 sm:-left-3 top-4 sm:top-6 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-background border-2 border-muted flex items-center justify-center text-[11px] sm:text-[12px] font-black text-muted-foreground group-hover:border-primary group-hover:text-primary transition-colors shadow-sm">
                                 {index + 1}
                               </div>
 
@@ -982,43 +1424,39 @@ export function CreateSPBDialog({
                                 <Trash2 className="w-4 h-4" />
                               </Button>
 
-                              <div className="grid grid-cols-[1.5fr_1fr_160px] gap-4 items-end ml-2 mr-6">
-                                {(boqItem ||
-                                  isRowDuplicate ||
-                                  isBoqFullyAllocated) && (
+                              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 sm:gap-4 items-end ml-1 sm:ml-2 mr-6">
+                                {boqItem && (
                                   <div className="col-span-full flex flex-col gap-1 pb-1">
-                                    {boqItem && (
-                                      <span className="text-[11px] text-muted-foreground font-semibold">
-                                        Batas BoQ: {boqLimit} {row.unit} (Sisa
-                                        BoQ:{" "}
-                                        <strong
-                                          className={cn(
-                                            boqRemaining === 0
-                                              ? "text-red-500"
-                                              : "text-primary",
-                                          )}
-                                        >
-                                          {boqRemaining} {row.unit}
-                                        </strong>
-                                        )
-                                      </span>
-                                    )}
-                                    {isRowDuplicate && (
-                                      <span className="text-[10px] font-bold text-red-500 flex items-center gap-1.5 animate-in fade-in">
-                                        <AlertTriangle className="w-3.5 h-3.5" />
-                                        Barang ini sudah dimasukkan ke SPB.
-                                      </span>
-                                    )}
-                                    {isBoqFullyAllocated && (
+                                    <span className="text-[11px] text-muted-foreground font-semibold">
+                                      Batas BoQ: {boqLimit} {row.unit} (Sisa
+                                      BoQ:{" "}
+                                      <strong
+                                        className={cn(
+                                          boqRemaining === 0
+                                            ? "text-red-500 font-bold"
+                                            : "text-primary font-bold",
+                                        )}
+                                      >
+                                        {boqRemaining} {row.unit}
+                                      </strong>
+                                      )
+                                    </span>
+                                    {boqRemaining <= 0 && (
                                       <span className="text-[10.5px] font-bold text-red-500 flex items-center gap-1.5 animate-in fade-in leading-relaxed">
                                         <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                                        Barang ini sudah semua diinput ke SPB
-                                        sesuai BoQ.
+                                        Sisa kuota BoQ untuk barang ini sudah habis.
                                       </span>
                                     )}
+                                    {boqRemaining > 0 &&
+                                      parseFloat(row.qty || "0") > boqRemaining && (
+                                        <span className="text-[10.5px] font-bold text-red-500 flex items-center gap-1.5 animate-in fade-in leading-relaxed">
+                                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                          Kuantitas permintaan ({row.qty} {row.unit}) melebihi sisa BoQ ({boqRemaining} {row.unit}).
+                                        </span>
+                                      )}
                                   </div>
                                 )}
-                                <div className="space-y-2 relative flex flex-col">
+                                <div className="col-span-12 sm:col-span-5 space-y-2 relative flex flex-col">
                                   <Label className="text-xs font-semibold text-muted-foreground">
                                     Nama Item / Material
                                   </Label>
@@ -1041,7 +1479,7 @@ export function CreateSPBDialog({
                                       <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50 text-muted-foreground" />
                                     </PopoverTrigger>
                                     <PopoverContent
-                                      className="w-[450px] p-0 rounded-xl border border-border shadow-xl bg-background"
+                                      className="w-155 max-w-[90vw] p-0 rounded-xl border border-border shadow-2xl bg-background"
                                       align="start"
                                     >
                                       <Command>
@@ -1049,15 +1487,15 @@ export function CreateSPBDialog({
                                           placeholder="Cari nama atau kode barang BoQ..."
                                           onValueChange={setSearchQuery}
                                         />
-                                        <CommandList className="max-h-[220px] overflow-y-auto">
+                                        <CommandList className="max-h-65 overflow-y-auto">
                                           <CommandEmpty className="p-3 text-center text-xs text-muted-foreground">
                                             Barang tidak ditemukan dalam BoQ
                                             Proyek.
                                           </CommandEmpty>
 
-                                          <CommandGroup heading="Daftar Barang BoQ Proyek">
-                                            {boqItems
-                                              .filter((boqItem) => {
+                                          {(() => {
+                                            const filteredBoqItems =
+                                              boqItems.filter((boqItem) => {
                                                 if (!searchQuery) return true;
                                                 const q =
                                                   searchQuery.toLowerCase();
@@ -1072,149 +1510,157 @@ export function CreateSPBDialog({
                                                     ?.toLowerCase()
                                                     .includes(q)
                                                 );
-                                              })
-                                              .map((boqItem) => {
-                                                const alreadyRequested =
-                                                  getAlreadyRequestedQty(
-                                                    boqItem.itemId,
-                                                  );
-                                                const pendingQty = pendingItems
-                                                  .filter(
-                                                    (p) =>
-                                                      p.materialId ===
-                                                      boqItem.itemId,
-                                                  )
-                                                  .reduce(
-                                                    (sum, p) =>
-                                                      sum +
-                                                      parseFloat(p.qty || "0"),
-                                                    0,
-                                                  );
-                                                const remaining =
-                                                  boqItem.qty -
-                                                  alreadyRequested -
-                                                  pendingQty;
-                                                const whItem =
-                                                  warehouseItems.find(
-                                                    (w) =>
-                                                      w.id === boqItem.itemId,
-                                                  );
-                                                const availableStock = whItem
-                                                  ? whItem.currentStock -
-                                                    (whItem.reservedStock || 0)
-                                                  : 0;
+                                              });
 
-                                                const isAlreadyAdded =
-                                                  pendingItems.some(
-                                                    (p) =>
-                                                      p.materialId ===
-                                                      boqItem.itemId,
-                                                  ) ||
-                                                  inputRows.some(
-                                                    (ir) =>
-                                                      ir.id !== row.id &&
-                                                      ir.materialId ===
+                                            return (
+                                              <CommandGroup
+                                                heading={`Daftar Barang BoQ Proyek (${filteredBoqItems.length} dari ${boqItems.length} Data)`}
+                                              >
+                                                {filteredBoqItems.map(
+                                                  (boqItem, itemIdx) => {
+                                                    const alreadyRequested =
+                                                      getAlreadyRequestedQty(
                                                         boqItem.itemId,
-                                                  ) ||
-                                                  remaining <= 0;
-
-                                                return (
-                                                  <CommandItem
-                                                    key={boqItem.id}
-                                                    value={`${boqItem.itemName} ${boqItem.itemCode} ${boqItem.itemTypeMerk || ""}`}
-                                                    onSelect={() => {
-                                                      if (isAlreadyAdded) {
-                                                        if (remaining <= 0) {
-                                                          toast.warning(
-                                                            `Kuota BoQ untuk barang "${boqItem.itemName}" sudah habis.`,
-                                                          );
-                                                        } else {
-                                                          toast.warning(
-                                                            `Barang "${boqItem.itemName}" sudah dimasukkan ke SPB.`,
-                                                          );
-                                                        }
-                                                        return;
-                                                      }
-                                                      updateRow(row.id, {
-                                                        materialId:
+                                                      );
+                                                    const pendingQty =
+                                                      pendingItems
+                                                        .filter(
+                                                          (p) =>
+                                                            p.materialId ===
+                                                            boqItem.itemId,
+                                                        )
+                                                        .reduce(
+                                                          (sum, p) =>
+                                                            sum +
+                                                            parseFloat(
+                                                              p.qty || "0",
+                                                            ),
+                                                          0,
+                                                        );
+                                                    const remaining =
+                                                      boqItem.qty -
+                                                      alreadyRequested -
+                                                      pendingQty;
+                                                    const whItem =
+                                                      warehouseItems.find(
+                                                        (w) =>
+                                                          w.id ===
                                                           boqItem.itemId,
-                                                        materialCode:
-                                                          boqItem.itemCode,
-                                                        materialName:
-                                                          boqItem.itemName,
-                                                        typeMerk:
-                                                          boqItem.itemTypeMerk ||
-                                                          "",
-                                                        unit: boqItem.unit,
-                                                        currentStock: whItem
-                                                          ? whItem.currentStock
-                                                          : undefined,
-                                                        reservedStock: whItem
-                                                          ? whItem.reservedStock ||
-                                                            0
-                                                          : undefined,
-                                                      });
-                                                      setOpenPopoverId(null);
-                                                      setSearchQuery("");
-                                                    }}
-                                                    className={cn(
-                                                      "flex flex-col items-start gap-1 p-2.5 cursor-pointer border-b border-border/10 last:border-0 hover:bg-muted/50 rounded-lg",
-                                                      isAlreadyAdded
-                                                        ? "opacity-60 bg-red-500/5 cursor-not-allowed"
-                                                        : "",
-                                                    )}
-                                                  >
-                                                    <div className="flex w-full items-center justify-between">
-                                                      <span
+                                                      );
+                                                    const availableStock =
+                                                      whItem
+                                                        ? Math.max(
+                                                            0,
+                                                            whItem.currentStock -
+                                                              (whItem.reservedStock ||
+                                                                0),
+                                                          )
+                                                        : 0;
+
+                                                    const isFullyAllocated = remaining <= 0;
+
+                                                    return (
+                                                      <CommandItem
+                                                        key={boqItem.id}
+                                                        value={`${boqItem.itemName} ${boqItem.itemCode} ${boqItem.itemTypeMerk || ""}`}
+                                                        onSelect={() => {
+                                                          if (isFullyAllocated) {
+                                                            toast.warning(
+                                                              `Kuota BoQ untuk barang "${boqItem.itemName}" sudah habis.`,
+                                                            );
+                                                            return;
+                                                          }
+                                                          updateRow(row.id, {
+                                                            materialId:
+                                                              boqItem.itemId,
+                                                            materialCode:
+                                                              boqItem.itemCode,
+                                                            materialName:
+                                                              boqItem.itemName,
+                                                            typeMerk:
+                                                              boqItem.itemTypeMerk ||
+                                                              "",
+                                                            unit: boqItem.unit,
+                                                            currentStock: whItem
+                                                              ? whItem.currentStock
+                                                              : undefined,
+                                                            reservedStock:
+                                                              whItem
+                                                                ? whItem.reservedStock ||
+                                                                  0
+                                                                : undefined,
+                                                          });
+                                                          setOpenPopoverId(
+                                                            null,
+                                                          );
+                                                          setSearchQuery("");
+                                                        }}
                                                         className={cn(
-                                                          "font-bold text-xs",
-                                                          isAlreadyAdded
-                                                            ? "text-red-500 line-through"
-                                                            : "text-foreground",
+                                                          "flex flex-col items-start gap-1 p-2.5 cursor-pointer border-b border-border/10 last:border-0 hover:bg-muted/50 rounded-lg",
+                                                          isFullyAllocated
+                                                            ? "opacity-60 bg-red-500/5 cursor-not-allowed"
+                                                            : "",
                                                         )}
                                                       >
-                                                        {boqItem.itemName}
-                                                      </span>
-                                                      {isAlreadyAdded ? (
-                                                        <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-100 uppercase">
-                                                          Sudah Diinput
+                                                        <div className="flex w-full items-center justify-between gap-3">
+                                                          <span
+                                                            className={cn(
+                                                              "font-bold text-xs flex items-center gap-1.5",
+                                                              isFullyAllocated
+                                                                ? "text-red-500 line-through"
+                                                                : "text-foreground",
+                                                            )}
+                                                          >
+                                                            <span className="text-muted-foreground text-[11px]">
+                                                              {itemIdx + 1}.
+                                                            </span>
+                                                            <span>
+                                                              {boqItem.itemName}
+                                                            </span>
+                                                          </span>
+                                                          {isFullyAllocated ? (
+                                                            <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-100 uppercase shrink-0">
+                                                              Kuota Habis
+                                                            </span>
+                                                          ) : (
+                                                            <span className="text-[10px] font-black text-primary uppercase shrink-0">
+                                                              BoQ: {boqItem.qty}{" "}
+                                                              {boqItem.unit}{" "}
+                                                              (Sisa: {remaining}{" "}
+                                                              {boqItem.unit})
+                                                            </span>
+                                                          )}
+                                                        </div>
+                                                        <span className="text-[10px] text-muted-foreground font-semibold flex w-full justify-between items-center pl-4">
+                                                          <span>
+                                                            Kode:{" "}
+                                                            <span className="text-foreground">
+                                                              {boqItem.itemCode}
+                                                            </span>
+                                                            {boqItem.itemTypeMerk &&
+                                                              ` • Tipe: ${boqItem.itemTypeMerk}`}
+                                                          </span>
+                                                          <span>
+                                                            Stok Gudang:{" "}
+                                                            <span className="text-foreground">
+                                                              {availableStock}{" "}
+                                                              {boqItem.unit}
+                                                            </span>
+                                                          </span>
                                                         </span>
-                                                      ) : (
-                                                        <span className="text-[10px] font-black text-primary uppercase">
-                                                          BoQ: {boqItem.qty}{" "}
-                                                          {boqItem.unit} (Sisa:{" "}
-                                                          {remaining}{" "}
-                                                          {boqItem.unit})
-                                                        </span>
-                                                      )}
-                                                    </div>
-                                                    <span className="text-[10px] text-muted-foreground font-semibold flex w-full justify-between items-center">
-                                                      <span>
-                                                        Kode:{" "}
-                                                        <span className="text-foreground">
-                                                          {boqItem.itemCode}
-                                                        </span>
-                                                        {boqItem.itemTypeMerk &&
-                                                          ` • Tipe: ${boqItem.itemTypeMerk}`}
-                                                      </span>
-                                                      <span>
-                                                        Stok Gudang:{" "}
-                                                        <span className="text-foreground">
-                                                          {availableStock}{" "}
-                                                          {boqItem.unit}
-                                                        </span>
-                                                      </span>
-                                                    </span>
-                                                  </CommandItem>
-                                                );
-                                              })}
-                                          </CommandGroup>
+                                                      </CommandItem>
+                                                    );
+                                                  },
+                                                )}
+                                              </CommandGroup>
+                                            );
+                                          })()}
                                         </CommandList>
                                       </Command>
                                     </PopoverContent>
                                   </Popover>
                                 </div>
-                                <div className="space-y-2">
+                                <div className="col-span-12 sm:col-span-4 space-y-2">
                                   <Label className="text-xs font-semibold text-muted-foreground">
                                     Tipe / Merk
                                   </Label>
@@ -1229,7 +1675,7 @@ export function CreateSPBDialog({
                                     className="h-11 bg-muted/20 border-2 focus-visible:ring-primary/30"
                                   />
                                 </div>
-                                <div className="space-y-2">
+                                <div className="col-span-12 sm:col-span-3 space-y-2">
                                   <div className="flex justify-between items-center">
                                     <Label className="text-xs font-semibold text-muted-foreground">
                                       Qty Permintaan
@@ -1267,7 +1713,7 @@ export function CreateSPBDialog({
                                         })
                                       }
                                       className={cn(
-                                        "h-11 w-[75px] rounded-r-xl rounded-l-none border-2 border-l-0 border-border/50 bg-muted/30 text-xs font-bold uppercase cursor-pointer px-2 focus-visible:outline-hidden focus-visible:border-primary/50 disabled:opacity-70 disabled:cursor-not-allowed disabled:bg-muted",
+                                        "h-11 w-18.75 rounded-r-xl rounded-l-none border-2 border-l-0 border-border/50 bg-muted/30 text-xs font-bold uppercase cursor-pointer px-2 focus-visible:outline-hidden focus-visible:border-primary/50 disabled:opacity-70 disabled:cursor-not-allowed disabled:bg-muted",
                                         isOverStock
                                           ? "border-red-500 border-l-0! focus-visible:border-red-500"
                                           : "",
@@ -1327,7 +1773,7 @@ export function CreateSPBDialog({
                                 </div>
                               </div>
 
-                              <div className="grid grid-cols-[1fr_200px] gap-6 pt-3 border-t border-border/10 ml-2 mr-6 items-start">
+                              <div className="grid grid-cols-1 sm:grid-cols-[1fr_200px] gap-4 sm:gap-6 pt-3 border-t border-border/10 ml-0 sm:ml-2 mr-0 sm:mr-6 items-start">
                                 <div className="space-y-2">
                                   <Label className="text-xs font-semibold text-muted-foreground">
                                     Catatan
@@ -1340,7 +1786,7 @@ export function CreateSPBDialog({
                                         note: e.target.value,
                                       })
                                     }
-                                    className="min-h-[80px] text-xs bg-muted/5 border-2 focus-visible:ring-primary/30 resize-none"
+                                    className="min-h-20 text-xs bg-muted/5 border-2 focus-visible:ring-primary/30 resize-none"
                                   />
                                 </div>
                                 <div className="space-y-2">
@@ -1420,18 +1866,17 @@ export function CreateSPBDialog({
                           );
                         })}
                       </div>
-                      <div className="grid grid-cols-2 gap-4 mt-4 px-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-4 mt-4 px-0 sm:px-2">
                         <Button
+                          type="button"
                           variant="outline"
-                          className="h-12 border-dashed border-2 text-muted-foreground hover:text-primary hover:border-primary/50 hover:bg-primary/5 cursor-pointer rounded-xl font-semibold text-xs"
+                          className="h-12 border-dashed border-2 border-primary/40 text-primary hover:bg-primary/5 font-semibold text-xs transition-all cursor-pointer rounded-xl"
                           onClick={addRow}
                         >
                           <Plus className="w-4 h-4 mr-2" /> Tambah Baris
                         </Button>
                         <Button
-                          disabled={
-                            hasAnyInputRowDuplicate || hasAnyZeroBoqRemaining
-                          }
+                          disabled={hasAnyZeroBoqRemaining}
                           className="h-12 bg-primary text-white hover:bg-primary/90 font-semibold text-xs gap-2 cursor-pointer transition-all rounded-xl shadow-lg shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
                           onClick={handleAddToQueue}
                         >
@@ -1454,18 +1899,18 @@ export function CreateSPBDialog({
                   )}
                 </div>
               </div>
-              <DialogFooter className="p-8 bg-muted/20 border-t border-border/50 shrink-0">
+              <DialogFooter className="p-5 sm:p-6 bg-muted/30 border-t border-border/50 shrink-0 flex items-center justify-end gap-3">
                 <Button
                   variant="ghost"
                   onClick={() => onOpenChange(false)}
-                  className="cursor-pointer font-semibold text-muted-foreground h-11 px-6"
+                  className="cursor-pointer font-semibold text-muted-foreground h-10 text-xs px-5 rounded-xl hover:bg-muted"
                 >
                   Batal
                 </Button>
                 <Button
                   onClick={handleSubmit}
                   disabled={isSubmitting || pendingItems.length === 0}
-                  className="cursor-pointer font-semibold bg-primary hover:bg-primary/90 min-w-[280px] h-11 text-white shadow-xl shadow-primary/30 tracking-tight"
+                  className="cursor-pointer font-bold bg-primary hover:bg-primary/90 h-10 text-xs px-5 text-white shadow-md shadow-primary/20 rounded-xl tracking-tight shrink-0"
                 >
                   {isSubmitting ? (
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
@@ -1483,7 +1928,7 @@ export function CreateSPBDialog({
               value="boq"
               className="flex-1 overflow-hidden flex flex-col m-0 p-0 border-0 outline-none"
             >
-              <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4">
                 {isLoadingBoq ? (
                   <div className="h-48 w-full flex flex-col items-center justify-center text-muted-foreground gap-2">
                     <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -1512,10 +1957,10 @@ export function CreateSPBDialog({
                       return (
                         <div
                           key={boq.id}
-                          className="border border-border/80 rounded-2xl bg-card overflow-hidden shadow-xs p-5 flex items-center justify-between"
+                          className="border border-border/80 rounded-2xl bg-card overflow-hidden shadow-xs p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                         >
-                          <div className="flex items-center gap-4 min-w-0">
-                            <div className="h-12 w-12 rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-600 border border-orange-500/20 shrink-0">
+                          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                            <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-600 border border-orange-500/20 shrink-0">
                               <FileText className="w-6 h-6" />
                             </div>
                             <div className="space-y-1 min-w-0">
@@ -1542,7 +1987,7 @@ export function CreateSPBDialog({
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-2 shrink-0 justify-end w-full sm:w-auto">
                             <Button
                               variant="outline"
                               size="sm"
@@ -1579,17 +2024,23 @@ export function CreateSPBDialog({
               value="history"
               className="flex-1 overflow-hidden flex flex-col m-0 p-0 border-0 outline-none"
             >
-              <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4">
                 <div className="space-y-6">
                   {spbHistory.length > 0 ? (
-                    spbHistory.map((spb) => (
+                    [...spbHistory]
+                      .sort(
+                        (a, b) =>
+                          new Date(b.createdAt || b.date).getTime() -
+                          new Date(a.createdAt || a.date).getTime(),
+                      )
+                      .map((spb) => (
                       <div
                         key={spb.id}
-                        className="p-5 rounded-2xl border border-border/50 bg-background hover:border-primary/20 hover:shadow-sm transition-all group space-y-4"
+                        className="p-3.5 sm:p-5 rounded-2xl border border-border/50 bg-background hover:border-primary/20 hover:shadow-sm transition-all group space-y-3 sm:space-y-4"
                       >
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                          <div className="flex items-start gap-4 flex-1">
-                            <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary border border-primary/20 shrink-0">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
+                          <div className="flex items-start gap-3 sm:gap-4 flex-1">
+                            <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl bg-primary/10 flex items-center justify-center text-primary border border-primary/20 shrink-0">
                               <FileText className="w-6 h-6" />
                             </div>
                             <div className="flex-1 min-w-0 space-y-2">
@@ -1611,18 +2062,37 @@ export function CreateSPBDialog({
                                 {spb.status === "REJECTED" &&
                                   spb.rejectedReason && (
                                     <span
-                                      className="text-[10px] text-red-500 font-semibold italic max-w-[150px] truncate shrink-0"
+                                      className="text-[10px] text-red-500 font-semibold italic max-w-37.5 truncate shrink-0"
                                       title={spb.rejectedReason}
                                     >
                                       Alasan: {spb.rejectedReason}
                                     </span>
                                   )}
                                 {(() => {
-                                  const processed = spb.items.filter(
-                                    (it: any) =>
-                                      it.status === "FULFILLED" ||
-                                      it.status === "RECEIVED",
-                                  ).length;
+                                  const isCompletedSpb = [
+                                    "COMPLETED",
+                                    "ISSUED",
+                                    "FULFILLED",
+                                  ].includes((spb.status || "").toUpperCase());
+                                  const processed = isCompletedSpb
+                                    ? spb.items.length
+                                    : spb.items.filter((it: any) => {
+                                        const st = (
+                                          it.status || ""
+                                        ).toUpperCase();
+                                        return (
+                                          st === "FULFILLED" ||
+                                          st === "RECEIVED" ||
+                                          st === "ISSUED" ||
+                                          st === "COMPLETED" ||
+                                          st === "PARTIALLY_ISSUED" ||
+                                          st === "PARTIALLY ISSUED" ||
+                                          (it.issuedQty &&
+                                            Number(it.issuedQty) > 0) ||
+                                          (it.fulfilledQty &&
+                                            Number(it.fulfilledQty) > 0)
+                                        );
+                                      }).length;
                                   const total = spb.items.length;
                                   const isAll = processed === total;
                                   const isNone = processed === 0;
@@ -1643,50 +2113,141 @@ export function CreateSPBDialog({
                                   );
                                 })()}
                               </div>
-                              <p className="text-[11px] text-muted-foreground font-semibold">
-                                Diterbitkan {spb.date}
-                              </p>
+                              <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground font-semibold">
+                                <span>Diterbitkan {spb.date}</span>
+                                {spb.deadlineDate && (
+                                  <span className="text-red-600 font-bold">
+                                    • Tenggat:{" "}
+                                    {formatJakartaDate(
+                                      spb.deadlineDate,
+                                      "date",
+                                    )}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 shrink-0 md:justify-end">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setSelectedHistoryDetailSpb(spb)}
-                              className="h-9 px-3 text-xs font-semibold gap-1.5 border-muted-foreground/20 hover:border-orange-500 hover:bg-orange-500 hover:text-white active:scale-95 transition-all cursor-pointer rounded-xl"
-                            >
-                              <Eye className="w-3.5 h-3.5" /> Detail
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setPreviewSPB(spb)}
-                              className="h-9 px-3 text-xs font-semibold gap-1.5 border-muted-foreground/20 hover:border-primary hover:bg-primary hover:text-white active:scale-95 transition-all cursor-pointer rounded-xl"
-                            >
-                              <Download className="w-3.5 h-3.5" /> Cetak
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleEditSPB(spb)}
-                              className="h-9 px-3 text-xs font-semibold gap-1.5 border-muted-foreground/20 hover:border-blue-500 hover:bg-blue-500 hover:text-white active:scale-95 transition-all cursor-pointer rounded-xl"
-                            >
-                              <Pencil className="w-3.5 h-3.5" /> Edit
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setDeleteConfirmSpb(spb)}
-                              className="h-9 px-3 text-xs font-semibold gap-1.5 border-muted-foreground/20 hover:border-red-500 hover:bg-red-500 hover:text-white active:scale-95 transition-all cursor-pointer text-red-500 rounded-xl"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" /> Hapus
-                            </Button>
+                          <div className="flex flex-col items-start sm:items-end gap-1 shrink-0 w-full sm:w-auto">
+                            {/* Top Row: Lihat Foto, Detail, Cetak */}
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {spb.imageUrl &&
+                                (() => {
+                                  const parsedUrls = parseSPBImageUrls(
+                                    spb.imageUrl,
+                                  );
+                                  const count = parsedUrls.length;
+                                  return (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={async () => {
+                                        const res = await getSPBImageUrls(
+                                          spb.imageUrl,
+                                        );
+                                        if (
+                                          res.success &&
+                                          res.urls &&
+                                          res.urls.length > 0
+                                        ) {
+                                          setPreviewModalImages(res.urls);
+                                          setActiveImageIndex(0);
+                                        } else {
+                                          toast.error(
+                                            res.error ||
+                                              "Gagal memuat foto lampiran",
+                                          );
+                                        }
+                                      }}
+                                      className="h-6 text-[10px] font-bold px-2 gap-1 border-primary/30 text-primary hover:bg-primary/10 rounded-md shadow-none cursor-pointer"
+                                    >
+                                      <FileImage className="w-3 h-3" /> Lihat
+                                      Foto {count > 1 ? `(${count})` : ""}
+                                    </Button>
+                                  );
+                                })()}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setSelectedHistoryDetailSpb(spb)}
+                                className="h-6 text-[10px] font-bold px-2 gap-1 border-border/80 hover:bg-orange-500/10 hover:text-orange-600 rounded-md shadow-none cursor-pointer"
+                              >
+                                <Eye className="w-3 h-3" /> Detail
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPreviewSPB(spb)}
+                                className="h-6 text-[10px] font-bold px-2 gap-1 border-border/80 hover:bg-primary/10 hover:text-primary rounded-md shadow-none cursor-pointer"
+                              >
+                                <Printer className="w-3 h-3" /> Cetak
+                              </Button>
+                            </div>
+
+                            {/* Bottom Row: Edit, Hapus, (Ajukan Kembali) */}
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {(spb.status === "REJECTED" ||
+                                spb.items?.some(
+                                  (it: any) =>
+                                    (it.status || "").toUpperCase() ===
+                                      "REJECTED" ||
+                                    (it.status || "").toUpperCase() ===
+                                      "DITOLAK",
+                                )) && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={async () => {
+                                    try {
+                                      const res = await resubmitSpb(
+                                        spb.dbId || spb.id,
+                                      );
+                                      if (res.success) {
+                                        toast.success(
+                                          "SPB berhasil diajukan kembali",
+                                        );
+                                        fetchSPBHistory();
+                                        router.refresh();
+                                      } else {
+                                        toast.error(
+                                          res.error ||
+                                            "Gagal mengajukan kembali SPB",
+                                        );
+                                      }
+                                    } catch (err) {
+                                      toast.error(
+                                        "Terjadi kesalahan saat mengajukan kembali",
+                                      );
+                                    }
+                                  }}
+                                  className="h-6 text-[10px] font-bold px-2 gap-1 border-amber-500/30 text-amber-700 hover:bg-amber-500/10 rounded-md shadow-none cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3 h-3" /> Ajukan
+                                  Kembali
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleEditSPB(spb)}
+                                className="h-6 text-[10px] font-bold px-2 gap-1 border-border/80 hover:bg-blue-500/10 hover:text-blue-600 rounded-md shadow-none cursor-pointer"
+                              >
+                                <Pencil className="w-3 h-3" /> Edit
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setDeleteConfirmSpb(spb)}
+                                className="h-6 text-[10px] font-bold px-2 gap-1 border-border/80 text-red-500 hover:bg-red-500/10 rounded-md shadow-none cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" /> Hapus
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="h-[200px] flex flex-col items-center justify-center text-muted-foreground gap-3">
+                    <div className="h-50 flex flex-col items-center justify-center text-muted-foreground gap-3">
                       <FileText className="w-12 h-12 opacity-20" />
                       <p className="text-xs font-bold">
                         Belum ada riwayat SPB untuk project ini.
@@ -1742,7 +2303,7 @@ export function CreateSPBDialog({
         open={!!deleteConfirmSpb}
         onOpenChange={(open) => !open && setDeleteConfirmSpb(null)}
       >
-        <DialogContent className="max-w-[450px]! p-6 bg-background rounded-2xl border shadow-xl flex flex-col gap-4">
+        <DialogContent className="max-w-112.5! p-6 bg-background rounded-2xl border shadow-xl flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-red-600 flex items-center gap-2">
               <Trash2 className="w-5 h-5" />
@@ -1789,8 +2350,8 @@ export function CreateSPBDialog({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[900px]! max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border shadow-2xl">
-          <DialogHeader className="p-6 pb-4 shrink-0 border-b border-border/50">
+        <DialogContent className="w-[95vw] sm:w-full sm:max-w-225! max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border shadow-2xl">
+          <DialogHeader className="p-4 sm:p-6 pb-3 sm:pb-4 shrink-0 border-b border-border/50">
             <div className="flex items-center justify-between w-full pr-6">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-600 border border-orange-500/20 shrink-0">
@@ -1801,9 +2362,62 @@ export function CreateSPBDialog({
                     {selectedHistoryDetailSpb?.spbNumber ||
                       selectedHistoryDetailSpb?.id}
                   </DialogTitle>
-                  <DialogDescription className="text-xs text-muted-foreground font-medium mt-0.5">
-                    Tanggal Dibuat: {selectedHistoryDetailSpb?.date}
-                  </DialogDescription>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <DialogDescription className="text-xs text-muted-foreground font-medium">
+                      Tanggal Dibuat: {selectedHistoryDetailSpb?.date}
+                    </DialogDescription>
+                    {selectedHistoryDetailSpb?.deadlineDate && (
+                      <span className="text-[11px] text-red-500 font-bold">
+                        • Tenggat:{" "}
+                        {formatJakartaDate(
+                          selectedHistoryDetailSpb.deadlineDate,
+                          "date",
+                        )}
+                      </span>
+                    )}
+                    {selectedHistoryDetailSpb?.imageUrl &&
+                      (() => {
+                        const parsedUrls = parseSPBImageUrls(
+                          selectedHistoryDetailSpb.imageUrl,
+                        );
+                        const count = parsedUrls.length;
+                        return (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              const res = await getSPBImageUrls(
+                                selectedHistoryDetailSpb.imageUrl,
+                              );
+                              if (
+                                res.success &&
+                                res.urls &&
+                                res.urls.length > 0
+                              ) {
+                                setPreviewModalImages(res.urls);
+                                setActiveImageIndex(0);
+                              } else {
+                                toast.error(
+                                  res.error || "Gagal memuat foto lampiran",
+                                );
+                              }
+                            }}
+                            className="h-7 text-xs font-semibold px-2.5 gap-1 border-primary/30 text-primary hover:bg-primary/10 rounded-lg shadow-none cursor-pointer"
+                          >
+                            <FileImage className="w-3 h-3" /> Lihat Foto{" "}
+                            {count > 1 ? `(${count})` : ""}
+                          </Button>
+                        );
+                      })()}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPreviewSPB(selectedHistoryDetailSpb)}
+                      className="h-7 text-xs font-semibold px-2.5 gap-1 border-primary/30 text-primary hover:bg-primary hover:text-white rounded-lg shadow-none cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> Cetak PDF
+                    </Button>
+                  </div>
                   {selectedHistoryDetailSpb?.status === "REJECTED" &&
                     selectedHistoryDetailSpb.rejectedReason && (
                       <div className="text-xs text-red-500 font-semibold mt-1">
@@ -1856,7 +2470,7 @@ export function CreateSPBDialog({
                 <thead>
                   <tr className="bg-muted/30 text-xs font-semibold text-muted-foreground border-b border-border/30">
                     <th className="px-5 py-3">No</th>
-                    <th className="px-5 py-3 w-[120px]">Kode Barang</th>
+                    <th className="px-5 py-3 w-30">Kode Barang</th>
                     <th className="px-5 py-3">Material</th>
                     <th className="px-5 py-3 text-center">Qty</th>
                     <th className="px-5 py-3 text-center">Status</th>
@@ -1922,21 +2536,83 @@ export function CreateSPBDialog({
                                   <span className="italic">{it.note}</span>
                                 </p>
                               )}
+                              <SPBSubstitutionCard
+                                item={it}
+                                onUpdated={fetchSPBHistory}
+                              />
                             </div>
                           </td>
                           <td className="px-5 py-3 text-center font-bold text-primary">
                             {it.qty} {it.unit}
                           </td>
                           <td className="px-5 py-3 text-center">
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "text-[10px] font-semibold px-2.5 py-0.5 rounded-full border",
-                                className,
+                            <div className="flex flex-col items-center gap-1">
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-[10px] font-semibold px-2.5 py-0.5 rounded-full border",
+                                  className,
+                                )}
+                              >
+                                {label}
+                              </Badge>
+                              {((it.status || "").toUpperCase() ===
+                                "REJECTED" ||
+                                (it.status || "").toUpperCase() ===
+                                  "DITOLAK") && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={async () => {
+                                    try {
+                                      const res = await updateSPBItemStatus(
+                                        it.id,
+                                        "PENDING",
+                                      );
+                                      if (res.success) {
+                                        toast.success(
+                                          `Barang ${it.name} berhasil diajukan kembali`,
+                                        );
+                                        fetchSPBHistory();
+                                        setSelectedHistoryDetailSpb(
+                                          (prev: any) =>
+                                            prev
+                                              ? {
+                                                  ...prev,
+                                                  status:
+                                                    prev.status === "REJECTED"
+                                                      ? "PENDING_APPROVAL"
+                                                      : prev.status,
+                                                  items: prev.items.map(
+                                                    (item: any) =>
+                                                      item.id === it.id
+                                                        ? {
+                                                            ...item,
+                                                            status: "PENDING",
+                                                          }
+                                                        : item,
+                                                  ),
+                                                }
+                                              : null,
+                                        );
+                                        router.refresh();
+                                      } else {
+                                        toast.error(
+                                          res.error ||
+                                            "Gagal mengajukan kembali barang",
+                                        );
+                                      }
+                                    } catch (err) {
+                                      toast.error("Terjadi kesalahan");
+                                    }
+                                  }}
+                                  className="h-6 px-2 text-[10px] font-bold text-amber-700 border-amber-300 hover:bg-amber-500 hover:text-white rounded-lg cursor-pointer flex items-center gap-1 mt-0.5"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  Ajukan Kembali
+                                </Button>
                               )}
-                            >
-                              {label}
-                            </Badge>
+                            </div>
                           </td>
                           <td className="px-5 py-3 text-right">
                             <Badge
@@ -1978,7 +2654,7 @@ export function CreateSPBDialog({
         open={!!selectedBoqItemDetail}
         onOpenChange={(open) => !open && setSelectedBoqItemDetail(null)}
       >
-        <DialogContent className="sm:max-w-[450px] p-6 rounded-2xl bg-background border border-border shadow-xl">
+        <DialogContent className="sm:max-w-112.5 p-6 rounded-2xl bg-background border border-border shadow-xl">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
               <FileText className="w-5 h-5 text-primary" />
@@ -2075,7 +2751,7 @@ export function CreateSPBDialog({
 
       {/* Detailed Bill of Quantities List Modal */}
       <Dialog open={isBoqDetailOpen} onOpenChange={setIsBoqDetailOpen}>
-        <DialogContent className="max-w-4xl! max-h-[85vh] flex flex-col p-6 rounded-3xl bg-background border border-border shadow-2xl">
+        <DialogContent className="w-[95vw] sm:w-full max-w-4xl! max-h-[90vh] flex flex-col p-4 sm:p-6 rounded-2xl sm:rounded-3xl bg-background border border-border shadow-2xl">
           <DialogHeader className="flex-none border-b border-border/10 pb-4 mb-2">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-xl bg-rose-500/10 flex items-center justify-center text-orange-600 border border-rose-500/20 shrink-0">
@@ -2282,6 +2958,96 @@ export function CreateSPBDialog({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* IMAGE PREVIEW DIALOG */}
+      <Dialog
+        open={previewModalImages.length > 0}
+        onOpenChange={(open) => !open && setPreviewModalImages([])}
+      >
+        <DialogContent className="w-[95vw] sm:max-w-3xl rounded-2xl p-4 sm:p-6 flex flex-col items-center">
+          <DialogHeader className="w-full flex flex-row items-center justify-between">
+            <DialogTitle className="text-sm sm:text-base font-bold text-primary flex items-center gap-2">
+              <FileImage className="w-5 h-5 text-primary" /> Lampiran Foto SPB{" "}
+              {previewModalImages.length > 1
+                ? `(${activeImageIndex + 1}/${previewModalImages.length})`
+                : ""}
+            </DialogTitle>
+          </DialogHeader>
+          {previewModalImages.length > 0 && (
+            <div className="w-full flex flex-col items-center my-2 space-y-3">
+              <div className="w-full max-h-[65vh] flex items-center justify-center overflow-hidden rounded-xl border border-border/50 bg-black/5 p-2 relative group">
+                <img
+                  src={previewModalImages[activeImageIndex]}
+                  alt={`Lampiran SPB ${activeImageIndex + 1}`}
+                  className="max-w-full max-h-[60vh] object-contain rounded-lg shadow-md"
+                />
+
+                {previewModalImages.length > 1 && (
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      onClick={() =>
+                        setActiveImageIndex((prev) =>
+                          prev > 0 ? prev - 1 : previewModalImages.length - 1,
+                        )
+                      }
+                      className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full opacity-80 hover:opacity-100 shadow-md h-9 w-9 cursor-pointer"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </Button>
+
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      onClick={() =>
+                        setActiveImageIndex((prev) =>
+                          prev < previewModalImages.length - 1 ? prev + 1 : 0,
+                        )
+                      }
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full opacity-80 hover:opacity-100 shadow-md h-9 w-9 cursor-pointer"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              {/* Thumbnail Selector */}
+              {previewModalImages.length > 1 && (
+                <div className="flex items-center gap-2 max-w-full overflow-x-auto p-1">
+                  {previewModalImages.map((url, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setActiveImageIndex(idx)}
+                      className={`w-12 h-12 rounded-lg overflow-hidden border-2 transition-all cursor-pointer shrink-0 ${
+                        activeImageIndex === idx
+                          ? "border-primary ring-2 ring-primary/30"
+                          : "border-transparent opacity-60 hover:opacity-100"
+                      }`}
+                    >
+                      <img
+                        src={url}
+                        alt={`Thumb ${idx + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal Smart Import Excel SPB (BoQ Match) */}
+      <SPBSmartImportDialog
+        open={isSmartImportOpen}
+        onOpenChange={setIsSmartImportOpen}
+        project={project}
+        boqItems={boqItems}
+        onConfirmImport={handleConfirmSmartImport}
+      />
     </>
   );
 }

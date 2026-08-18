@@ -6,12 +6,7 @@ import { authConfig } from "./auth.config";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 
-export const { 
-  handlers: { GET, POST }, 
-  auth, 
-  signIn, 
-  signOut 
-} = NextAuth({
+export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma) as any,
   session: { strategy: "jwt", maxAge: 8 * 60 * 60 },
   ...authConfig,
@@ -46,6 +41,8 @@ export const {
     }),
   ],
 });
+
+export const { GET, POST } = handlers;
 
 // Type definitions for NextAuth
 declare module "next-auth" {

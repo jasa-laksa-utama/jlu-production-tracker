@@ -11,7 +11,9 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { formatJakartaDate } from "@/lib/date-utils";
 import {
   MoreHorizontal,
   PenTool,
@@ -34,7 +36,16 @@ import {
   Trash2,
   History,
   AlertTriangle,
+  MessageSquare,
+  RefreshCw,
+  PauseCircle,
+  Settings,
+  FileCog,
+  Scale,
+  Edit3,
 } from "lucide-react";
+import { updateProjectEstimatedTonnage } from "@/app/actions/project-tonnage";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -74,6 +85,12 @@ import { DocumentManagerDialog } from "@/components/document-manager-dialog";
 import { ProjectDetailDialog } from "@/components/project-detail-dialog";
 import { ProjectHistoryDialog } from "@/components/project-history-dialog";
 import { BoQManagerDialog } from "@/components/trackers/boq-manager-dialog";
+import { calculateEngineeringProgress } from "@/lib/engineering-progress";
+import { SPBSubstitutionCard } from "@/components/trackers/spb-substitution-card";
+import {
+  DRManagerDialog,
+  getProjectDRs,
+} from "@/components/trackers/dr-manager-dialog";
 
 const ENGINEERING_STATUSES = [
   {
@@ -137,7 +154,7 @@ const getProjectStatusLabel = (status: string) => {
     case "PENDING":
       return "Pending";
     case "WAITING_INVENTORY":
-      return "Waiting Inventory";
+      return "";
     case "IN_PROGRESS":
     case "ON_PROGRESS":
       return "In Progress";
@@ -188,9 +205,11 @@ const formatDivision = (division?: string) => {
 export function EngineeringTable({
   projects,
   meta,
+  pendingSubstitutions = [],
 }: {
   projects: any[];
   meta?: { totalPages: number; totalCount: number; currentPage: number };
+  pendingSubstitutions?: any[];
 }) {
   const [isPending, startTransition] = useTransition();
   const [viewDetailProject, setViewDetailProject] = useState<any | null>(null);
@@ -201,12 +220,39 @@ export function EngineeringTable({
   } | null>(null);
   const [docHubProject, setDocHubProject] = useState<any | null>(null);
   const [historyProject, setHistoryProject] = useState<any | null>(null);
+  const [ppicNotesProject, setPpicNotesProject] = useState<any | null>(null);
   const [resolveRevisionProject, setResolveRevisionProject] = useState<
     any | null
   >(null);
   const [resolveNotes, setResolveNotes] = useState("");
   const [isResolving, startResolveTransition] = useTransition();
   const [boqManagerProject, setBoqManagerProject] = useState<any | null>(null);
+  const [drManagerProject, setDrManagerProject] = useState<any | null>(null);
+  const [editTonnageProject, setEditTonnageProject] = useState<any | null>(
+    null,
+  );
+  const [newTonnageInput, setNewTonnageInput] = useState<string>("");
+  const [isUpdatingTonnage, setIsUpdatingTonnage] = useState(false);
+
+  const handleSaveTonnage = async () => {
+    if (!editTonnageProject) return;
+    setIsUpdatingTonnage(true);
+    const toastId = toast.loading("Memperbarui Estimasi Tonase Proyek...");
+    const val = Number(newTonnageInput) || 0;
+    const res = await updateProjectEstimatedTonnage(editTonnageProject.id, val);
+    setIsUpdatingTonnage(false);
+    if (res.success) {
+      toast.success(res.message, { id: toastId });
+      editTonnageProject.estimatedTonnage = val;
+      if (editTonnageProject.lead) {
+        editTonnageProject.lead.estimatedTonnage = val;
+      }
+      setEditTonnageProject(null);
+      router.refresh();
+    } else {
+      toast.error(res.error || "Gagal memperbarui tonase", { id: toastId });
+    }
+  };
 
   const router = useRouter();
   const pathname = usePathname();
@@ -223,6 +269,38 @@ export function EngineeringTable({
 
   // For controlled search input
   const [searchInput, setSearchInput] = useState(currentSearch);
+
+  // Substitution tab search & pagination state
+  const [subSearchQuery, setSubSearchQuery] = useState("");
+  const [subCurrentPage, setSubCurrentPage] = useState(1);
+  const subPageSize = 10;
+
+  const filteredSubstitutions = pendingSubstitutions.filter((item: any) => {
+    const q = subSearchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const spbNum = (item.spb?.spbNumber || "").toLowerCase();
+    const projName = (item.spb?.project?.projectName || "").toLowerCase();
+    const custName = (item.spb?.project?.customer?.name || "").toLowerCase();
+    const compName = (item.spb?.project?.customer?.company || "").toLowerCase();
+    const origName = (item.originalName || item.name || "").toLowerCase();
+    const subName = (item.substitutedName || "").toLowerCase();
+
+    return (
+      spbNum.includes(q) ||
+      projName.includes(q) ||
+      custName.includes(q) ||
+      compName.includes(q) ||
+      origName.includes(q) ||
+      subName.includes(q)
+    );
+  });
+
+  const totalSubItems = filteredSubstitutions.length;
+  const totalSubPages = Math.ceil(totalSubItems / subPageSize) || 1;
+  const paginatedSubstitutions = filteredSubstitutions.slice(
+    (subCurrentPage - 1) * subPageSize,
+    subCurrentPage * subPageSize,
+  );
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: currentStart ? new Date(currentStart) : undefined,
@@ -362,9 +440,7 @@ export function EngineeringTable({
             <PopoverTrigger className="h-9 px-3 gap-2 inline-flex items-center justify-center rounded-md border text-sm font-medium hover:bg-accent hover:text-accent-foreground cursor-pointer outline-none transition-all active:scale-95 border-dashed">
               <Filter className="w-4 h-4" />
               Filter
-              {(currentStatus !== "ALL" ||
-                currentStart ||
-                currentSort !== "desc") && (
+              {(currentStart || currentSort !== "desc") && (
                 <Badge
                   variant="secondary"
                   className="ml-1 px-1 h-5 min-w-5 justify-center rounded-full bg-primary text-primary-foreground"
@@ -374,33 +450,6 @@ export function EngineeringTable({
               )}
             </PopoverTrigger>
             <PopoverContent className="w-80 p-4 space-y-4" align="start">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-muted-foreground">
-                  Status
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant={currentStatus === "ALL" ? "default" : "outline"}
-                    size="sm"
-                    className="h-8 text-xs px-2 cursor-pointer"
-                    onClick={() => updateQuery({ status: null })}
-                  >
-                    All
-                  </Button>
-                  {ENGINEERING_STATUSES.map((s) => (
-                    <Button
-                      key={s.id}
-                      variant={currentStatus === s.id ? "default" : "outline"}
-                      size="sm"
-                      className="h-8 text-xs px-2 cursor-pointer"
-                      onClick={() => updateQuery({ status: s.id })}
-                    >
-                      {s.label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-muted-foreground">
                   Date Range
@@ -446,7 +495,7 @@ export function EngineeringTable({
                   setSearchInput("");
                   setDateRange(undefined);
                   updateQuery({
-                    status: "ALL",
+                    status: null,
                     sort: "desc",
                     search: "",
                     start: null,
@@ -518,24 +567,23 @@ export function EngineeringTable({
         <Table>
           <TableHeader className="bg-muted/20 border-b">
             <TableRow className="border-border hover:bg-transparent text-sm font-bold">
-              <TableHead className="w-[50px] text-center">No.</TableHead>
-              <TableHead className="min-w-[200px]">
-                Project & Customer
+              <TableHead className="w-12 text-center">No.</TableHead>
+              <TableHead className="min-w-50">Project & Customer</TableHead>
+              <TableHead className="w-36">Start Date</TableHead>
+              <TableHead className="w-36">Deadline</TableHead>
+              <TableHead className="min-w-44">Engineering Progress</TableHead>
+              <TableHead className="min-w-44">Production Status</TableHead>
+              <TableHead className="text-center min-w-44">
+                Engineering Document
               </TableHead>
-              <TableHead>Entry Date</TableHead>
-              <TableHead>Running</TableHead>
-              <TableHead>Deadline</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Project Status</TableHead>
-              <TableHead className="text-center">Docs</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-right w-20">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {projects.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={9}
+                  colSpan={8}
                   className="text-center h-48 text-muted-foreground"
                 >
                   <div className="flex flex-col items-center gap-2 opacity-30">
@@ -546,9 +594,63 @@ export function EngineeringTable({
               </TableRow>
             ) : (
               projects.map((project, index) => {
-                const entryDate = project.createdAt;
-                const exitDate = project.engCompletedAt;
-                const displayStatus = project.ppicStatus === "REVIEW" ? "REVIEW" : project.engStatus;
+                const dealDate =
+                  project.dealAt || project.startDate || project.createdAt;
+                const daysSinceDeal = dealDate
+                  ? differenceInDays(new Date(), new Date(dealDate))
+                  : 0;
+
+                const engCalc = calculateEngineeringProgress(project);
+
+                const projDocs = [
+                  ...(project?.documents || []),
+                  ...(project?.lead?.documents || []),
+                ];
+                const docsMap = new Map();
+                projDocs.forEach((d: any) => {
+                  if (!d) return;
+                  const key =
+                    d.id ||
+                    `${d.category}_${d.fileName || d.name}_${d.version}`;
+                  if (!docsMap.has(key)) docsMap.set(key, d);
+                });
+                const uniqueProjDocs = Array.from(docsMap.values());
+
+                const totalDocCount = uniqueProjDocs.filter(
+                  (d: any) => d.category !== "PO" && d.category !== "OFFERING",
+                ).length;
+
+                const partListCount = uniqueProjDocs.filter((d: any) => {
+                  const cat = (d.category || "").toUpperCase();
+                  const label = (d.label || "").toUpperCase();
+                  const name = (d.fileName || d.name || "").toUpperCase();
+                  return (
+                    cat.includes("PART_LIST") ||
+                    cat.includes("MECH_PART_LIST") ||
+                    label.includes("PART LIST") ||
+                    label.includes("PART_LIST") ||
+                    name.includes("PART LIST") ||
+                    name.includes("PART_LIST") ||
+                    name.includes("PARTLIST")
+                  );
+                }).length;
+
+                const assemblyListCount = uniqueProjDocs.filter((d: any) => {
+                  const cat = (d.category || "").toUpperCase();
+                  const label = (d.label || "").toUpperCase();
+                  const name = (d.fileName || d.name || "").toUpperCase();
+                  return (
+                    cat.includes("ASSEMBLY") ||
+                    label.includes("ASSEMBLY") ||
+                    name.includes("ASSEMBLY")
+                  );
+                }).length;
+
+                const ppicNotes = (project.history || []).filter(
+                  (h: any) =>
+                    h.action === "Catatan dari PPIC" ||
+                    (h.notes || "").includes("PPIC"),
+                );
 
                 return (
                   <TableRow
@@ -582,216 +684,434 @@ export function EngineeringTable({
                         </div>
                       </div>
                     </TableCell>
+                    {/* Tanggal Deal & Running (Gabung 1 Kolom) */}
                     <TableCell>
                       <div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-                        <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5 text-slate-500">
-                            <ArrowRight className="w-2.5 h-2.5 rotate-90 opacity-50" />
-                            <span>
-                              In:{" "}
-                              {entryDate
-                                ? format(new Date(entryDate), "dd MMM yy")
-                                : "-"}
-                            </span>
-                          </div>
-                          {project.engReviewedAt && (
-                            <div className="flex items-center gap-1.5 text-blue-600/80 font-semibold">
-                              <History className="w-2.5 h-2.5 opacity-70" />
-                              <span>
-                                Rev:{" "}
-                                {format(
-                                  new Date(project.engReviewedAt),
-                                  "dd MMM yy",
-                                )}
-                              </span>
-                            </div>
-                          )}
+                        <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                          <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>
+                            {dealDate
+                              ? formatJakartaDate(dealDate, "date")
+                              : "-"}
+                          </span>
                         </div>
-                        {(project.engStatus === "DONE" ||
-                          project.engStatus === "APPROVED" ||
-                          project.engStatus === "APPROVED_BY_PPIC") &&
-                          exitDate && (
-                            <div className="flex items-center gap-1.5 text-green-600/80">
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span>
-                                Out: {format(new Date(exitDate), "dd MMM yy")}
-                              </span>
-                            </div>
-                          )}
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs font-bold text-primary">
+                            {daysSinceDeal} Hari
+                          </span>
+                        </div>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-sm font-bold text-primary">
-                          {project.createdAt
-                            ? differenceInDays(
-                                new Date(),
-                                new Date(project.createdAt),
-                              )
-                            : 0}{" "}
-                          Days
-                        </span>
-                        {/* <span className="text-xs text-muted-foreground font-semibold">
-                          Total Running
-                        </span> */}
-                      </div>
-                    </TableCell>
+
+                    {/* Deadline */}
                     <TableCell>
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                          <Calendar className="w-3.5 h-3.5 opacity-60" />
+                          <Calendar className="w-3.5 h-3.5 opacity-60 shrink-0" />
                           <span>
                             {project.expectedDate
-                              ? format(
-                                  new Date(project.expectedDate),
-                                  "dd MMM yy",
-                                )
+                              ? formatJakartaDate(project.expectedDate, "date")
                               : "No Date"}
                           </span>
                         </div>
                         {getTimelineStatus(project.expectedDate)}
                       </div>
                     </TableCell>
+
+                    {/* Engineering Progress */}
                     <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          render={
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 gap-2 cursor-pointer hover:bg-muted font-semibold text-xs"
-                            >
-                              <div
-                                className={cn(
-                                  "w-1.5 h-1.5 rounded-full",
-                                  displayStatus === "APPROVED_BY_CUSTOMER"
-                                    ? "bg-cyan-500"
-                                    : displayStatus === "APPROVED" ||
-                                        displayStatus === "APPROVED_BY_PPIC" ||
-                                        displayStatus === "DONE"
-                                      ? "bg-green-500"
-                                      : displayStatus === "REVIEW"
-                                        ? "bg-orange-500"
-                                        : displayStatus === "IN_PROGRESS"
-                                          ? "bg-blue-500"
-                                          : displayStatus === "REVISION"
-                                            ? "bg-purple-500"
-                                            : displayStatus === "REVISION_TO_ENG"
-                                              ? "bg-rose-500 animate-pulse"
-                                              : "bg-slate-400",
-                                )}
-                              />
-                              {ENGINEERING_STATUSES.find(
-                                (s) => s.id === displayStatus,
-                              )?.label || displayStatus}
-                            </Button>
-                          }
-                        />
-                        <DropdownMenuContent align="start" className="w-48">
-                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                            Update Status
+                      <div className="flex flex-col gap-1.5 min-w-44 max-w-52">
+                        {/* Progress Eng */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <span className="text-muted-foreground">
+                              Progress Eng.
+                            </span>
+                            <span className="text-primary font-bold">
+                              {engCalc.engProgress}%
+                            </span>
                           </div>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuGroup>
-                            {ENGINEERING_STATUSES.map((status) => (
-                              <DropdownMenuItem
-                                key={status.id}
-                                disabled={displayStatus === status.id}
-                                onClick={() =>
-                                  setConfirmStatusProject({
-                                    project,
-                                    status: status.id,
-                                  })
-                                }
-                                className="text-xs py-2"
-                              >
-                                <div
-                                  className={cn(
-                                    "w-2 h-2 rounded-full mr-2",
-                                    status.id === "APPROVED_BY_CUSTOMER"
-                                      ? "bg-cyan-500"
-                                      : status.id === "APPROVED_BY_PPIC"
-                                        ? "bg-green-500"
-                                        : status.id === "REVIEW"
-                                          ? "bg-orange-500"
-                                          : status.id === "IN_PROGRESS"
-                                            ? "bg-blue-500"
-                                            : status.id === "REVISION"
-                                              ? "bg-purple-500"
-                                              : status.id === "REVISION_TO_ENG"
-                                                ? "bg-rose-500"
-                                                : "bg-slate-400",
-                                  )}
-                                />
-                                {status.label}
-                                {displayStatus === status.id && (
-                                  <div className="ml-auto flex items-center gap-1.5">
-                                    <div className="w-1 h-1 rounded-full bg-primary" />
-                                    <span className="text-[10px] text-muted-foreground">
-                                      Active
-                                    </span>
-                                  </div>
-                                )}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <div>
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "font-medium text-[11px] px-2 py-0.5",
-                              getProjectStatusColor(
-                                project.currentStatus ||
-                                  project.status ||
-                                  "PENDING",
-                              ),
-                            )}
-                          >
-                            {getProjectStatusLabel(
-                              project.currentStatus ||
-                                project.status ||
-                                "PENDING",
-                            )}
-                          </Badge>
+                          <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden border border-border/20">
+                            <div
+                              className={cn(
+                                "h-full transition-all duration-300",
+                                engCalc.engProgress === 100
+                                  ? "bg-emerald-500"
+                                  : engCalc.engProgress > 0
+                                    ? "bg-primary"
+                                    : "bg-muted-foreground/30",
+                              )}
+                              style={{ width: `${engCalc.engProgress}%` }}
+                            />
+                          </div>
+
+                          {/* Widget Estimasi Tonase */}
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditTonnageProject(project);
+                                setNewTonnageInput(
+                                  String(
+                                    project.estimatedTonnage ||
+                                      project.lead?.estimatedTonnage ||
+                                      engCalc.estimatedTonnage ||
+                                      0,
+                                  ),
+                                );
+                              }}
+                              className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer text-[10px] font-semibold bg-muted/60 px-1.5 py-0.5 rounded border border-border/40"
+                              title="Klik untuk mengubah Estimasi Total Tonase Proyek"
+                            >
+                              <Scale className="w-3 h-3 text-primary shrink-0" />
+                              <span>
+                                {Number(
+                                  project.estimatedTonnage ||
+                                    project.lead?.estimatedTonnage ||
+                                    engCalc.estimatedTonnage ||
+                                    0,
+                                ) > 0
+                                  ? `Estimasi: ${
+                                      project.estimatedTonnage ||
+                                      project.lead?.estimatedTonnage ||
+                                      engCalc.estimatedTonnage
+                                    } Ton`
+                                  : "Set Estimasi Tonase"}
+                              </span>
+                              <Edit3 className="w-2.5 h-2.5 opacity-60 ml-0.5 shrink-0" />
+                            </button>
+                          </div>
                         </div>
-                        {project.currentDivision && (
-                          <span className="text-[10px] text-muted-foreground font-medium">
-                            Divisi: {formatDivision(project.currentDivision)}
-                          </span>
-                        )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-center">
-                      <DocumentManagerDialog
-                        ownerId={project.id}
-                        ownerType="PROJECT"
-                        leadId={project.leadId}
-                        globalDriveUrl={project.globalDriveUrl}
-                        onUploadSuccess={() => router.refresh()}
-                        trigger={
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="relative h-8 px-2 gap-2 cursor-pointer transition-all border border-transparent"
-                          >
-                            <FolderOpen className="w-3.5 h-3.5 text-primary" />
-                            <span className="text-xs font-medium">
-                              {project.documentCount || 0}
+
+                    {/* Production Status & Request Revisi Drawing */}
+                    <TableCell>
+                      <div className="flex flex-col gap-1.5 min-w-44 max-w-52">
+                        {/* Progress Produksi */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <span className="text-muted-foreground">
+                              Progress Prod.
                             </span>
-                            {project.hasRevisedDocs && (
-                              <span className="absolute top-0 right-0 -mt-1 flex h-3 w-3">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border-2 border-background"></span>
+                            <span
+                              className={cn(
+                                "font-bold",
+                                (() => {
+                                  const pProg = (() => {
+                                    if (
+                                      project.masterplan?.phases &&
+                                      project.masterplan.phases.length > 0
+                                    ) {
+                                      return Math.round(
+                                        project.masterplan.phases.reduce(
+                                          (sum: number, phase: any) => {
+                                            const weight = Number(
+                                              phase.weightPercent || 0,
+                                            );
+                                            const progress = Number(
+                                              phase.actualProgress || 0,
+                                            );
+                                            return (
+                                              sum + (progress * weight) / 100
+                                            );
+                                          },
+                                          0,
+                                        ),
+                                      );
+                                    }
+                                    if (project.prodStatus === "DONE")
+                                      return 100;
+                                    if (
+                                      project.productionStages &&
+                                      project.productionStages.length > 0
+                                    ) {
+                                      let total = 0;
+                                      project.productionStages.forEach(
+                                        (s: any) => {
+                                          total += Number(s.progress || 0);
+                                        },
+                                      );
+                                      return Math.round(
+                                        total / project.productionStages.length,
+                                      );
+                                    }
+                                    return 0;
+                                  })();
+                                  return pProg === 100
+                                    ? "text-emerald-600 dark:text-emerald-400"
+                                    : pProg > 0
+                                      ? "text-blue-600 dark:text-blue-400"
+                                      : "text-muted-foreground";
+                                })(),
+                              )}
+                            >
+                              {(() => {
+                                if (
+                                  project.masterplan?.phases &&
+                                  project.masterplan.phases.length > 0
+                                ) {
+                                  return Math.round(
+                                    project.masterplan.phases.reduce(
+                                      (sum: number, phase: any) => {
+                                        const weight = Number(
+                                          phase.weightPercent || 0,
+                                        );
+                                        const progress = Number(
+                                          phase.actualProgress || 0,
+                                        );
+                                        return sum + (progress * weight) / 100;
+                                      },
+                                      0,
+                                    ),
+                                  );
+                                }
+                                if (project.prodStatus === "DONE") return 100;
+                                if (
+                                  project.productionStages &&
+                                  project.productionStages.length > 0
+                                ) {
+                                  let total = 0;
+                                  project.productionStages.forEach((s: any) => {
+                                    total += Number(s.progress || 0);
+                                  });
+                                  return Math.round(
+                                    total / project.productionStages.length,
+                                  );
+                                }
+                                return 0;
+                              })()}
+                              %
+                            </span>
+                          </div>
+                          <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden border border-border/20">
+                            <div
+                              className={cn(
+                                "h-full transition-all duration-300",
+                                (() => {
+                                  const pProg = (() => {
+                                    if (
+                                      project.masterplan?.phases &&
+                                      project.masterplan.phases.length > 0
+                                    ) {
+                                      return Math.round(
+                                        project.masterplan.phases.reduce(
+                                          (sum: number, phase: any) => {
+                                            const weight = Number(
+                                              phase.weightPercent || 0,
+                                            );
+                                            const progress = Number(
+                                              phase.actualProgress || 0,
+                                            );
+                                            return (
+                                              sum + (progress * weight) / 100
+                                            );
+                                          },
+                                          0,
+                                        ),
+                                      );
+                                    }
+                                    if (project.prodStatus === "DONE")
+                                      return 100;
+                                    if (
+                                      project.productionStages &&
+                                      project.productionStages.length > 0
+                                    ) {
+                                      let total = 0;
+                                      project.productionStages.forEach(
+                                        (s: any) => {
+                                          total += Number(s.progress || 0);
+                                        },
+                                      );
+                                      return Math.round(
+                                        total / project.productionStages.length,
+                                      );
+                                    }
+                                    return 0;
+                                  })();
+                                  return pProg === 100
+                                    ? "bg-emerald-500"
+                                    : pProg > 0
+                                      ? "bg-blue-500"
+                                      : "bg-muted-foreground/30";
+                                })(),
+                              )}
+                              style={{
+                                width: `${(() => {
+                                  if (
+                                    project.masterplan?.phases &&
+                                    project.masterplan.phases.length > 0
+                                  ) {
+                                    return Math.round(
+                                      project.masterplan.phases.reduce(
+                                        (sum: number, phase: any) => {
+                                          const weight = Number(
+                                            phase.weightPercent || 0,
+                                          );
+                                          const progress = Number(
+                                            phase.actualProgress || 0,
+                                          );
+                                          return (
+                                            sum + (progress * weight) / 100
+                                          );
+                                        },
+                                        0,
+                                      ),
+                                    );
+                                  }
+                                  if (project.prodStatus === "DONE") return 100;
+                                  if (
+                                    project.productionStages &&
+                                    project.productionStages.length > 0
+                                  ) {
+                                    let total = 0;
+                                    project.productionStages.forEach(
+                                      (s: any) => {
+                                        total += Number(s.progress || 0);
+                                      },
+                                    );
+                                    return Math.round(
+                                      total / project.productionStages.length,
+                                    );
+                                  }
+                                  return 0;
+                                })()}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Request Revisi Drawing Button (Ikut ke Production Status) */}
+                        {(() => {
+                          const activeDRCount =
+                            getProjectDRs(project).activeCount;
+
+                          if (activeDRCount === 0) return null;
+
+                          return (
+                            <button
+                              onClick={() => setDrManagerProject(project)}
+                              className="text-[11px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer w-max mt-0.5 transition-all text-amber-800 dark:text-amber-300 bg-amber-500/20 border border-amber-400 hover:bg-amber-500/30 animate-pulse shadow-2xs"
+                              title="Klik untuk melihat dan menindaklanjuti Request Revisi Drawing dari QC/Produksi"
+                            >
+                              <PauseCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                              <span>
+                                {activeDRCount} Request Revisi Drawing
                               </span>
-                            )}
-                          </Button>
-                        }
-                      />
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    </TableCell>
+
+                    <TableCell className="text-center">
+                      {/* Grup Shortcut Icons 1 Baris Ramping */}
+                      <div className="flex items-center justify-center gap-1 bg-muted/40 p-0.5 rounded-lg border border-border/50 w-fit mx-auto">
+                        {/* 1. Drawing 2D/3D (Icon Pen / PenTool) */}
+                        <DocumentManagerDialog
+                          categories={["DRAWING"]}
+                          defaultCategory="DRAWING"
+                          ownerId={project.id}
+                          ownerType="PROJECT"
+                          leadId={project.leadId}
+                          globalDriveUrl={project.globalDriveUrl}
+                          onUploadSuccess={() => router.refresh()}
+                          trigger={
+                            <button
+                              type="button"
+                              className="relative h-6.5 w-6.5 rounded-md flex items-center justify-center bg-blue-500/15 text-blue-600 hover:bg-blue-500/25 transition-all cursor-pointer"
+                              title={`Drawing (${engCalc.drawingCount || 0} file)`}
+                            >
+                              <PenTool className="w-3.5 h-3.5" />
+                              {engCalc.drawingCount > 0 && (
+                                <span className="absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-blue-600 text-white text-[8px] font-bold flex items-center justify-center ring-1 ring-background">
+                                  {engCalc.drawingCount}
+                                </span>
+                              )}
+                            </button>
+                          }
+                        />
+
+                        {/* 2. Mechanical Part List (Icon FileCog) */}
+                        <DocumentManagerDialog
+                          categories={["MECH_PART_LIST"]}
+                          defaultCategory="MECH_PART_LIST"
+                          ownerId={project.id}
+                          ownerType="PROJECT"
+                          leadId={project.leadId}
+                          globalDriveUrl={project.globalDriveUrl}
+                          onUploadSuccess={() => router.refresh()}
+                          trigger={
+                            <button
+                              type="button"
+                              className="relative h-6.5 w-6.5 rounded-md flex items-center justify-center bg-amber-500/15 text-amber-600 hover:bg-amber-500/25 transition-all cursor-pointer"
+                              title={`Mechanical Part List (${partListCount || 0} file)`}
+                            >
+                              <FileCog className="w-3.5 h-3.5" />
+                              {partListCount > 0 && (
+                                <span className="absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-amber-600 text-white text-[8px] font-bold flex items-center justify-center ring-1 ring-background">
+                                  {partListCount}
+                                </span>
+                              )}
+                            </button>
+                          }
+                        />
+
+                        {/* 3. Assembly List (Icon Settings) */}
+                        <DocumentManagerDialog
+                          categories={["ASSEMBLY_LIST"]}
+                          defaultCategory="ASSEMBLY_LIST"
+                          ownerId={project.id}
+                          ownerType="PROJECT"
+                          leadId={project.leadId}
+                          globalDriveUrl={project.globalDriveUrl}
+                          onUploadSuccess={() => router.refresh()}
+                          trigger={
+                            <button
+                              type="button"
+                              className="relative h-6.5 w-6.5 rounded-md flex items-center justify-center bg-teal-500/15 text-teal-600 hover:bg-teal-500/25 transition-all cursor-pointer"
+                              title={`Assembly List (${assemblyListCount || 0} file)`}
+                            >
+                              <Settings className="w-3.5 h-3.5" />
+                              {assemblyListCount > 0 && (
+                                <span className="absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-teal-600 text-white text-[8px] font-bold flex items-center justify-center ring-1 ring-background">
+                                  {assemblyListCount}
+                                </span>
+                              )}
+                            </button>
+                          }
+                        />
+
+                        {/* 4. BoQ Management (Icon FileText) */}
+                        <button
+                          type="button"
+                          onClick={() => setBoqManagerProject(project)}
+                          className="relative h-6.5 w-6.5 rounded-md flex items-center justify-center bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/25 transition-all cursor-pointer"
+                          title={`Input / Kelola BoQ (${engCalc.boqCount || 0} item)`}
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          {engCalc.boqCount > 0 && (
+                            <span className="absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-emerald-600 text-white text-[8px] font-bold flex items-center justify-center ring-1 ring-background">
+                              {engCalc.boqCount}
+                            </span>
+                          )}
+                        </button>
+
+                        {/* 5. Catatan PPIC (Jika ada) */}
+                        {ppicNotes.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setPpicNotesProject(project)}
+                            className="relative h-6.5 w-6.5 rounded-md flex items-center justify-center bg-indigo-500/15 text-indigo-600 hover:bg-indigo-500/25 transition-all cursor-pointer"
+                            title={`Lihat Catatan PPIC (${ppicNotes.length} catatan)`}
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            <span className="absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-indigo-600 text-white text-[8px] font-bold flex items-center justify-center ring-1 ring-background">
+                              {ppicNotes.length}
+                            </span>
+                          </button>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>
@@ -819,40 +1139,31 @@ export function EngineeringTable({
                             Details
                           </DropdownMenuItem>
 
+                          {/* Akses Document Hub di Action Menu */}
+                          <DropdownMenuItem
+                            className="text-xs font-medium cursor-pointer"
+                            onClick={() => setDocHubProject(project)}
+                          >
+                            <FolderOpen className="w-4 h-4 mr-2 text-primary" />
+                            <span>Document Hub</span>
+                            {totalDocCount > 0 && (
+                              <Badge
+                                variant="secondary"
+                                className="ml-auto bg-primary/20 text-primary text-[10px] px-1.5 py-0 font-bold"
+                              >
+                                {totalDocCount}
+                              </Badge>
+                            )}
+                          </DropdownMenuItem>
+
                           <DropdownMenuItem
                             className="text-xs font-medium cursor-pointer"
                             onClick={() => setBoqManagerProject(project)}
                           >
-                            <PenTool className="w-4 h-4 mr-2 text-primary" /> Kelola BoQ
+                            <PenTool className="w-4 h-4 mr-2 text-primary" />{" "}
+                            Kelola BoQ
                           </DropdownMenuItem>
 
-                          <DropdownMenuItem
-                            className={cn(
-                              "text-xs font-semibold transition-colors",
-                              (project.currentDivision === "ENGINEERING")
-                                ? "text-primary cursor-pointer"
-                                : "text-muted-foreground opacity-50 cursor-not-allowed",
-                            )}
-                            disabled={project.currentDivision !== "ENGINEERING"}
-                            onClick={() => {
-                              if (project.currentDivision === "ENGINEERING") {
-                                setConfirmStatusProject({
-                                  project,
-                                  status: "REVIEW",
-                                  division: "PPIC",
-                                });
-                              } else {
-                                toast.error(
-                                  project.currentDivision === "PPIC"
-                                    ? "Proyek sudah berada di divisi PPIC!"
-                                    : "Proyek tidak sedang berada di divisi Engineering!",
-                                );
-                              }
-                            }}
-                          >
-                            <ArrowRight className="w-4 h-4 mr-2" /> Handover to
-                            PPIC
-                          </DropdownMenuItem>
                           {project.engStatus === "REVISION_TO_ENG" && (
                             <>
                               <DropdownMenuSeparator />
@@ -868,6 +1179,27 @@ export function EngineeringTable({
                             </>
                           )}
                           <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-xs font-semibold cursor-pointer text-amber-700"
+                            onClick={() => setDrManagerProject(project)}
+                          >
+                            <PenTool className="w-4 h-4 mr-2 text-amber-600" />
+                            Request Revisi Drawing (DR)
+                            {(() => {
+                              const activeDRCount =
+                                getProjectDRs(project).activeCount;
+
+                              if (activeDRCount === 0) return null;
+                              return (
+                                <Badge
+                                  variant="secondary"
+                                  className="ml-auto bg-amber-500/20 text-amber-800 text-[10px] px-1.5 py-0 font-bold animate-pulse"
+                                >
+                                  {activeDRCount}
+                                </Badge>
+                              );
+                            })()}
+                          </DropdownMenuItem>
                           <DropdownMenuItem
                             className="text-xs font-medium cursor-pointer text-primary"
                             onClick={() => setHistoryProject(project)}
@@ -899,7 +1231,7 @@ export function EngineeringTable({
         open={!!confirmStatusProject}
         onOpenChange={(open) => !open && setConfirmStatusProject(null)}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader>
             <DialogTitle>Confirm Status Update</DialogTitle>
             <DialogDescription>
@@ -950,6 +1282,7 @@ export function EngineeringTable({
         <DocumentManagerDialog
           ownerId={docHubProject.id}
           ownerType="PROJECT"
+          leadId={docHubProject.leadId}
           globalDriveUrl={docHubProject.globalDriveUrl}
           onUploadSuccess={() => router.refresh()}
           open={!!docHubProject}
@@ -967,7 +1300,7 @@ export function EngineeringTable({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-1 text-sm font-bold text-rose-600">
               <CheckCircle2 className="w-4 h-4" />
@@ -993,7 +1326,7 @@ export function EngineeringTable({
               <Textarea
                 id="resolveNotes"
                 placeholder="Tulis detail revisi yang diselesaikan (contoh: 'Drawing v2 diupload, lubang flange disesuaikan')..."
-                className="min-h-[100px] text-xs resize-y"
+                className="min-h-25 text-xs resize-y"
                 value={resolveNotes}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
                   setResolveNotes(e.target.value)
@@ -1043,6 +1376,161 @@ export function EngineeringTable({
           onSuccess={() => router.refresh()}
         />
       )}
+
+      {/* Modal Dialog khusus Catatan dari PPIC */}
+      <Dialog
+        open={!!ppicNotesProject}
+        onOpenChange={(open) => !open && setPpicNotesProject(null)}
+      >
+        <DialogContent className="max-w-md p-6 rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-indigo-600" />
+              Catatan dari PPIC
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Daftar catatan dan instruksi dari divisi PPIC untuk proyek{" "}
+              <span className="font-semibold text-foreground">
+                {ppicNotesProject?.projectName}
+              </span>
+              .
+            </DialogDescription>
+          </DialogHeader>
+
+          {(() => {
+            const pastEngNotes = (ppicNotesProject?.history || []).filter(
+              (h: any) => {
+                const act = (h.action || "").toLowerCase();
+                const remark = (h.remark || "").toLowerCase();
+                const notes = (h.notes || "").toLowerCase();
+                return (
+                  act.includes("catatan dari ppic") ||
+                  remark.includes("ppic note") ||
+                  (h.division === "ENGINEERING" && notes.length > 0)
+                );
+              },
+            );
+
+            return (
+              <div className="max-h-72 overflow-y-auto space-y-2.5 py-2 pr-1">
+                {pastEngNotes.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">
+                    Belum ada catatan dari PPIC.
+                  </p>
+                ) : (
+                  pastEngNotes.map((item: any, idx: number) => (
+                    <div
+                      key={item.id || idx}
+                      className="p-3 rounded-xl bg-muted/20 border border-border/50 space-y-1.5 shadow-2xs"
+                    >
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium">
+                        <span className="font-bold text-foreground flex items-center gap-1">
+                          <MessageSquare className="w-3 h-3 text-indigo-500" />
+                          {item.updatedBy || "PPIC"}
+                        </span>
+                        <span>
+                          {item.createdAt || item.entryDate
+                            ? format(
+                                new Date(item.createdAt || item.entryDate),
+                                "dd MMM yyyy, HH:mm",
+                              )
+                            : "-"}
+                        </span>
+                      </div>
+                      <p className="text-foreground text-xs whitespace-pre-wrap leading-relaxed">
+                        {(item.notes || "")
+                          .replace(
+                            /\.?\s*Engineering KPI diselesaikan\.?/gi,
+                            "",
+                          )
+                          .trim()}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            );
+          })()}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPpicNotesProject(null)}
+              className="cursor-pointer"
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DR Manager Dialog for Engineering */}
+      <DRManagerDialog
+        open={!!drManagerProject}
+        onOpenChange={(open) => !open && setDrManagerProject(null)}
+        project={drManagerProject}
+        onSuccess={() => router.refresh()}
+      />
+
+      {/* Dialog Edit Estimasi Tonase Proyek */}
+      <Dialog
+        open={!!editTonnageProject}
+        onOpenChange={(o) => !o && setEditTonnageProject(null)}
+      >
+        <DialogContent className="w-[90vw] sm:max-w-md rounded-2xl p-4 sm:p-6 space-y-3">
+          <DialogHeader>
+            <DialogTitle className="text-sm sm:text-base font-semibold text-foreground flex items-center gap-2">
+              <Scale className="w-5 h-5 text-primary shrink-0" />
+              Estimasi Total Tonase Proyek
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-1">
+              Masukkan estimasi total berat/tonase (Ton). Angka ini digunakan
+              sebagai acuan 100% progress Masterplan Engineering.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-1">
+            <Label className="text-xs font-semibold text-foreground block">
+              Estimasi Total Tonase Proyek (Ton)
+            </Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="Contoh: 50 (Ton)"
+              value={newTonnageInput}
+              onChange={(e) => setNewTonnageInput(e.target.value)}
+              className="h-9 text-xs rounded-xl font-semibold text-foreground"
+            />
+          </div>
+
+          <DialogFooter className="mt-3 flex flex-col sm:flex-row gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditTonnageProject(null)}
+              disabled={isUpdatingTonnage}
+              className="rounded-lg text-xs font-semibold cursor-pointer"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveTonnage}
+              disabled={isUpdatingTonnage}
+              className="rounded-lg text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              {isUpdatingTonnage ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5" />
+              )}
+              Simpan Estimasi Tonase
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

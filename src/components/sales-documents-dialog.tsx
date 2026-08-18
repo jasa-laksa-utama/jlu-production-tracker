@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { formatJakartaDate } from "@/lib/date-utils";
 import {
   FileText,
   UploadCloud,
@@ -275,7 +276,7 @@ function CategorySection({
                   {latestDoc.fileName || "Document"}
                 </p>
                 <p className="text-[10px] text-muted-foreground italic truncate">
-                  {format(new Date(latestDoc.createdAt), "dd MMM yyyy, HH:mm")}{" "}
+                  {formatJakartaDate(latestDoc.createdAt, "datetime")}{" "}
                   • by {latestDoc.uploadedBy || "System"}
                 </p>
                 {latestDoc.notes && (
@@ -323,9 +324,9 @@ function CategorySection({
                     v{doc.version}
                   </Badge>
                 )}
-                <span className="truncate max-w-[150px]">{doc.fileName}</span>
+                <span className="truncate max-w-37.5">{doc.fileName}</span>
                 <span className="text-muted-foreground">
-                  {format(new Date(doc.createdAt), "dd/MM/yy")}
+                  {formatJakartaDate(doc.createdAt, "short")}
                 </span>
               </div>
               <Button
@@ -453,7 +454,7 @@ export function SalesDocumentsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-125">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Receipt className="w-5 h-5 text-primary" />

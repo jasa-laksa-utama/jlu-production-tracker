@@ -81,7 +81,7 @@ export async function approveBoQByPpic(boqId: string) {
         // For simple checking, we verify if currentUserName is different or roles don't overlap.
       }
 
-      return await tx.boQ.update({
+      const updatedBoQ = await tx.boQ.update({
         where: { id: boqId },
         data: {
           boqApprovedByPpic: true,
@@ -94,6 +94,24 @@ export async function approveBoQByPpic(boqId: string) {
           project: true,
         },
       });
+
+      if (updatedBoQ.boqStatus === "APPROVED") {
+        await tx.project.update({
+          where: { id: currentBoq.projectId },
+          data: { boqApprovedAt: new Date() },
+        });
+        await tx.projectHistory.create({
+          data: {
+            projectId: currentBoq.projectId,
+            division: "ENGINEERING",
+            status: "BOQ_APPROVED",
+            action: "BOQ_APPROVED",
+            notes: `BoQ ${currentBoq.boqNumber} disetujui sepenuhnya.`,
+          },
+        });
+      }
+
+      return updatedBoQ;
     });
 
     try {
@@ -147,7 +165,7 @@ export async function approveBoQByPm(boqId: string) {
 
       const isFullyApproved = current.boqApprovedByPpic;
 
-      return await tx.boQ.update({
+      const updatedBoQ = await tx.boQ.update({
         where: { id: boqId },
         data: {
           boqApprovedByPm: true,
@@ -160,6 +178,24 @@ export async function approveBoQByPm(boqId: string) {
           project: true,
         },
       });
+
+      if (updatedBoQ.boqStatus === "APPROVED") {
+        await tx.project.update({
+          where: { id: current.projectId },
+          data: { boqApprovedAt: new Date() },
+        });
+        await tx.projectHistory.create({
+          data: {
+            projectId: current.projectId,
+            division: "ENGINEERING",
+            status: "BOQ_APPROVED",
+            action: "BOQ_APPROVED",
+            notes: `BoQ ${current.boqNumber} disetujui sepenuhnya.`,
+          },
+        });
+      }
+
+      return updatedBoQ;
     });
 
     try {

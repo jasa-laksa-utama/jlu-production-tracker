@@ -1,5 +1,12 @@
 import React from "react";
-import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer";
+import {
+  Document,
+  Page,
+  Text,
+  View,
+  StyleSheet,
+  Image,
+} from "@react-pdf/renderer";
 
 interface SPBItem {
   name: string;
@@ -14,6 +21,8 @@ interface SPBData {
   id: string;
   spbNumber?: string | null;
   date: string;
+  deadlineDate?: string | Date | null;
+  imageUrl?: string | null;
   items: SPBItem[];
   makerName?: string | null;
   mengetahuiName?: string | null;
@@ -258,7 +267,7 @@ const styles = StyleSheet.create({
 
 export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
   const totalRowsCount = Math.max(8, spb.items.length);
-  
+
   const formatIndonesianDate = (date: Date) => {
     const months = [
       "Januari",
@@ -301,7 +310,14 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
           <View style={styles.leftSubHeader}>
             <View style={styles.infoRow}>
               <Text style={[styles.infoLabel, { width: 30 }]}>No :</Text>
-              <Text style={[styles.infoValue, { fontFamily: "Courier", fontSize: 11 }]}>{spb.spbNumber || spb.id}</Text>
+              <Text
+                style={[
+                  styles.infoValue,
+                  { fontFamily: "Courier", fontSize: 11 },
+                ]}
+              >
+                {spb.spbNumber || spb.id}
+              </Text>
             </View>
           </View>
           <View style={styles.rightSubHeader}>
@@ -309,19 +325,38 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
               <Text style={[styles.infoLabel, { width: 80 }]}>No. SO</Text>
               <Text style={{ width: 10 }}>:</Text>
               <Text style={styles.infoValue}>
-                {project?.projectNumber || project?.id?.slice(-8).toUpperCase() || "-"}
+                {project?.projectNumber ||
+                  project?.id?.slice(-8).toUpperCase() ||
+                  "-"}
               </Text>
             </View>
             <View style={styles.infoRow}>
-              <Text style={[styles.infoLabel, { width: 80 }]}>Project Name</Text>
+              <Text style={[styles.infoLabel, { width: 80 }]}>
+                Project Name
+              </Text>
               <Text style={{ width: 10 }}>:</Text>
-              <Text style={styles.infoValue}>{project?.projectName || "-"}</Text>
+              <Text style={styles.infoValue}>
+                {project?.projectName || "-"}
+              </Text>
             </View>
             <View style={styles.infoRow}>
               <Text style={[styles.infoLabel, { width: 80 }]}>Client</Text>
               <Text style={{ width: 10 }}>:</Text>
               <Text style={styles.infoValue}>
                 {project?.customer?.company || project?.customer?.name || "-"}
+              </Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={[styles.infoLabel, { width: 80 }]}>Tenggat Waktu</Text>
+              <Text style={{ width: 10 }}>:</Text>
+              <Text style={[styles.infoValue, { fontFamily: "Helvetica-Bold" }]}>
+                {spb.deadlineDate
+                  ? new Date(spb.deadlineDate).toLocaleDateString("id-ID", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      year: "numeric",
+                    })
+                  : "-"}
               </Text>
             </View>
           </View>
@@ -349,9 +384,14 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
           {spb.items.map((it, idx) => {
             const isLast = idx === totalRowsCount - 1;
             return (
-              <View key={idx} style={isLast ? styles.tableRowLast : styles.tableRow}>
+              <View
+                key={idx}
+                style={isLast ? styles.tableRowLast : styles.tableRow}
+              >
                 <View style={styles.colNo}>
-                  <Text style={[styles.tdText, { textAlign: "center" }]}>{idx + 1}</Text>
+                  <Text style={[styles.tdText, { textAlign: "center" }]}>
+                    {idx + 1}
+                  </Text>
                 </View>
                 <View style={styles.colMaterial}>
                   <Text style={styles.tdTextBold}>
@@ -375,18 +415,31 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
           })}
 
           {/* Empty rows to make total 8 rows */}
-          {Array.from({ length: Math.max(0, 8 - spb.items.length) }).map((_, i) => {
-            const idx = spb.items.length + i;
-            const isLast = idx === totalRowsCount - 1;
-            return (
-              <View key={`empty-${i}`} style={isLast ? styles.tableRowLast : styles.tableRow}>
-                <View style={styles.colNo}><Text></Text></View>
-                <View style={styles.colMaterial}><Text></Text></View>
-                <View style={styles.colQty}><Text></Text></View>
-                <View style={styles.colKeterangan}><Text></Text></View>
-              </View>
-            );
-          })}
+          {Array.from({ length: Math.max(0, 8 - spb.items.length) }).map(
+            (_, i) => {
+              const idx = spb.items.length + i;
+              const isLast = idx === totalRowsCount - 1;
+              return (
+                <View
+                  key={`empty-${i}`}
+                  style={isLast ? styles.tableRowLast : styles.tableRow}
+                >
+                  <View style={styles.colNo}>
+                    <Text></Text>
+                  </View>
+                  <View style={styles.colMaterial}>
+                    <Text></Text>
+                  </View>
+                  <View style={styles.colQty}>
+                    <Text></Text>
+                  </View>
+                  <View style={styles.colKeterangan}>
+                    <Text></Text>
+                  </View>
+                </View>
+              );
+            },
+          )}
         </View>
 
         {/* Catatan */}
@@ -394,7 +447,10 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
           <Text style={styles.notesTitle}>Catatan:</Text>
           <View style={styles.notesContent}>
             <Text style={{ fontSize: 9 }}>
-              {spb.items.map((i) => i.note).filter(Boolean).join(", ") || "-"}
+              {spb.items
+                .map((i) => i.note)
+                .filter(Boolean)
+                .join(", ") || "-"}
             </Text>
           </View>
         </View>
@@ -408,9 +464,13 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
             <Text>Dibuat oleh,</Text>
             <View style={styles.digitalSignContainer}>
               <Text style={styles.digitalSignText}>DIGITALLY SIGNED BY</Text>
-              <Text style={styles.digitalSignName}>{spb.makerName || "MAKER"}</Text>
+              <Text style={styles.digitalSignName}>
+                {spb.makerName || "MAKER"}
+              </Text>
               <Text style={styles.digitalSignDate}>
-                {spb.createdAt ? formatIndonesianDate(new Date(spb.createdAt)) : formattedDate}
+                {spb.createdAt
+                  ? formatIndonesianDate(new Date(spb.createdAt))
+                  : formattedDate}
               </Text>
             </View>
             <Text style={styles.signatureLine}>
@@ -422,16 +482,20 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
             {spb.approvedByPpic ? (
               <View style={styles.digitalSignContainer}>
                 <Text style={styles.digitalSignText}>DIGITALLY SIGNED BY</Text>
-                <Text style={styles.digitalSignName}>{spb.mengetahuiName || "SLAMET"}</Text>
+                <Text style={styles.digitalSignName}>
+                  {spb.mengetahuiName || "PPIC"}
+                </Text>
                 <Text style={styles.digitalSignDate}>
-                  {spb.approvedByPpicAt ? formatIndonesianDate(new Date(spb.approvedByPpicAt)) : formattedDate}
+                  {spb.approvedByPpicAt
+                    ? formatIndonesianDate(new Date(spb.approvedByPpicAt))
+                    : formattedDate}
                 </Text>
               </View>
             ) : (
               <View style={styles.signatureSpace} />
             )}
             <Text style={styles.signatureLine}>
-              ( {spb.mengetahuiName || "Slamet"} )
+              ( {spb.mengetahuiName || "PPIC"} )
             </Text>
           </View>
           <View style={styles.signatureBox}>
@@ -439,9 +503,13 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
             {spb.approvedByPm ? (
               <View style={styles.digitalSignContainer}>
                 <Text style={styles.digitalSignText}>DIGITALLY SIGNED BY</Text>
-                <Text style={styles.digitalSignName}>{spb.menyetujuiName || "PROJECT MANAGER"}</Text>
+                <Text style={styles.digitalSignName}>
+                  {spb.menyetujuiName || "PROJECT MANAGER"}
+                </Text>
                 <Text style={styles.digitalSignDate}>
-                  {spb.approvedByPmAt ? formatIndonesianDate(new Date(spb.approvedByPmAt)) : formattedDate}
+                  {spb.approvedByPmAt
+                    ? formatIndonesianDate(new Date(spb.approvedByPmAt))
+                    : formattedDate}
                 </Text>
               </View>
             ) : (
@@ -455,7 +523,8 @@ export function SPBPDFDocument({ spb, project }: SPBPDFDocumentProps) {
 
         {/* Footer */}
         <Text style={styles.footer}>
-          | SPECIALIST IN CONVEYOR SYSTEM AND COMPONENT | 021 - 54370637 - 40 | JASALAKSAUTAMA.ID |
+          | SPECIALIST IN CONVEYOR SYSTEM AND COMPONENT | 021 - 54370637 - 40 |
+          JASALAKSAUTAMA.ID |
         </Text>
       </Page>
     </Document>

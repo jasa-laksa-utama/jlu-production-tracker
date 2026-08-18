@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { signIn } from "next-auth/react";
+import { signIn, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -35,12 +35,23 @@ export default function LoginPage() {
   const [isSuccess, setIsSuccess] = useState(false);
   const router = useRouter();
 
-  // Load remembered username
+  // Load remembered username & clear stale session if requested
   useEffect(() => {
     const saved = localStorage.getItem("remembered-username");
     if (saved) {
       setUsername(saved);
       setRememberMe(true);
+    }
+
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (
+        params.get("clear") === "true" ||
+        params.get("logout") === "true" ||
+        params.has("error")
+      ) {
+        signOut({ redirect: false });
+      }
     }
   }, []);
 
@@ -104,11 +115,11 @@ export default function LoginPage() {
           {/* Header */}
           <div className="space-y-2">
             <div className="flex items-center gap-3 mb-6">
-              <div className="flex items-center justify-center shrink-0 w-12 h-12 overflow-hidden">
+              <div className="relative shrink-0 w-12 h-12 overflow-hidden rounded-lg flex items-center justify-center">
                 <img
                   src="/jlu-logo.png"
                   alt="JLU Logo"
-                  className="w-full h-full object-contain rounded-lg"
+                  className="w-full h-full object-contain"
                 />
               </div>
               <div className="flex flex-col justify-center">
@@ -172,7 +183,7 @@ export default function LoginPage() {
                           </a>
                         }
                       />
-                      <TooltipContent className="bg-slate-900 text-white border-slate-800 p-3 max-w-[200px] rounded-xl shadow-xl">
+                      <TooltipContent className="bg-slate-900 text-white border-slate-800 p-3 max-w-50 rounded-xl shadow-xl">
                         <div className="flex items-start gap-2">
                           <Info className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                           <p className="text-xs">
@@ -264,7 +275,7 @@ export default function LoginPage() {
                       </a>
                     }
                   />
-                  <TooltipContent className="bg-slate-900 text-white border-slate-800 p-3 max-w-[200px] rounded-xl shadow-xl">
+                  <TooltipContent className="bg-slate-900 text-white border-slate-800 p-3 max-w-50 rounded-xl shadow-xl">
                     <div className="flex items-start gap-2">
                       <Info className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                       <p className="text-xs">
@@ -275,6 +286,19 @@ export default function LoginPage() {
                 </Tooltip>
               </TooltipProvider>
             </p>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  signOut({ redirect: false }).then(() => {
+                    toast.success("Session berhasil dibersihkan. Silakan coba login kembali.");
+                  });
+                }}
+                className="text-xs text-muted-foreground/60 hover:text-destructive underline cursor-pointer transition-colors"
+              >
+                Session bermasalah? Reset Session / Cookies
+              </button>
+            </div>
           </div>
         </div>
 
@@ -286,15 +310,19 @@ export default function LoginPage() {
 
       {/* Right Panel: Image & Branding */}
       <div className="hidden md:flex md:w-[55%] lg:w-[60%] h-full relative overflow-hidden bg-slate-900 shadow-inner">
-        {/* The Image */}
-        <div
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat transition-transform duration-[10s] hover:scale-110"
-          style={{ backgroundImage: "url('/login-bg.png')" }}
-        />
+        {/* The Image using standard img */}
+        <div className="absolute inset-0 transition-transform duration-[10s] hover:scale-105">
+          <img
+            src="/login-bg.png"
+            alt="Production Tracker Background"
+            className="w-full h-full object-cover"
+          />
+        </div>
+
 
         {/* Overlay Gradient */}
-        <div className="absolute inset-0 bg-linear-to-tr from-slate-950 via-slate-900/60 to-transparent opacity-80" />
-        <div className="absolute inset-0 bg-primary/10 mix-blend-overlay" />
+        <div className="absolute inset-0 bg-linear-to-tr from-slate-950 via-slate-900/60 to-transparent opacity-80 z-10" />
+        <div className="absolute inset-0 bg-primary/10 mix-blend-overlay z-10" />
 
         {/* Floating Content */}
         <div className="absolute inset-0 flex flex-col justify-end p-16 lg:p-24 z-20 space-y-6">
@@ -312,11 +340,6 @@ export default function LoginPage() {
           </div>
 
           <div className="mt-12 flex items-center gap-6 text-slate-500 font-bold uppercase text-xs tracking-wide">
-            {/* <span>Efficiency</span>
-            <span className="w-1 h-1 bg-slate-700 rounded-full" />
-            <span>Integrity</span>
-            <span className="w-1 h-1 bg-slate-700 rounded-full" />
-            <span>Quality</span> */}
           </div>
         </div>
       </div>

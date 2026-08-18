@@ -21,7 +21,13 @@ import {
  */
 export async function updateStructureItemChecklist(
   itemId: string,
-  checkboxes: {
+  dataInput: {
+    cuttingQty?: number;
+    settingQty?: number;
+    weldingQty?: number;
+    finishingQty?: number;
+    paintingQty?: number;
+    packagingQty?: number;
     cuttingDone?: boolean;
     settingDone?: boolean;
     weldingDone?: boolean;
@@ -36,25 +42,81 @@ export async function updateStructureItemChecklist(
     const userBy = session?.user?.name || "System";
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Get and update structure item
       const item = await tx.structureItem.findUnique({
         where: { id: itemId },
         include: { unit: true },
       });
       if (!item) throw new Error("Item not found");
 
-      const mergedItem = { ...item, ...checkboxes };
+      const itemQty = Math.max(1, item.qty || 1);
+
+      const cuttingQty = Number(
+        dataInput.cuttingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.cuttingQty))
+          : (dataInput.cuttingDone !== undefined ? (dataInput.cuttingDone ? itemQty : 0) : (item.cuttingQty ?? (item.cuttingDone ? itemQty : 0)))
+      );
+
+      const settingQty = Number(
+        dataInput.settingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.settingQty))
+          : (dataInput.settingDone !== undefined ? (dataInput.settingDone ? itemQty : 0) : (item.settingQty ?? (item.settingDone ? itemQty : 0)))
+      );
+
+      const weldingQty = Number(
+        dataInput.weldingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.weldingQty))
+          : (dataInput.weldingDone !== undefined ? (dataInput.weldingDone ? itemQty : 0) : (item.weldingQty ?? (item.weldingDone ? itemQty : 0)))
+      );
+
+      const finishingQty = Number(
+        dataInput.finishingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.finishingQty))
+          : (dataInput.finishingDone !== undefined ? (dataInput.finishingDone ? itemQty : 0) : (item.finishingQty ?? (item.finishingDone ? itemQty : 0)))
+      );
+
+      const paintingQty = Number(
+        dataInput.paintingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.paintingQty))
+          : (dataInput.paintingDone !== undefined ? (dataInput.paintingDone ? itemQty : 0) : (item.paintingQty ?? (item.paintingDone ? itemQty : 0)))
+      );
+
+      const packagingQty = Number(
+        dataInput.packagingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.packagingQty))
+          : (dataInput.packagingDone !== undefined ? (dataInput.packagingDone ? itemQty : 0) : (item.packagingQty ?? (item.packagingDone ? itemQty : 0)))
+      );
+
+      const mergedItem = {
+        ...item,
+        cuttingQty,
+        settingQty,
+        weldingQty,
+        finishingQty,
+        paintingQty,
+        packagingQty,
+      };
+
       const newProgress = calcStructureItemProgress(mergedItem);
 
       await tx.structureItem.update({
         where: { id: itemId },
         data: {
-          ...checkboxes,
+          cuttingQty,
+          settingQty,
+          weldingQty,
+          finishingQty,
+          paintingQty,
+          packagingQty,
+          cuttingDone: cuttingQty >= itemQty,
+          settingDone: settingQty >= itemQty,
+          weldingDone: weldingQty >= itemQty,
+          finishingDone: finishingQty >= itemQty,
+          paintingDone: paintingQty >= itemQty,
+          packagingDone: packagingQty >= itemQty,
           progressPercent: newProgress,
         },
       });
 
-      // 2. Recalculate unit progress
       const unit = await tx.conveyorUnit.findUnique({
         where: { id: item.unitId },
         include: {
@@ -64,9 +126,19 @@ export async function updateStructureItemChecklist(
       });
       if (!unit) throw new Error("Conveyor unit not found");
 
-      // Update in-memory structure item's progress for calculation
       const updatedStructureItems = unit.structureItems.map((si) =>
-        si.id === itemId ? { ...si, progressPercent: newProgress } : si
+        si.id === itemId
+          ? {
+              ...si,
+              cuttingQty,
+              settingQty,
+              weldingQty,
+              finishingQty,
+              paintingQty,
+              packagingQty,
+              progressPercent: newProgress,
+            }
+          : si
       );
 
       const newUnitProgress = calcUnitProgress(
@@ -75,7 +147,6 @@ export async function updateStructureItemChecklist(
         unit.unitType
       );
 
-      // 3. Find the Fabrication phase in this project's masterplan
       const masterplan = await tx.masterplan.findUnique({
         where: { projectId: unit.projectId },
         include: { phases: true },
@@ -85,7 +156,6 @@ export async function updateStructureItemChecklist(
       const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
       if (!fabPhase) throw new Error("Fabrication phase not found in masterplan");
 
-      // Update UnitProgress for this unit and phase
       await tx.unitProgress.update({
         where: {
           phaseId_unitId: {
@@ -98,12 +168,10 @@ export async function updateStructureItemChecklist(
         },
       });
 
-      // 4. Recalculate phase progress
       const allUnitProgresses = await tx.unitProgress.findMany({
         where: { phaseId: fabPhase.id },
       });
 
-      // Update current unit's actual percent in the list
       const updatedUnitProgresses = allUnitProgresses.map((up) =>
         up.unitId === unit.id ? { ...up, actualPercent: newUnitProgress } : up
       );
@@ -118,8 +186,6 @@ export async function updateStructureItemChecklist(
         },
       });
 
-      // 5. Update overall project progress
-      // Fetch all phases with updated progress
       const allPhases = await tx.masterplanPhase.findMany({
         where: { masterplanId: masterplan.id },
       });
@@ -129,7 +195,6 @@ export async function updateStructureItemChecklist(
 
       const projectTotalProgress = calcProjectTotalProgress(updatedPhases);
 
-      // 6. Update S-Curve weekly progress for the current date
       const currentDate = new Date();
       const currentWeekPlan = await tx.weeklyPlan.findFirst({
         where: {
@@ -139,7 +204,6 @@ export async function updateStructureItemChecklist(
         },
       });
 
-      // Update current week's cumulative actual progress
       if (currentWeekPlan) {
         await tx.weeklyPlan.update({
           where: { id: currentWeekPlan.id },
@@ -150,7 +214,6 @@ export async function updateStructureItemChecklist(
         });
       }
 
-      // Record logs
       await tx.productionLog.create({
         data: {
           projectId: unit.projectId,
@@ -174,12 +237,193 @@ export async function updateStructureItemChecklist(
   }
 }
 
-/**
- * Updates a mechanical item's checkboxes and cascades calculations.
- */
+export async function updateStructureItemDetails(
+  itemId: string,
+  details: { name?: string; qty?: number; satuan?: string }
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const result = await prisma.$transaction(async (tx) => {
+      const item = await tx.structureItem.findUnique({
+        where: { id: itemId },
+        include: { unit: true },
+      });
+      if (!item) throw new Error("Item not found");
+
+      const newName = details.name !== undefined ? details.name.trim() : item.name;
+      const newQty = details.qty !== undefined ? Math.max(1, details.qty) : item.qty;
+      const newSatuan = details.satuan !== undefined ? details.satuan.trim() : item.satuan;
+
+      const cuttingQty = Math.min(newQty, item.cuttingQty);
+      const settingQty = Math.min(newQty, item.settingQty);
+      const weldingQty = Math.min(newQty, item.weldingQty);
+      const finishingQty = Math.min(newQty, item.finishingQty);
+      const paintingQty = Math.min(newQty, item.paintingQty);
+      const packagingQty = Math.min(newQty, item.packagingQty);
+
+      const mergedItem = {
+        ...item,
+        name: newName,
+        qty: newQty,
+        satuan: newSatuan,
+        cuttingQty,
+        settingQty,
+        weldingQty,
+        finishingQty,
+        paintingQty,
+        packagingQty,
+      };
+
+      const newProgress = calcStructureItemProgress(mergedItem);
+
+      await tx.structureItem.update({
+        where: { id: itemId },
+        data: {
+          name: newName,
+          qty: newQty,
+          satuan: newSatuan,
+          cuttingQty,
+          settingQty,
+          weldingQty,
+          finishingQty,
+          paintingQty,
+          packagingQty,
+          cuttingDone: cuttingQty >= newQty,
+          settingDone: settingQty >= newQty,
+          weldingDone: weldingQty >= newQty,
+          finishingDone: finishingQty >= newQty,
+          paintingDone: paintingQty >= newQty,
+          packagingDone: packagingQty >= newQty,
+          progressPercent: newProgress,
+        },
+      });
+
+      const unit = await tx.conveyorUnit.findUnique({
+        where: { id: item.unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!unit) throw new Error("Conveyor unit not found");
+
+      const updatedStructureItems = unit.structureItems.map((si) =>
+        si.id === itemId
+          ? {
+              ...si,
+              name: newName,
+              qty: newQty,
+              satuan: newSatuan,
+              cuttingQty,
+              settingQty,
+              weldingQty,
+              finishingQty,
+              paintingQty,
+              packagingQty,
+              progressPercent: newProgress,
+            }
+          : si
+      );
+
+      const newUnitProgress = calcUnitProgress(
+        updatedStructureItems,
+        unit.mechanicalItems,
+        unit.unitType
+      );
+
+      const masterplan = await tx.masterplan.findUnique({
+        where: { projectId: unit.projectId },
+        include: { phases: true },
+      });
+      if (masterplan) {
+        const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
+        if (fabPhase) {
+          await tx.unitProgress.update({
+            where: {
+              phaseId_unitId: {
+                phaseId: fabPhase.id,
+                unitId: unit.id,
+              },
+            },
+            data: { actualPercent: newUnitProgress },
+          });
+
+          const allUnitProgresses = await tx.unitProgress.findMany({
+            where: { phaseId: fabPhase.id },
+          });
+          const updatedUnitProgresses = allUnitProgresses.map((up) =>
+            up.unitId === unit.id ? { ...up, actualPercent: newUnitProgress } : up
+          );
+
+          const newPhaseProgress = calcPhaseProgress(updatedUnitProgresses);
+
+          await tx.masterplanPhase.update({
+            where: { id: fabPhase.id },
+            data: {
+              actualProgress: newPhaseProgress,
+              status: newPhaseProgress >= 100 ? "COMPLETED" : "IN_PROGRESS",
+            },
+          });
+
+          const allPhases = await tx.masterplanPhase.findMany({
+            where: { masterplanId: masterplan.id },
+          });
+          const updatedPhases = allPhases.map((p) =>
+            p.id === fabPhase.id ? { ...p, actualProgress: newPhaseProgress } : p
+          );
+
+          const projectTotalProgress = calcProjectTotalProgress(updatedPhases);
+
+          const currentDate = new Date();
+          const currentWeekPlan = await tx.weeklyPlan.findFirst({
+            where: {
+              masterplanId: masterplan.id,
+              weekStartDate: { lte: currentDate },
+              weekEndDate: { gte: currentDate },
+            },
+          });
+
+          if (currentWeekPlan) {
+            await tx.weeklyPlan.update({
+              where: { id: currentWeekPlan.id },
+              data: {
+                actualCumulativePercent: projectTotalProgress,
+                variance: projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+              },
+            });
+          }
+        }
+      }
+
+      await tx.productionLog.create({
+        data: {
+          projectId: unit.projectId,
+          message: `Edit rincian komponen struktur "${newName}" (Qty: ${newQty} ${newSatuan}) pada "${unit.name}".`,
+          user: userBy,
+        },
+      });
+
+      return unit;
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: JSON.parse(JSON.stringify(result)) };
+  } catch (error: any) {
+    console.error("Error updating structure item details:", error);
+    return { success: false, error: error.message };
+  }
+}
+
 export async function updateMechanicalItemChecklist(
   itemId: string,
-  checkboxes: {
+  dataInput: {
+    procurementQty?: number;
+    poQty?: number;
+    fabricationQty?: number;
+    packagingQty?: number;
     procurementDone?: boolean;
     poDone?: boolean;
     fabricationDone?: boolean;
@@ -192,25 +436,63 @@ export async function updateMechanicalItemChecklist(
     const userBy = session?.user?.name || "System";
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Get and update item
       const item = await tx.mechanicalItem.findUnique({
         where: { id: itemId },
         include: { unit: true },
       });
       if (!item) throw new Error("Item not found");
 
-      const mergedItem = { ...item, ...checkboxes };
+      const itemQty = Math.max(1, item.qty || 1);
+
+      const procurementQty = Number(
+        dataInput.procurementQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.procurementQty))
+          : (dataInput.procurementDone !== undefined ? (dataInput.procurementDone ? itemQty : 0) : (item.procurementQty ?? (item.procurementDone ? itemQty : 0)))
+      );
+
+      const poQty = Number(
+        dataInput.poQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.poQty))
+          : (dataInput.poDone !== undefined ? (dataInput.poDone ? itemQty : 0) : (item.poQty ?? (item.poDone ? itemQty : 0)))
+      );
+
+      const fabricationQty = Number(
+        dataInput.fabricationQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.fabricationQty))
+          : (dataInput.fabricationDone !== undefined ? (dataInput.fabricationDone ? itemQty : 0) : (item.fabricationQty ?? (item.fabricationDone ? itemQty : 0)))
+      );
+
+      const packagingQty = Number(
+        dataInput.packagingQty !== undefined
+          ? Math.min(itemQty, Math.max(0, dataInput.packagingQty))
+          : (dataInput.packagingDone !== undefined ? (dataInput.packagingDone ? itemQty : 0) : (item.packagingQty ?? (item.packagingDone ? itemQty : 0)))
+      );
+
+      const mergedItem = {
+        ...item,
+        procurementQty,
+        poQty,
+        fabricationQty,
+        packagingQty,
+      };
+
       const newProgress = calcMechanicalItemProgress(mergedItem);
 
       await tx.mechanicalItem.update({
         where: { id: itemId },
         data: {
-          ...checkboxes,
+          procurementQty,
+          poQty,
+          fabricationQty,
+          packagingQty,
+          procurementDone: procurementQty >= itemQty,
+          poDone: poQty >= itemQty,
+          fabricationDone: fabricationQty >= itemQty,
+          packagingDone: packagingQty >= itemQty,
           progressPercent: newProgress,
         },
       });
 
-      // 2. Recalculate unit progress
       const unit = await tx.conveyorUnit.findUnique({
         where: { id: item.unitId },
         include: {
@@ -221,7 +503,16 @@ export async function updateMechanicalItemChecklist(
       if (!unit) throw new Error("Conveyor unit not found");
 
       const updatedMechanicalItems = unit.mechanicalItems.map((mi) =>
-        mi.id === itemId ? { ...mi, progressPercent: newProgress } : mi
+        mi.id === itemId
+          ? {
+              ...mi,
+              procurementQty,
+              poQty,
+              fabricationQty,
+              packagingQty,
+              progressPercent: newProgress,
+            }
+          : mi
       );
 
       const newUnitProgress = calcUnitProgress(
@@ -230,7 +521,6 @@ export async function updateMechanicalItemChecklist(
         unit.unitType
       );
 
-      // 3. Find Fabrication phase in masterplan
       const masterplan = await tx.masterplan.findUnique({
         where: { projectId: unit.projectId },
         include: { phases: true },
@@ -240,7 +530,6 @@ export async function updateMechanicalItemChecklist(
       const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
       if (!fabPhase) throw new Error("Fabrication phase not found in masterplan");
 
-      // Update UnitProgress mapping
       await tx.unitProgress.update({
         where: {
           phaseId_unitId: {
@@ -253,7 +542,6 @@ export async function updateMechanicalItemChecklist(
         },
       });
 
-      // 4. Recalculate phase progress
       const allUnitProgresses = await tx.unitProgress.findMany({
         where: { phaseId: fabPhase.id },
       });
@@ -272,7 +560,6 @@ export async function updateMechanicalItemChecklist(
         },
       });
 
-      // 5. Update overall project progress
       const allPhases = await tx.masterplanPhase.findMany({
         where: { masterplanId: masterplan.id },
       });
@@ -282,7 +569,6 @@ export async function updateMechanicalItemChecklist(
 
       const projectTotalProgress = calcProjectTotalProgress(updatedPhases);
 
-      // 6. Update S-Curve weekly progress for the current date
       const currentDate = new Date();
       const currentWeekPlan = await tx.weeklyPlan.findFirst({
         where: {
@@ -302,7 +588,6 @@ export async function updateMechanicalItemChecklist(
         });
       }
 
-      // Record logs
       await tx.productionLog.create({
         data: {
           projectId: unit.projectId,
@@ -322,6 +607,176 @@ export async function updateMechanicalItemChecklist(
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error updating mechanical item progress:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function updateMechanicalItemDetails(
+  itemId: string,
+  details: { name?: string; qty?: number; satuan?: string }
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const result = await prisma.$transaction(async (tx) => {
+      const item = await tx.mechanicalItem.findUnique({
+        where: { id: itemId },
+        include: { unit: true },
+      });
+      if (!item) throw new Error("Item not found");
+
+      const newName = details.name !== undefined ? details.name.trim() : item.name;
+      const newQty = details.qty !== undefined ? Math.max(1, details.qty) : item.qty;
+      const newSatuan = details.satuan !== undefined ? details.satuan.trim() : item.satuan;
+
+      const procurementQty = Math.min(newQty, item.procurementQty);
+      const poQty = Math.min(newQty, item.poQty);
+      const fabricationQty = Math.min(newQty, item.fabricationQty);
+      const packagingQty = Math.min(newQty, item.packagingQty);
+
+      const mergedItem = {
+        ...item,
+        name: newName,
+        qty: newQty,
+        satuan: newSatuan,
+        procurementQty,
+        poQty,
+        fabricationQty,
+        packagingQty,
+      };
+
+      const newProgress = calcMechanicalItemProgress(mergedItem);
+
+      await tx.mechanicalItem.update({
+        where: { id: itemId },
+        data: {
+          name: newName,
+          qty: newQty,
+          satuan: newSatuan,
+          procurementQty,
+          poQty,
+          fabricationQty,
+          packagingQty,
+          procurementDone: procurementQty >= newQty,
+          poDone: poQty >= newQty,
+          fabricationDone: fabricationQty >= newQty,
+          packagingDone: packagingQty >= newQty,
+          progressPercent: newProgress,
+        },
+      });
+
+      const unit = await tx.conveyorUnit.findUnique({
+        where: { id: item.unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!unit) throw new Error("Conveyor unit not found");
+
+      const updatedMechanicalItems = unit.mechanicalItems.map((mi) =>
+        mi.id === itemId
+          ? {
+              ...mi,
+              name: newName,
+              qty: newQty,
+              satuan: newSatuan,
+              procurementQty,
+              poQty,
+              fabricationQty,
+              packagingQty,
+              progressPercent: newProgress,
+            }
+          : mi
+      );
+
+      const newUnitProgress = calcUnitProgress(
+        unit.structureItems,
+        updatedMechanicalItems,
+        unit.unitType
+      );
+
+      const masterplan = await tx.masterplan.findUnique({
+        where: { projectId: unit.projectId },
+        include: { phases: true },
+      });
+      if (masterplan) {
+        const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
+        if (fabPhase) {
+          await tx.unitProgress.update({
+            where: {
+              phaseId_unitId: {
+                phaseId: fabPhase.id,
+                unitId: unit.id,
+              },
+            },
+            data: { actualPercent: newUnitProgress },
+          });
+
+          const allUnitProgresses = await tx.unitProgress.findMany({
+            where: { phaseId: fabPhase.id },
+          });
+          const updatedUnitProgresses = allUnitProgresses.map((up) =>
+            up.unitId === unit.id ? { ...up, actualPercent: newUnitProgress } : up
+          );
+
+          const newPhaseProgress = calcPhaseProgress(updatedUnitProgresses);
+
+          await tx.masterplanPhase.update({
+            where: { id: fabPhase.id },
+            data: {
+              actualProgress: newPhaseProgress,
+              status: newPhaseProgress >= 100 ? "COMPLETED" : "IN_PROGRESS",
+            },
+          });
+
+          const allPhases = await tx.masterplanPhase.findMany({
+            where: { masterplanId: masterplan.id },
+          });
+          const updatedPhases = allPhases.map((p) =>
+            p.id === fabPhase.id ? { ...p, actualProgress: newPhaseProgress } : p
+          );
+
+          const projectTotalProgress = calcProjectTotalProgress(updatedPhases);
+
+          const currentDate = new Date();
+          const currentWeekPlan = await tx.weeklyPlan.findFirst({
+            where: {
+              masterplanId: masterplan.id,
+              weekStartDate: { lte: currentDate },
+              weekEndDate: { gte: currentDate },
+            },
+          });
+
+          if (currentWeekPlan) {
+            await tx.weeklyPlan.update({
+              where: { id: currentWeekPlan.id },
+              data: {
+                actualCumulativePercent: projectTotalProgress,
+                variance: projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+              },
+            });
+          }
+        }
+      }
+
+      await tx.productionLog.create({
+        data: {
+          projectId: unit.projectId,
+          message: `Edit rincian komponen mekanikal "${newName}" (Qty: ${newQty} ${newSatuan}) pada "${unit.name}".`,
+          user: userBy,
+        },
+      });
+
+      return unit;
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: JSON.parse(JSON.stringify(result)) };
+  } catch (error: any) {
+    console.error("Error updating mechanical item details:", error);
     return { success: false, error: error.message };
   }
 }
@@ -420,6 +875,104 @@ export async function togglePhaseSubStep(subStepId: string, checked: boolean) {
 }
 
 /**
+ * Directly updates progress (%) for site / field work phases 
+ * (e.g. Clearing, Civil Work, Erection, Electrical System, Commissioning).
+ */
+export async function updatePhaseProgressDirect(
+  phaseId: string,
+  actualProgress: number,
+  notes?: string,
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const cleanProgress = Math.min(100, Math.max(0, Number(actualProgress) || 0));
+
+    const result = await prisma.$transaction(async (tx) => {
+      const phase = await tx.masterplanPhase.findUnique({
+        where: { id: phaseId },
+      });
+      if (!phase) throw new Error("Tahapan masterplan tidak ditemukan");
+
+      // 1. Update phase actualProgress & status
+      const updatedPhase = await tx.masterplanPhase.update({
+        where: { id: phaseId },
+        data: {
+          actualProgress: cleanProgress,
+          status:
+            cleanProgress >= 100
+              ? "COMPLETED"
+              : cleanProgress > 0
+                ? "IN_PROGRESS"
+                : "PENDING",
+        },
+      });
+
+      // 2. Recalculate total project progress
+      const allPhases = await tx.masterplanPhase.findMany({
+        where: { masterplanId: phase.masterplanId },
+      });
+      const updatedPhases = allPhases.map((p) =>
+        p.id === phaseId ? { ...p, actualProgress: cleanProgress } : p,
+      );
+      const projectTotalProgress = calcProjectTotalProgress(updatedPhases);
+
+      // 3. Update current week's actual S-Curve progress
+      const currentDate = new Date();
+      const currentWeekPlan = await tx.weeklyPlan.findFirst({
+        where: {
+          masterplanId: phase.masterplanId,
+          weekStartDate: { lte: currentDate },
+          weekEndDate: { gte: currentDate },
+        },
+      });
+
+      if (currentWeekPlan) {
+        await tx.weeklyPlan.update({
+          where: { id: currentWeekPlan.id },
+          data: {
+            actualCumulativePercent: projectTotalProgress,
+            variance:
+              projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+          },
+        });
+      }
+
+      const masterplan = await tx.masterplan.findUnique({
+        where: { id: phase.masterplanId },
+      });
+
+      if (masterplan) {
+        await tx.productionLog.create({
+          data: {
+            projectId: masterplan.projectId,
+            message: `Update progress tahapan "${phase.name}" menjadi ${cleanProgress}%${notes ? ` (${notes})` : ""}`,
+            user: userBy,
+          },
+        });
+      }
+
+      return {
+        phaseProgress: cleanProgress,
+        projectProgress: projectTotalProgress,
+      };
+    });
+
+    revalidatePath("/trackers/production");
+    revalidatePath("/trackers/engineering");
+    return { success: true, data: result };
+  } catch (error: any) {
+    console.error("Error updating phase progress direct:", error);
+    return {
+      success: false,
+      error: error.message || "Gagal memperbarui progress tahapan",
+    };
+  }
+}
+
+/**
  * Dynamically adds a new ConveyorUnit (with Structure and/or Mechanical checklists)
  * to an already initialized project Masterplan.
  */
@@ -430,8 +983,8 @@ export async function addConveyorUnitAfter(
     unitType: "STRUCTURE" | "MECHANICAL" | "BOTH";
     satuan: string;
     volume: number;
-    structureItems?: string[];
-    mechanicalItems?: string[];
+    structureItems?: Array<ComponentItemInput | string>;
+    mechanicalItems?: Array<ComponentItemInput | string>;
   }
 ) {
   try {
@@ -467,12 +1020,18 @@ export async function addConveyorUnitAfter(
       // 4. Create Structure Items
       if (input.structureItems && input.structureItems.length > 0) {
         for (let i = 0; i < input.structureItems.length; i++) {
-          const itemName = input.structureItems[i].trim();
-          if (!itemName) continue;
+          const item = input.structureItems[i];
+          const name = typeof item === "string" ? item.trim() : (item.name || "").trim();
+          if (!name) continue;
+          const qty = typeof item === "string" ? 1 : Number(item.qty) || 1;
+          const satuan = typeof item === "string" ? "unit" : (item.satuan || "unit").trim();
+
           await tx.structureItem.create({
             data: {
               unitId: unit.id,
-              name: itemName,
+              name,
+              qty,
+              satuan,
               orderIndex: i + 1,
             },
           });
@@ -482,12 +1041,18 @@ export async function addConveyorUnitAfter(
       // 5. Create Mechanical Items
       if (input.mechanicalItems && input.mechanicalItems.length > 0) {
         for (let i = 0; i < input.mechanicalItems.length; i++) {
-          const itemName = input.mechanicalItems[i].trim();
-          if (!itemName) continue;
+          const item = input.mechanicalItems[i];
+          const name = typeof item === "string" ? item.trim() : (item.name || "").trim();
+          if (!name) continue;
+          const qty = typeof item === "string" ? 1 : Number(item.qty) || 1;
+          const satuan = typeof item === "string" ? "unit" : (item.satuan || "unit").trim();
+
           await tx.mechanicalItem.create({
             data: {
               unitId: unit.id,
-              name: itemName,
+              name,
+              qty,
+              satuan,
               orderIndex: i + 1,
             },
           });
@@ -578,5 +1143,581 @@ export async function addConveyorUnitAfter(
   } catch (error: any) {
     console.error("Error adding conveyor unit:", error);
     return { success: false, error: error.message || "Gagal menambah unit conveyor" };
+  }
+}
+
+export type ComponentItemInput = {
+  name: string;
+  qty?: number;
+  satuan?: string;
+};
+
+/**
+ * Adds new structure items directly to an existing Conveyor Unit without re-setting up the masterplan.
+ */
+export async function addStructureItemsToUnit(
+  unitId: string,
+  items: Array<ComponentItemInput | string>
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const cleanItems = items
+      .map((item) => {
+        if (typeof item === "string") {
+          return { name: item.trim(), qty: 1, satuan: "unit" };
+        }
+        return {
+          name: (item.name || "").trim(),
+          qty: Number(item.qty) || 1,
+          satuan: (item.satuan || "unit").trim(),
+        };
+      })
+      .filter((item) => item.name.length > 0);
+
+    if (cleanItems.length === 0) {
+      throw new Error("Nama komponen tidak boleh kosong.");
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const unit = await tx.conveyorUnit.findUnique({
+        where: { id: unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!unit) throw new Error("Unit Conveyor tidak ditemukan.");
+
+      const currentCount = unit.structureItems.length;
+
+      // 1. Create items
+      let idx = currentCount + 1;
+      for (const itemObj of cleanItems) {
+        await tx.structureItem.create({
+          data: {
+            unitId,
+            name: itemObj.name,
+            qty: itemObj.qty,
+            satuan: itemObj.satuan,
+            orderIndex: idx++,
+          },
+        });
+      }
+
+      // 2. Fetch updated items
+      const updatedUnit = await tx.conveyorUnit.findUnique({
+        where: { id: unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!updatedUnit) throw new Error("Unit Conveyor tidak ditemukan.");
+
+      // 3. Recalculate unit progress
+      const newUnitProgress = calcUnitProgress(
+        updatedUnit.structureItems,
+        updatedUnit.mechanicalItems,
+        updatedUnit.unitType
+      );
+
+      // 4. Update FAB_STRUCT_MECH phase progress
+      const masterplan = await tx.masterplan.findUnique({
+        where: { projectId: unit.projectId },
+        include: { phases: true },
+      });
+
+      if (masterplan) {
+        const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
+        if (fabPhase) {
+          await tx.unitProgress.update({
+            where: {
+              phaseId_unitId: {
+                phaseId: fabPhase.id,
+                unitId: unit.id,
+              },
+            },
+            data: {
+              actualPercent: newUnitProgress,
+            },
+          });
+
+          const allUnitProgresses = await tx.unitProgress.findMany({
+            where: { phaseId: fabPhase.id },
+          });
+          const newPhaseProgress = calcPhaseProgress(allUnitProgresses);
+
+          await tx.masterplanPhase.update({
+            where: { id: fabPhase.id },
+            data: {
+              actualProgress: newPhaseProgress,
+              status: newPhaseProgress >= 100 ? "COMPLETED" : "IN_PROGRESS",
+            },
+          });
+
+          const allPhases = await tx.masterplanPhase.findMany({
+            where: { masterplanId: masterplan.id },
+          });
+          const projectTotalProgress = calcProjectTotalProgress(allPhases);
+
+          const currentDate = new Date();
+          const currentWeekPlan = await tx.weeklyPlan.findFirst({
+            where: {
+              masterplanId: masterplan.id,
+              weekStartDate: { lte: currentDate },
+              weekEndDate: { gte: currentDate },
+            },
+          });
+          if (currentWeekPlan) {
+            await tx.weeklyPlan.update({
+              where: { id: currentWeekPlan.id },
+              data: {
+                actualCumulativePercent: projectTotalProgress,
+                variance: projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+              },
+            });
+          }
+        }
+      }
+
+      await tx.productionLog.create({
+        data: {
+          projectId: unit.projectId,
+          message: `Menambahkan ${cleanItems.length} komponen struktur baru pada unit "${unit.name}".`,
+          user: userBy,
+        },
+      });
+
+      return updatedUnit;
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: JSON.parse(JSON.stringify(result)) };
+  } catch (error: any) {
+    console.error("Error adding structure items:", error);
+    return { success: false, error: error.message || "Gagal menambah komponen struktur" };
+  }
+}
+
+/**
+ * Adds new mechanical items directly to an existing Conveyor Unit without re-setting up the masterplan.
+ */
+export async function addMechanicalItemsToUnit(
+  unitId: string,
+  items: Array<ComponentItemInput | string>
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const cleanItems = items
+      .map((item) => {
+        if (typeof item === "string") {
+          return { name: item.trim(), qty: 1, satuan: "unit" };
+        }
+        return {
+          name: (item.name || "").trim(),
+          qty: Number(item.qty) || 1,
+          satuan: (item.satuan || "unit").trim(),
+        };
+      })
+      .filter((item) => item.name.length > 0);
+
+    if (cleanItems.length === 0) {
+      throw new Error("Nama komponen tidak boleh kosong.");
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const unit = await tx.conveyorUnit.findUnique({
+        where: { id: unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!unit) throw new Error("Unit Conveyor tidak ditemukan.");
+
+      const currentCount = unit.mechanicalItems.length;
+
+      // 1. Create items
+      let idx = currentCount + 1;
+      for (const itemObj of cleanItems) {
+        await tx.mechanicalItem.create({
+          data: {
+            unitId,
+            name: itemObj.name,
+            qty: itemObj.qty,
+            satuan: itemObj.satuan,
+            orderIndex: idx++,
+          },
+        });
+      }
+
+      // 2. Fetch updated items
+      const updatedUnit = await tx.conveyorUnit.findUnique({
+        where: { id: unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!updatedUnit) throw new Error("Unit Conveyor tidak ditemukan.");
+
+      // 3. Recalculate unit progress
+      const newUnitProgress = calcUnitProgress(
+        updatedUnit.structureItems,
+        updatedUnit.mechanicalItems,
+        updatedUnit.unitType
+      );
+
+      // 4. Update FAB_STRUCT_MECH phase progress
+      const masterplan = await tx.masterplan.findUnique({
+        where: { projectId: unit.projectId },
+        include: { phases: true },
+      });
+
+      if (masterplan) {
+        const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
+        if (fabPhase) {
+          await tx.unitProgress.update({
+            where: {
+              phaseId_unitId: {
+                phaseId: fabPhase.id,
+                unitId: unit.id,
+              },
+            },
+            data: {
+              actualPercent: newUnitProgress,
+            },
+          });
+
+          const allUnitProgresses = await tx.unitProgress.findMany({
+            where: { phaseId: fabPhase.id },
+          });
+          const newPhaseProgress = calcPhaseProgress(allUnitProgresses);
+
+          await tx.masterplanPhase.update({
+            where: { id: fabPhase.id },
+            data: {
+              actualProgress: newPhaseProgress,
+              status: newPhaseProgress >= 100 ? "COMPLETED" : "IN_PROGRESS",
+            },
+          });
+
+          const allPhases = await tx.masterplanPhase.findMany({
+            where: { masterplanId: masterplan.id },
+          });
+          const projectTotalProgress = calcProjectTotalProgress(allPhases);
+
+          const currentDate = new Date();
+          const currentWeekPlan = await tx.weeklyPlan.findFirst({
+            where: {
+              masterplanId: masterplan.id,
+              weekStartDate: { lte: currentDate },
+              weekEndDate: { gte: currentDate },
+            },
+          });
+          if (currentWeekPlan) {
+            await tx.weeklyPlan.update({
+              where: { id: currentWeekPlan.id },
+              data: {
+                actualCumulativePercent: projectTotalProgress,
+                variance: projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+              },
+            });
+          }
+        }
+      }
+
+      await tx.productionLog.create({
+        data: {
+          projectId: unit.projectId,
+          message: `Menambahkan ${cleanItems.length} komponen mekanikal baru pada unit "${unit.name}".`,
+          user: userBy,
+        },
+      });
+
+      return updatedUnit;
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: JSON.parse(JSON.stringify(result)) };
+  } catch (error: any) {
+    console.error("Error adding mechanical items:", error);
+    return { success: false, error: error.message || "Gagal menambah komponen mekanikal" };
+  }
+}
+
+/**
+ * Deletes a structure item directly from a unit.
+ */
+export async function deleteStructureItem(itemId: string) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const result = await prisma.$transaction(async (tx) => {
+      const item = await tx.structureItem.findUnique({
+        where: { id: itemId },
+        include: { unit: true },
+      });
+      if (!item) throw new Error("Komponen tidak ditemukan.");
+
+      await tx.structureItem.delete({
+        where: { id: itemId },
+      });
+
+      const updatedUnit = await tx.conveyorUnit.findUnique({
+        where: { id: item.unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!updatedUnit) throw new Error("Unit Conveyor tidak ditemukan.");
+
+      const newUnitProgress = calcUnitProgress(
+        updatedUnit.structureItems,
+        updatedUnit.mechanicalItems,
+        updatedUnit.unitType
+      );
+
+      const masterplan = await tx.masterplan.findUnique({
+        where: { projectId: updatedUnit.projectId },
+        include: { phases: true },
+      });
+
+      if (masterplan) {
+        const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
+        if (fabPhase) {
+          await tx.unitProgress.update({
+            where: {
+              phaseId_unitId: {
+                phaseId: fabPhase.id,
+                unitId: updatedUnit.id,
+              },
+            },
+            data: {
+              actualPercent: newUnitProgress,
+            },
+          });
+
+          const allUnitProgresses = await tx.unitProgress.findMany({
+            where: { phaseId: fabPhase.id },
+          });
+          const newPhaseProgress = calcPhaseProgress(allUnitProgresses);
+
+          await tx.masterplanPhase.update({
+            where: { id: fabPhase.id },
+            data: {
+              actualProgress: newPhaseProgress,
+              status: newPhaseProgress >= 100 ? "COMPLETED" : "IN_PROGRESS",
+            },
+          });
+
+          const allPhases = await tx.masterplanPhase.findMany({
+            where: { masterplanId: masterplan.id },
+          });
+          const projectTotalProgress = calcProjectTotalProgress(allPhases);
+
+          const currentDate = new Date();
+          const currentWeekPlan = await tx.weeklyPlan.findFirst({
+            where: {
+              masterplanId: masterplan.id,
+              weekStartDate: { lte: currentDate },
+              weekEndDate: { gte: currentDate },
+            },
+          });
+          if (currentWeekPlan) {
+            await tx.weeklyPlan.update({
+              where: { id: currentWeekPlan.id },
+              data: {
+                actualCumulativePercent: projectTotalProgress,
+                variance: projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+              },
+            });
+          }
+        }
+      }
+
+      await tx.productionLog.create({
+        data: {
+          projectId: updatedUnit.projectId,
+          message: `Menghapus komponen struktur "${item.name}" pada unit "${item.unit.name}".`,
+          user: userBy,
+        },
+      });
+
+      return updatedUnit;
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: JSON.parse(JSON.stringify(result)) };
+  } catch (error: any) {
+    console.error("Error deleting structure item:", error);
+    return { success: false, error: error.message || "Gagal menghapus komponen struktur" };
+  }
+}
+
+/**
+ * Deletes a mechanical item directly from a unit.
+ */
+export async function deleteMechanicalItem(itemId: string) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const result = await prisma.$transaction(async (tx) => {
+      const item = await tx.mechanicalItem.findUnique({
+        where: { id: itemId },
+        include: { unit: true },
+      });
+      if (!item) throw new Error("Komponen tidak ditemukan.");
+
+      await tx.mechanicalItem.delete({
+        where: { id: itemId },
+      });
+
+      const updatedUnit = await tx.conveyorUnit.findUnique({
+        where: { id: item.unitId },
+        include: {
+          structureItems: true,
+          mechanicalItems: true,
+        },
+      });
+      if (!updatedUnit) throw new Error("Unit Conveyor tidak ditemukan.");
+
+      const newUnitProgress = calcUnitProgress(
+        updatedUnit.structureItems,
+        updatedUnit.mechanicalItems,
+        updatedUnit.unitType
+      );
+
+      const masterplan = await tx.masterplan.findUnique({
+        where: { projectId: updatedUnit.projectId },
+        include: { phases: true },
+      });
+
+      if (masterplan) {
+        const fabPhase = masterplan.phases.find((p) => p.code === "FAB_STRUCT_MECH");
+        if (fabPhase) {
+          await tx.unitProgress.update({
+            where: {
+              phaseId_unitId: {
+                phaseId: fabPhase.id,
+                unitId: updatedUnit.id,
+              },
+            },
+            data: {
+              actualPercent: newUnitProgress,
+            },
+          });
+
+          const allUnitProgresses = await tx.unitProgress.findMany({
+            where: { phaseId: fabPhase.id },
+          });
+          const newPhaseProgress = calcPhaseProgress(allUnitProgresses);
+
+          await tx.masterplanPhase.update({
+            where: { id: fabPhase.id },
+            data: {
+              actualProgress: newPhaseProgress,
+              status: newPhaseProgress >= 100 ? "COMPLETED" : "IN_PROGRESS",
+            },
+          });
+
+          const allPhases = await tx.masterplanPhase.findMany({
+            where: { masterplanId: masterplan.id },
+          });
+          const projectTotalProgress = calcProjectTotalProgress(allPhases);
+
+          const currentDate = new Date();
+          const currentWeekPlan = await tx.weeklyPlan.findFirst({
+            where: {
+              masterplanId: masterplan.id,
+              weekStartDate: { lte: currentDate },
+              weekEndDate: { gte: currentDate },
+            },
+          });
+          if (currentWeekPlan) {
+            await tx.weeklyPlan.update({
+              where: { id: currentWeekPlan.id },
+              data: {
+                actualCumulativePercent: projectTotalProgress,
+                variance: projectTotalProgress - Number(currentWeekPlan.planCumulativePercent),
+              },
+            });
+          }
+        }
+      }
+
+      await tx.productionLog.create({
+        data: {
+          projectId: updatedUnit.projectId,
+          message: `Menghapus komponen mekanikal "${item.name}" pada unit "${item.unit.name}".`,
+          user: userBy,
+        },
+      });
+
+      return updatedUnit;
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: JSON.parse(JSON.stringify(result)) };
+  } catch (error: any) {
+    console.error("Error deleting mechanical item:", error);
+    return { success: false, error: error.message || "Gagal menghapus komponen mekanikal" };
+  }
+}
+
+export async function reorderStructureItems(
+  unitId: string,
+  orderedIds: string[]
+) {
+  try {
+    await requireAuth();
+    await prisma.$transaction(
+      orderedIds.map((id, index) =>
+        prisma.structureItem.update({
+          where: { id },
+          data: { orderIndex: index },
+        })
+      )
+    );
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error reordering structure items:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function reorderMechanicalItems(
+  unitId: string,
+  orderedIds: string[]
+) {
+  try {
+    await requireAuth();
+    await prisma.$transaction(
+      orderedIds.map((id, index) =>
+        prisma.mechanicalItem.update({
+          where: { id },
+          data: { orderIndex: index },
+        })
+      )
+    );
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error reordering mechanical items:", error);
+    return { success: false, error: error.message };
   }
 }

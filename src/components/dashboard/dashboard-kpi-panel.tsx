@@ -109,7 +109,7 @@ export function DashboardKPIPanel({ metrics }: DashboardKPIPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-4">
-            <div className="h-[280px] w-full">
+            <div className="h-70 w-full">
               {!mounted ? (
                 <div className="w-full h-full bg-muted/20 animate-pulse rounded-lg" />
               ) : (
@@ -179,9 +179,9 @@ export function DashboardKPIPanel({ metrics }: DashboardKPIPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-2 flex flex-col items-center justify-center">
-            <div className="h-[210px] w-full flex items-center justify-center relative">
+            <div className="h-52.5 w-full flex items-center justify-center relative">
               {!mounted ? (
-                <div className="w-[160px] h-[160px] bg-muted/20 animate-pulse rounded-full" />
+                <div className="w-40 h-40 bg-muted/20 animate-pulse rounded-full" />
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -325,7 +325,7 @@ export function DashboardKPIPanel({ metrics }: DashboardKPIPanelProps) {
             </CardDescription>
           </CardHeader>
           <CardContent className="text-xs flex-1">
-            <div className="space-y-4 max-h-[220px] overflow-y-auto pr-1">
+            <div className="space-y-4 max-h-55 overflow-y-auto pr-1">
               {metrics.recentActivity && metrics.recentActivity.length > 0 ? (
                 metrics.recentActivity.map((activity, i) => (
                   <div key={activity.id || i} className="flex items-start gap-2 border-b border-border/30 pb-2.5 last:border-0 last:pb-0">
@@ -337,7 +337,7 @@ export function DashboardKPIPanel({ metrics }: DashboardKPIPanelProps) {
                         {activity.message}
                       </p>
                       <div className="flex items-center justify-between text-[9px] text-muted-foreground font-medium pt-0.5">
-                        <span className="truncate max-w-[100px]">oleh {activity.user}</span>
+                        <span className="truncate max-w-25">oleh {activity.user}</span>
                         <span className="flex items-center gap-0.5 shrink-0">
                           <Clock className="w-2.5 h-2.5" />
                           {formatRelativeTime(activity.time)}

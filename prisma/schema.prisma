@@ -3,7 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -68,6 +69,7 @@ model Lead {
   expectedDate   DateTime?
   probability    Int?
   globalDriveUrl String?
+  estimatedTonnage Float?   @default(0)
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
   documents      Document[] @relation("LeadDocuments")
@@ -86,30 +88,24 @@ model Project {
   description      String?
   status           String             @default("PENDING")
   ppicStatus       String             @default("PENDING")
-  ppicEntryDate    DateTime?
-  ppicCompletedAt  DateTime?
   engStatus        String             @default("PENDING")
-  engCompletedAt   DateTime?
   prodStatus       String             @default("PENDING")
-  prodCompletedAt  DateTime?
-  prodEntryDate    DateTime?
   expectedDate     DateTime?
   startDate        DateTime?          @default(now())
-  currentDivision  String?            @default("PPIC")
-  currentStatus    String?            @default("PENDING")
-  engEntryDate     DateTime?
   globalDriveUrl   String?
+  estimatedTonnage Float?             @default(0)
   value            Decimal?           @default(0) @db.Decimal(18, 2)
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
-  engReviewedAt    DateTime?
   purchasingStatus String             @default("PENDING")
   warehouseStatus  String             @default("PENDING")
-  qcCompletedAt    DateTime?
-  qcEntryDate      DateTime?
   qcStatus         String             @default("PENDING")
-  logCompletedAt   DateTime?
-  logEntryDate     DateTime?
+  dealAt                DateTime?
+  boqApprovedAt         DateTime?
+  spbCompletedAt        DateTime?
+  poCompletedAt         DateTime?
+  productionCompletedAt DateTime?
+  qcCompletedAt         DateTime?
   logStatus        String             @default("PENDING")
   packingListUrl   String?
   markingStatus    String             @default("PENDING")
@@ -126,9 +122,14 @@ model Project {
   shipmentPackages ShipmentPackage[]
   shipments        Shipment[]
   spb              SPB[]
+  spbGudang        SpbGudang[]
+  spj              SPJ[]
   boqs             BoQ[]
   masterplan       Masterplan?
   conveyorUnits    ConveyorUnit[]
+  goodsReleaseMemos GoodsReleaseMemo[]
+  qcCheckpoints    QCItemCheckpoint[]
+  qcRevisions      QCRevision[]
 
   @@map("projects")
 }
@@ -164,6 +165,7 @@ model Document {
   isExternal Boolean  @default(false)
   uploadedBy String?
   notes      String?
+  tonnage    Float?   @default(0)
   leadId     String?  @db.Uuid
   projectId  String?  @db.Uuid
   createdAt  DateTime @default(now())
@@ -198,6 +200,11 @@ model Item {
   code             String              @unique
   name             String?
   typeMerk         String?
+  partNumber       String?
+  model            String?
+  brandId          String?             @db.Uuid
+  locationId       String?             @db.Uuid
+  specs            Json?
   initialStock     Float               @default(0)
   currentStock     Float               @default(0)
   createdAt        DateTime            @default(now())
@@ -206,32 +213,104 @@ model Item {
   unitId           String?             @db.Uuid
   minStock         Float               @default(0)
   description      String?
+  imageUrl         String?
   category         String              @default("A")
   reservedStock    Float               @default(0)
+  itemCategory     String              @default("CONSUMABLE")
+  conditionStatus  String              @default("BAIK")
+  goodStock        Float               @default(0)
+  damagedStock     Float               @default(0)
+  maintenanceStock Float               @default(0)
+  unitPrice        Decimal             @default(0) @db.Decimal(18, 2)
   itemType         ItemType?           @relation(fields: [itemTypeId], references: [id])
   unit             Unit?               @relation(fields: [unitId], references: [id])
+  brand            Brand?              @relation(fields: [brandId], references: [id])
+  location         StorageLocation?    @relation(fields: [locationId], references: [id])
+  locationStocks   ItemLocationStock[]
   poItems          PurchaseOrderItem[]
   shipmentPackages ShipmentPackage[]
   spbItems         SPBItem[]
   opnameDetails    StockOpnameDetail[]
   transactions     Transaction[]
   boqItems         BoQItem[]
+  goodsMemoItems   GoodsReleaseMemoItem[]
+  spbGudangItems   SpbGudangItem[]
 
   @@map("items")
 }
 
+model Brand {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items     Item[]
+
+  @@map("brands")
+}
+
+model StorageLocation {
+  id           String              @id @default(uuid()) @db.Uuid
+  name         String              @unique
+  code         String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  items        Item[]
+  stocks       ItemLocationStock[]
+  transactions Transaction[]
+
+  @@map("storage_locations")
+}
+
+model SpecAttribute {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  unit      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("spec_attributes")
+}
+
+model ItemUsageType {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  code      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("item_usage_types")
+}
+
+model ItemLocationStock {
+  id          String          @id @default(uuid()) @db.Uuid
+  itemId      String          @db.Uuid
+  locationId  String          @db.Uuid
+  qty         Float           @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  item        Item            @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  location    StorageLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, locationId])
+  @@map("item_location_stocks")
+}
+
 model Transaction {
-  id         String   @id @default(uuid()) @db.Uuid
-  date       DateTime @default(now())
+  id         String           @id @default(uuid()) @db.Uuid
+  date       DateTime         @default(now())
   type       String
-  itemId     String   @db.Uuid
+  itemId     String           @db.Uuid
+  locationId String?          @db.Uuid
   quantity   Float
-  createdAt  DateTime @default(now())
+  createdAt  DateTime         @default(now())
   note       String?
   peruntukan String?
   poNumber   String?
   supplier   String?
-  item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  item       Item             @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  location   StorageLocation? @relation(fields: [locationId], references: [id])
 
   @@map("transactions")
 }
@@ -276,6 +355,11 @@ model PurchaseOrder {
   isReceived         Boolean                @default(false)
   receivedAt         DateTime?
   suratJalanUrl      String?
+  qcStatus           String                 @default("NONE")
+  qcRequestedAt      DateTime?
+  qcApprovedAt       DateTime?
+  qcApprovedBy       String?
+  qcNotes            String?
   signatureUrl       String?
   keteranganTambahan String?
   hormatKami         String?
@@ -297,12 +381,22 @@ model PurchaseOrder {
   showPemesan        Boolean                @default(true)
   showMengetahui     Boolean                @default(true)
   showMenyetujui     Boolean                @default(true)
+  showPhotosInPrint  Boolean                @default(true)
   namaPemesan        String?
   namaMengetahui     String?
   namaMenyetujui     String?
   sampleImageUrl     String?
   paymentMethod      String?                @default("CASH")
   installmentTerm    String?
+  dueDate            DateTime?
+  isUrgent           Boolean                @default(false)
+  priority           String                 @default("NORMAL")
+  priorityNotes      String?
+  bankName           String?
+  bankAccountNo      String?
+  bankAccountName    String?
+  fakturPajakNo      String?
+  fakturPajakUrl     String?
   supplierId         String?                @db.Uuid
   items              PurchaseOrderItem[]
   payments           PurchaseOrderPayment[]
@@ -347,7 +441,19 @@ model PurchaseOrderItem {
   tglSampai       DateTime?
   isClosed        Boolean                    @default(false)
   itemId          String?                    @db.Uuid
+  imageUrl        String?
   qtyReceived     Float                      @default(0)
+
+  // 🔴 Field Inspeksi QC Per-Item
+  qcStatus        String                     @default("NONE") // NONE, PENDING_INSPECTION, PASSED, FAILED
+  qtyPassed       Float                      @default(0)
+  qtyFailed       Float                      @default(0)
+  qcDefectReason  String?
+  qcApprovedAt    DateTime?
+  qcApprovedBy    String?
+  qcNotes         String?
+  qcAttachments   String[]                   @default([])
+
   item            Item?                      @relation(fields: [itemId], references: [id])
   purchaseOrder   PurchaseOrder              @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   receiptItems    PurchaseOrderReceiptItem[]
@@ -383,26 +489,81 @@ model Notification {
 }
 
 model SPB {
-  id               String    @id @default(uuid()) @db.Uuid
-  spbNumber        String    @unique
-  projectId        String    @db.Uuid
-  date             DateTime  @default(now())
-  status           String    @default("PENDING_APPROVAL")
-  makerName        String?
-  mengetahuiName   String?   @default("Slamet")
-  menyetujuiName   String?
-  approvedByPpic   Boolean   @default(false)
-  approvedByPpicAt DateTime?
-  approvedByPm     Boolean   @default(false)
-  approvedByPmAt   DateTime?
-  rejectedReason   String?
-  rejectedAt       DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  items            SPBItem[]
+  id                  String    @id @default(uuid()) @db.Uuid
+  spbNumber           String    @unique
+  projectId           String    @db.Uuid
+  spbType             String    @default("PROYEK")
+  date                DateTime  @default(now())
+  status              String    @default("PENDING_APPROVAL")
+  makerName           String?
+  mengetahuiName      String?   @default("Slamet")
+  menyetujuiName      String?
+  approvedByPpic      Boolean   @default(false)
+  approvedByPpicAt    DateTime?
+  approvedByPm        Boolean   @default(false)
+  approvedByPmAt      DateTime?
+  approvedByDireksi   Boolean   @default(false)
+  approvedByDireksiAt DateTime?
+  rejectedReason      String?
+  rejectedAt          DateTime?
+  deadlineDate        DateTime?
+  imageUrl            String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  project             Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items               SPBItem[]
 
   @@map("spb")
+}
+
+model SpbGudang {
+  id                  String          @id @default(uuid()) @db.Uuid
+  spbNumber           String          @unique
+  projectId           String?         @db.Uuid
+  date                DateTime        @default(now())
+  status              String          @default("PENDING_PPIC")
+  makerName           String?
+  approvedByPpic      Boolean         @default(false)
+  approvedByPpicAt    DateTime?
+  approvedByDireksi   Boolean         @default(false)
+  approvedByDireksiAt DateTime?
+  rejectedReason      String?
+  rejectedAt          DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  project             Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  items               SpbGudangItem[]
+
+  @@map("spb_gudang")
+}
+
+model SpbGudangItem {
+  id                    String    @id @default(uuid()) @db.Uuid
+  spbGudangId           String    @db.Uuid
+  materialId            String?   @db.Uuid
+  name                  String
+  typeMerk              String?
+  qty                   Float
+  unit                  String    @default("pcs")
+  source                String    @default("WAREHOUSE")
+  note                  String?
+  status                String    @default("PENDING")
+  approvalPpic          String    @default("PENDING")
+  approvalPm            String    @default("NONE")
+  approvalDireksi       String    @default("NONE")
+  selectedSupplierId    String?   @db.Uuid
+  selectedSupplierName  String?
+  selectedCatalogPrice  Decimal?  @db.Decimal(18, 2)
+  candidateSuppliers    Json?
+  vendorSelectionStatus String    @default("NONE")
+  vendorSelectionNote   String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  spbGudang             SpbGudang @relation(fields: [spbGudangId], references: [id], onDelete: Cascade)
+  item                  Item?     @relation(fields: [materialId], references: [id], onDelete: SetNull)
+
+  @@map("spb_gudang_items")
 }
 
 model SPBItem {
@@ -419,10 +580,76 @@ model SPBItem {
   typeMerk   String?
   status     String   @default("PENDING")
   qtyIssued  Float    @default(0)
+  hasSubstitution        Boolean   @default(false)
+  originalName           String?
+  originalTypeMerk       String?
+  originalMaterialId     String?   @db.Uuid
+  originalPrice          Decimal?  @db.Decimal(18, 2)
+  substitutedName        String?
+  substitutedTypeMerk    String?
+  substitutedMaterialId  String?   @db.Uuid
+  substitutedPrice       Decimal?  @db.Decimal(18, 2)
+  substitutedSupplierId  String?   @db.Uuid
+  substitutedSupplierName String?
+  selectedSupplierId     String?   @db.Uuid
+  selectedSupplierName   String?
+  selectedCatalogPrice   Decimal?  @db.Decimal(18, 2)
+  candidateSuppliers     Json?
+  vendorSelectionStatus   String    @default("NONE")
+  vendorSelectionNote     String?
+  substitutionReason     String?
+  approvalEngineering    String    @default("NONE")
+  approvalPpic           String    @default("NONE")
+  approvalPm             String    @default("NONE")
+  approvalDireksi        String    @default("NONE")
+  substitutionStatus     String    @default("NONE")
   material   Item?    @relation(fields: [materialId], references: [id])
   spb        SPB      @relation(fields: [spbId], references: [id], onDelete: Cascade)
+  memoItems  GoodsReleaseMemoItem[]
 
   @@map("spb_items")
+}
+
+// ============================================================
+// SURAT PERMINTAAN JASA (SPJ)
+// ============================================================
+
+model SPJ {
+  id               String    @id @default(uuid()) @db.Uuid
+  spjNumber        String    @unique
+  projectId        String    @db.Uuid
+  date             DateTime  @default(now())
+  status           String    @default("PENDING_APPROVAL")
+  makerName        String?
+  mengetahuiName   String?   @default("Slamet")
+  menyetujuiName   String?
+  approvedByPpic   Boolean   @default(false)
+  approvedByPpicAt DateTime?
+  approvedByPm     Boolean   @default(false)
+  approvedByPmAt   DateTime?
+  rejectedReason   String?
+  rejectedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items            SPJItem[]
+
+  @@map("spj")
+}
+
+model SPJItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  spjId     String   @db.Uuid
+  name      String
+  qty       Float    @default(1)
+  unit      String   @default("ls")
+  note      String?
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  spj       SPJ      @relation(fields: [spjId], references: [id], onDelete: Cascade)
+
+  @@map("spj_items")
 }
 
 model Supplier {
@@ -533,6 +760,14 @@ model PurchaseOrderReceipt {
   receivedById         String                     @db.Uuid
   notes                String?
   createdAt            DateTime                   @default(now())
+
+  qcStatus             String                     @default("PENDING")
+  qcExternalId         String?
+  qcApprovedAt         DateTime?
+  qcApprovedBy         String?
+  qcNotes              String?
+  qcReportUrl          String?
+
   items                PurchaseOrderReceiptItem[]
   purchaseOrder        PurchaseOrder              @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   user                 User                       @relation(fields: [receivedById], references: [id])
@@ -545,6 +780,12 @@ model PurchaseOrderReceiptItem {
   receiptId           String               @db.Uuid
   purchaseOrderItemId String               @db.Uuid
   qtyReceived         Float
+
+  qcStatus            String               @default("PENDING")
+  qtyPassed           Float                @default(0)
+  qtyFailed           Float                @default(0)
+  qcDefectReason      String?
+
   purchaseOrderItem   PurchaseOrderItem    @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Cascade)
   receipt             PurchaseOrderReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
@@ -691,6 +932,7 @@ model BoQ {
   boqMakerName        String?
   boqRejectedReason   String?
   boqRejectedAt       DateTime?
+  totalTonnage        Float?             @default(0)
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
   boqItems            BoQItem[]
@@ -709,6 +951,7 @@ model BoQItem {
   qty         Float
   unit        String   @default("pcs")
   price       Decimal  @default(0) @db.Decimal(18, 2)
+  weightTon   Float?   @default(0)
   note        String?
   
   createdAt   DateTime @default(now())
@@ -778,9 +1021,24 @@ model MasterplanPhase {
   
   unitProgresses  UnitProgress[]
   subProgresses   PhaseSubStep[]  // Untuk breakdown sub-langkah dinamis (Shipment, Erection, dll.)
+  weeklyTargets   PhaseWeeklyTarget[] // Custom target mingguan per phase
 
   @@unique([masterplanId, code])
   @@map("masterplan_phases")
+}
+
+model PhaseWeeklyTarget {
+  id            String          @id @default(uuid()) @db.Uuid
+  phaseId       String          @db.Uuid
+  phase         MasterplanPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  weekNumber    Int
+  targetPercent Decimal         @db.Decimal(5, 2)
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([phaseId, weekNumber])
+  @@map("phase_weekly_targets")
 }
 
 model PhaseSubStep {
@@ -821,6 +1079,8 @@ model ConveyorUnit {
   progresses    UnitProgress[]
   structureItems StructureItem[]
   mechanicalItems MechanicalItem[]
+  qcCheckpoints QCItemCheckpoint[]
+  qcRevisions   QCRevision[]
 
   @@unique([projectId, name])
   @@map("conveyor_units")
@@ -850,8 +1110,16 @@ model StructureItem {
   
   name            String
   qty             Int           @default(1)
+  satuan          String        @default("set")
   orderIndex      Int           @default(0)
   
+  cuttingQty      Int           @default(0)  // 15%
+  settingQty      Int           @default(0)  // 35%
+  weldingQty      Int           @default(0)  // 40%
+  finishingQty    Int           @default(0)  // 5%
+  paintingQty     Int           @default(0)  // 3.5%
+  packagingQty    Int           @default(0)  // 1.5%
+
   cuttingDone     Boolean       @default(false)  // 15%
   settingDone     Boolean       @default(false)  // 35%
   weldingDone     Boolean       @default(false)  // 40%
@@ -874,9 +1142,14 @@ model MechanicalItem {
   
   name            String
   qty             Int           @default(1)
-  satuan          String        @default("pcs")
+  satuan          String        @default("unit")
   orderIndex      Int           @default(0)
   
+  procurementQty  Int           @default(0) // 40%
+  poQty           Int           @default(0) // 10%
+  fabricationQty  Int           @default(0) // 45%
+  packagingQty    Int           @default(0) // 5%
+
   procurementDone Boolean       @default(false) // 40%
   poDone          Boolean       @default(false) // 10%
   fabricationDone Boolean       @default(false) // 45%
@@ -916,4 +1189,159 @@ model WeeklyPlan {
 
   @@unique([masterplanId, weekNumber])
   @@map("weekly_plans")
+}
+
+// ============================================================
+// MEMO PENGELUARAN BARANG & PENGEMBALIAN (GOODS ISSUE & RETURN)
+// ============================================================
+
+model GoodsReleaseMemo {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  memoNumber          String                  @unique
+  projectId           String?                 @db.Uuid
+  project             Project?                @relation(fields: [projectId], references: [id])
+  requesterName       String
+  division            String                  @default("PRODUKSI")
+  notes               String?
+  status              String                  @default("PENDING") // PENDING, APPROVED, REJECTED, PARTIALLY_RETURNED, COMPLETED
+  rejectedReason      String?
+  approvedBy          String?
+  approvedAt          DateTime?
+  rejectedAt          DateTime?
+  syncInventoryStatus String                  @default("PENDING")   // PENDING, SENT_TO_INVENTORY, SYNC_FAILED
+  externalSyncAt      DateTime?
+  warehouseStatus     String?                 @default("PENDING")  
+  warehouseIssuedBy   String?
+  warehouseIssuedAt   DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  items               GoodsReleaseMemoItem[]
+  returns             GoodsReturnRecord[]
+
+  @@map("goods_release_memos")
+}
+
+model GoodsReleaseMemoItem {
+  id            String                  @id @default(uuid()) @db.Uuid
+  memoId        String                  @db.Uuid
+  memo          GoodsReleaseMemo        @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  itemId        String?                 @db.Uuid
+  item          Item?                   @relation(fields: [itemId], references: [id])
+  spbItemId     String?                 @db.Uuid
+  spbItem       SPBItem?                @relation(fields: [spbItemId], references: [id], onDelete: SetNull)
+  itemCode      String?
+  itemName      String
+  itemType      String                  @default("CONSUMABLE") // CONSUMABLE (Sekali Pakai), NON_CONSUMABLE (Alat / Equipment)
+  qtyRequested  Float                   @default(1)
+  qtyIssued     Float                   @default(0)
+  qtyReturned   Float                   @default(0)
+  unit          String                  @default("PCS")
+  notes         String?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  returnDetails GoodsReturnDetailItem[]
+
+  @@map("goods_release_memo_items")
+}
+
+model GoodsReturnRecord {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  memoId              String                  @db.Uuid
+  memo                GoodsReleaseMemo        @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  returnNumber        String                  @unique
+  returnedBy          String
+  returnDate          DateTime                @default(now())
+  notes               String?
+  syncInventoryStatus String                  @default("PENDING") // PENDING, SENT_TO_INVENTORY, ACC_BY_WAREHOUSE, REJECTED_BY_WAREHOUSE
+  warehouseStatus     String                  @default("PENDING_ACC") // PENDING_ACC, APPROVED, REJECTED
+  warehouseApprovedBy String?
+  warehouseApprovedAt DateTime?
+  warehouseNotes      String?
+  createdAt           DateTime                @default(now())
+  items               GoodsReturnDetailItem[]
+
+  @@map("goods_return_records")
+}
+
+model GoodsReturnDetailItem {
+  id             String               @id @default(uuid()) @db.Uuid
+  returnRecordId String               @db.Uuid
+  returnRecord   GoodsReturnRecord    @relation(fields: [returnRecordId], references: [id], onDelete: Cascade)
+  memoItemId     String               @db.Uuid
+  memoItem       GoodsReleaseMemoItem @relation(fields: [memoItemId], references: [id], onDelete: Cascade)
+  qtyReturned    Float
+  condition      String               @default("SURPLUS") // SURPLUS (Sisa Pakai), RETURNED_TOOL (Selesai Alat), DAMAGED (Rusak)
+  notes          String?
+
+  @@map("goods_return_detail_items")
+}
+
+// ============================================================
+// QUALITY CONTROL CHECKPOINTS & NCR (REVISION) SYSTEM
+// ============================================================
+
+model QCItemCheckpoint {
+  id              String            @id @default(uuid()) @db.Uuid
+  projectId       String            @db.Uuid
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  unitId          String            @db.Uuid
+  unit            ConveyorUnit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  
+  itemType        String            // "STRUCTURE" | "MECHANICAL"
+  itemId          String            @db.Uuid
+  stage           String            // "CUTTING", "SETTING", "WELDING", "FINISHING", "PAINTING", "PACKAGING", "FABRICATION"
+  
+  status          String            @default("PENDING") // PENDING, PASS, FAIL, ON_HOLD
+  inspectedBy     String?
+  inspectedAt     DateTime?
+  notes           String?
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  revisions       QCRevision[]
+
+  @@unique([unitId, itemType, itemId, stage])
+  @@map("qc_item_checkpoints")
+}
+
+model QCRevision {
+  id               String            @id @default(uuid()) @db.Uuid
+  projectId        String            @db.Uuid
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  unitId           String?           @db.Uuid
+  unit             ConveyorUnit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  checkpointId     String?           @db.Uuid
+  checkpoint       QCItemCheckpoint? @relation(fields: [checkpointId], references: [id], onDelete: SetNull)
+  
+  revisionType     String            @default("NCR") // "NCR" | "DRAWING_REVISION"
+  level            String            @default("ITEM") // "ITEM" | "UNIT"
+  
+  ncrNumber        String?           @unique
+  ncrCategory      String?           // "DIMENSI", "WELD_QUALITY", "MATERIAL", "ASSEMBLY", "PAINTING", "OTHER"
+  ncrDescription   String?
+  correctiveAction String?
+  resetStage       String?
+
+  drNumber         String?           @unique
+  drawingRef       String?
+  fieldCondition   String?
+  requestedChange  String?
+  revisedDocUrl    String?
+
+  status           String            @default("OPEN") // OPEN, IN_PROGRESS, RESOLVED, CLOSED
+  raisedBy         String
+  raisedAt         DateTime          @default(now())
+  
+  resolvedBy       String?
+  resolvedAt       DateTime?
+  resolvedNotes    String?
+  
+  closedBy         String?
+  closedAt         DateTime?
+  
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@map("qc_revisions")
 }

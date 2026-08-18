@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { DateRangePicker } from "@/components/leads/date-range-picker";
 import { DateRange } from "react-day-picker";
+import { formatJakartaDate } from "@/lib/date-utils";
 import {
   RotateCcw,
   Eye,
@@ -37,7 +38,25 @@ import {
   Truck,
   Package,
   X,
+  MessageSquare,
+  AlertCircle,
+  Clock,
+  Wrench,
+  Plus,
+  FileImage,
+  Printer,
+  Download,
 } from "lucide-react";
+import dynamic from "next/dynamic";
+import { SPBPDFDocument } from "./spb-pdf-document";
+
+const PDFViewer = dynamic(
+  () => import("@react-pdf/renderer").then((mod) => mod.PDFViewer),
+  { ssr: false }
+);
+import { createDocumentUploadUrl, saveDocumentRecord, getSPBImageUrls } from "@/app/actions/documents";
+import { calculateRealProcurementProgress } from "@/lib/procurement-calculator";
+import { parseSPBImageUrls } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -53,10 +72,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { format, differenceInDays } from "date-fns";
+import { id } from "date-fns/locale";
 import {
   updateProjectDivisionStatus,
   handoverToInventory,
   getPurchaseOrders,
+  sendNoteToEngineering,
 } from "@/app/actions/projects";
 import { getSPBHistory, updateSPBItemStatus } from "@/app/actions/spb";
 import { getProjectShipments, getAllShipments } from "@/app/actions/shipping";
@@ -71,6 +92,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { DocumentManagerDialog } from "@/components/document-manager-dialog";
+import { SPBSubstitutionCard } from "./spb-substitution-card";
+import { GoodsMemoDialog } from "@/components/trackers/goods-memo-dialog";
 import {
   Dialog,
   DialogContent,
@@ -82,6 +105,7 @@ import {
 import { ProjectDetailDialog } from "@/components/project-detail-dialog";
 import { ProjectHistoryDialog } from "@/components/project-history-dialog";
 import { CreateSPBDialog } from "@/components/trackers/create-spb-dialog";
+import { CreateSPJDialog } from "@/components/trackers/create-spj-dialog";
 
 const PPIC_STATUSES = [
   {
@@ -95,9 +119,9 @@ const PPIC_STATUSES = [
     color: "bg-blue-500",
   },
   {
-    id: "WAITING_INVENTORY",
-    label: "Waiting Inventory",
-    color: "bg-purple-500",
+    id: "PARTIALLY_ISSUED",
+    label: "Partially Issued",
+    color: "bg-amber-500",
   },
   {
     id: "INVENTORY_READY",
@@ -140,7 +164,7 @@ const getProjectStatusLabel = (status: string) => {
     case "PENDING":
       return "Pending";
     case "WAITING_INVENTORY":
-      return "Waiting Inventory";
+      return "";
     case "IN_PROGRESS":
     case "ON_PROGRESS":
       return "In Progress";
@@ -238,13 +262,29 @@ const getPOStatusColor = (status?: string) => {
 
 const getSpbStatusLabel = (status?: string) => {
   if (!status) return "Disetujui";
-  switch (status.toUpperCase()) {
+  const s = status.toUpperCase();
+  switch (s) {
     case "PENDING_APPROVAL":
       return "Menunggu Persetujuan";
     case "APPROVED":
       return "Disetujui";
     case "REJECTED":
       return "Ditolak";
+    case "COMPLETED":
+    case "ISSUED":
+    case "FULFILLED":
+      return "Completed";
+    case "PARTIALLY_ISSUED":
+    case "PARTIALLY ISSUED":
+      return "Partially Issued";
+    case "PREPARING":
+      return "Sedang Disiapkan";
+    case "PO_PENDING":
+      return "Menunggu PO";
+    case "PO_CREATED":
+      return "PO Dibuat";
+    case "RECEIVED":
+      return "Barang Diterima";
     default:
       return status.replace(/_/g, " ");
   }
@@ -253,11 +293,19 @@ const getSpbStatusLabel = (status?: string) => {
 const getSpbStatusColor = (status?: string) => {
   if (!status)
     return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20";
-  switch (status.toUpperCase()) {
+  const s = status.toUpperCase();
+  switch (s) {
     case "PENDING_APPROVAL":
       return "bg-amber-500/10 text-amber-700 border-amber-500/20 dark:text-amber-400";
     case "APPROVED":
+      return "bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-400";
+    case "COMPLETED":
+    case "ISSUED":
+    case "FULFILLED":
       return "bg-emerald-500/10 text-emerald-700 border-emerald-500/20 dark:text-emerald-450";
+    case "PARTIALLY_ISSUED":
+    case "PARTIALLY ISSUED":
+      return "bg-orange-500/10 text-orange-700 border-orange-500/20 dark:text-orange-400";
     case "REJECTED":
       return "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400";
     default:
@@ -318,7 +366,7 @@ export function PpicTable({
     return () => clearTimeout(timer);
   }, [searchInput]);
   const [activeTab, setActiveTab] = useState<
-    "pipeline" | "spb" | "shipping" | "po"
+    "pipeline" | "spb" | "spj" | "shipping" | "po"
   >("pipeline");
   const [allShipments, setAllShipments] = useState<any[]>([]);
   const [isLoadingAllShipments, setIsLoadingAllShipments] = useState(false);
@@ -336,6 +384,7 @@ export function PpicTable({
   const [detailProject, setDetailProject] = useState<any | null>(null);
   const [historyProject, setHistoryProject] = useState<any | null>(null);
   const [spbProject, setSpbProject] = useState<any | null>(null);
+  const [spjProject, setSpjProject] = useState<any | null>(null);
   const [shippingProject, setShippingProject] = useState<any | null>(null);
   const [shipmentsList, setShipmentsList] = useState<any[]>([]);
   const [isLoadingShipping, setIsLoadingShipping] = useState(false);
@@ -352,7 +401,79 @@ export function PpicTable({
     Record<string, boolean>
   >({});
   const [selectedDetailSpb, setSelectedDetailSpb] = useState<any | null>(null);
+  const [previewSPB, setPreviewSPB] = useState<any | null>(null);
+  const [previewModalImages, setPreviewModalImages] = useState<string[]>([]);
+  const [activeImageIndex, setActiveImageIndex] = useState<number>(0);
   const [spbSearchQuery, setSpbSearchQuery] = useState("");
+  const [noteToEngProject, setNoteToEngProject] = useState<any | null>(null);
+  const [engNoteText, setEngNoteText] = useState("");
+  const [isSendingEngNote, setIsSendingEngNote] = useState(false);
+  const [showEngNotesHistory, setShowEngNotesHistory] = useState(false);
+  const [goodsMemoOpen, setGoodsMemoOpen] = useState(false);
+  const [selectedGoodsMemoProject, setSelectedGoodsMemoProject] = useState<
+    any | undefined
+  >(undefined);
+
+  const handleSendEngNote = async () => {
+    if (!noteToEngProject || !engNoteText.trim()) {
+      toast.error("Silakan isi catatan terlebih dahulu.");
+      return;
+    }
+    setIsSendingEngNote(true);
+    try {
+      const res = await sendNoteToEngineering(noteToEngProject.id, engNoteText);
+      if (res.success) {
+        toast.success("Catatan berhasil dikirim ke Engineering!");
+        setNoteToEngProject(null);
+        setEngNoteText("");
+        router.refresh();
+      } else {
+        toast.error(res.error || "Gagal mengirim catatan");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Terjadi kesalahan");
+    } finally {
+      setIsSendingEngNote(false);
+    }
+  };
+
+  const getTimelineStatus = (expectedDate: string | null) => {
+    if (!expectedDate) return null;
+    const deadline = new Date(expectedDate);
+    const today = new Date();
+    const diff = differenceInDays(deadline, today);
+
+    if (diff < 0) {
+      return (
+        <Badge
+          variant="outline"
+          className="bg-red-500/10 text-red-600 border-red-200 flex items-center gap-1 font-bold text-[10px]"
+        >
+          <AlertCircle className="w-3 h-3" />
+          Delayed ({Math.abs(diff)} days)
+        </Badge>
+      );
+    } else if (diff <= 7) {
+      return (
+        <Badge
+          variant="outline"
+          className="bg-orange-500/10 text-orange-600 border-orange-200 flex items-center gap-1 font-bold text-[10px]"
+        >
+          <Clock className="w-3 h-3 text-orange-600" />
+          Due ({diff} days)
+        </Badge>
+      );
+    }
+    return (
+      <Badge
+        variant="outline"
+        className="bg-green-500/10 text-green-600 border-green-200 flex items-center gap-1 font-bold text-[10px]"
+      >
+        <CheckCircle2 className="w-3 h-3 text-green-600" />
+        {diff} days left
+      </Badge>
+    );
+  };
 
   const findSpbAndOpen = (spbNumberText: string) => {
     let foundSpb: any = null;
@@ -589,51 +710,64 @@ export function PpicTable({
   return (
     <TooltipProvider>
       <div className="space-y-4 relative">
-        <div className="flex items-center gap-1 bg-muted/40 p-1 rounded-xl w-fit border border-border">
-          <button
-            onClick={() => setActiveTab("pipeline")}
-            className={cn(
-              "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
-              activeTab === "pipeline"
-                ? "bg-background text-foreground shadow-xs border border-border"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Approval Pipeline
-          </button>
-          <button
-            onClick={() => setActiveTab("spb")}
-            className={cn(
-              "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
-              activeTab === "spb"
-                ? "bg-background text-foreground shadow-xs border border-border"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Monitoring SPB
-          </button>
-          <button
-            onClick={() => setActiveTab("shipping")}
-            className={cn(
-              "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
-              activeTab === "shipping"
-                ? "bg-background text-foreground shadow-xs border border-border"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Shipping Monitor
-          </button>
-          <button
-            onClick={() => setActiveTab("po")}
-            className={cn(
-              "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
-              activeTab === "po"
-                ? "bg-background text-foreground shadow-xs border border-border"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Monitoring PO
-          </button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-muted/20 p-2 rounded-xl border border-border/40">
+          <div className="flex items-center gap-1 flex-wrap">
+            <button
+              onClick={() => setActiveTab("pipeline")}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
+                activeTab === "pipeline"
+                  ? "bg-background text-foreground shadow-xs border border-border"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Approval Pipeline
+            </button>
+            <button
+              onClick={() => setActiveTab("spb")}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
+                activeTab === "spb"
+                  ? "bg-background text-foreground shadow-xs border border-border"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Monitoring SPB
+            </button>
+            <button
+              onClick={() => setActiveTab("spj")}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5",
+                activeTab === "spj"
+                  ? "bg-background text-emerald-600 shadow-xs border border-border font-bold"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Monitoring SPJ
+            </button>
+            <button
+              onClick={() => setActiveTab("shipping")}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
+                activeTab === "shipping"
+                  ? "bg-background text-foreground shadow-xs border border-border"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Shipping Monitor
+            </button>
+            <button
+              onClick={() => setActiveTab("po")}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer",
+                activeTab === "po"
+                  ? "bg-background text-foreground shadow-xs border border-border"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Monitoring PO
+            </button>
+          </div>
         </div>
         {activeTab === "pipeline" && (
           <>
@@ -848,26 +982,25 @@ export function PpicTable({
                 <Table>
                   <TableHeader className="bg-muted/20 border-b">
                     <TableRow className="border-border hover:bg-transparent text-sm font-bold">
-                      <TableHead className="w-[50px] text-center">
-                        No.
-                      </TableHead>
-                      <TableHead className="min-w-[200px]">
+                      <TableHead className="w-12 text-center">No.</TableHead>
+                      <TableHead className="min-w-50">
                         Project & Customer
                       </TableHead>
-                      <TableHead>Entry Date</TableHead>
-                      <TableHead>Running</TableHead>
-                      <TableHead>Deadline</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Project Status</TableHead>
-                      <TableHead className="text-center">Docs</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead className="w-32">Tanggal Deal</TableHead>
+                      <TableHead className="w-28">Running</TableHead>
+                      <TableHead className="w-36">Deadline</TableHead>
+                      <TableHead className="min-w-55">Project Status</TableHead>
+                      <TableHead className="text-center min-w-44">
+                        Docs
+                      </TableHead>
+                      <TableHead className="text-right w-20">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {projects.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={10}
+                          colSpan={8}
                           className="text-center h-48 text-muted-foreground"
                         >
                           <div className="flex flex-col items-center gap-2 opacity-30">
@@ -880,29 +1013,58 @@ export function PpicTable({
                       </TableRow>
                     ) : (
                       projects.map((project, index) => {
-                        const entryDate =
-                          project.ppicEntryDate || project.createdAt;
-                        const deadline = project.expectedDate
-                          ? new Date(project.expectedDate)
-                          : null;
-                        const today = new Date();
-                        const diff = deadline
-                          ? differenceInDays(deadline, today)
-                          : null;
+                        const dealDate =
+                          project.dealAt ||
+                          project.startDate ||
+                          project.createdAt;
+                        const daysSinceDeal = dealDate
+                          ? differenceInDays(new Date(), new Date(dealDate))
+                          : 0;
 
-                        const getProjectStatus = () => {
-                          const match = PPIC_STATUSES.find(
-                            (s) => s.id === project.ppicStatus,
+                        const masterplanProcPhase =
+                          project?.masterplan?.phases?.find(
+                            (p: any) =>
+                              p.code === "PROCUREMENT" ||
+                              (p.name || "").toUpperCase().includes("PROC") ||
+                              (p.name || "").toUpperCase().includes("PPIC"),
                           );
-                          return (
-                            match || {
-                              label: project.ppicStatus,
-                              color: "bg-slate-400",
-                            }
-                          );
-                        };
 
-                        const currentStatus = getProjectStatus();
+                        const spbCount =
+                          (project.spb || []).length || project.spbCount || 0;
+                        const approvedSpbCount =
+                          (project.spb || []).filter(
+                            (s: any) =>
+                              s.status === "APPROVED" ||
+                              s.status === "APPROVED_PM" ||
+                              s.status === "APPROVED_PPIC" ||
+                              s.approvalStatus === "APPROVED",
+                          ).length ||
+                          project.approvedSpbCount ||
+                          0;
+
+                        const calculatedRealProc = calculateRealProcurementProgress(project);
+                        const procProgress = masterplanProcPhase && masterplanProcPhase.actualProgress > 0
+                          ? Math.round(Number(masterplanProcPhase.actualProgress))
+                          : calculatedRealProc;
+
+                        const projDocs = [
+                          ...(project?.documents || []),
+                          ...(project?.lead?.documents || []),
+                        ];
+                        const docsMap = new Map();
+                        projDocs.forEach((d: any) => {
+                          if (!d) return;
+                          const key =
+                            d.id ||
+                            `${d.category}_${d.fileName || d.name}_${d.version}`;
+                          if (!docsMap.has(key)) docsMap.set(key, d);
+                        });
+                        const uniqueProjDocs = Array.from(docsMap.values());
+
+                        const totalDocCount = uniqueProjDocs.filter(
+                          (d: any) =>
+                            d.category !== "PO" && d.category !== "OFFERING",
+                        ).length;
 
                         return (
                           <TableRow
@@ -937,168 +1099,136 @@ export function PpicTable({
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="flex flex-col gap-1 text-[11px]">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-muted-foreground w-7">
-                                    In:
-                                  </span>
-                                  <span className="font-medium text-foreground">
-                                    {project.ppicEntryDate
-                                      ? format(
-                                          new Date(project.ppicEntryDate),
-                                          "dd MMM yy",
-                                        )
+                              <div className="flex flex-col gap-0.5 text-xs font-medium text-muted-foreground">
+                                <div className="flex items-center gap-1.5 text-foreground font-semibold">
+                                  <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>
+                                    {dealDate
+                                      ? formatJakartaDate(dealDate, "date")
                                       : "-"}
                                   </span>
                                 </div>
-                                {project.ppicCompletedAt && (
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-green-600/80 w-7 font-bold">
-                                      App:
-                                    </span>
-                                    <span className="font-medium text-foreground">
-                                      {format(
-                                        new Date(project.ppicCompletedAt),
-                                        "dd MMM yy",
-                                      )}
-                                    </span>
-                                  </div>
-                                )}
                               </div>
                             </TableCell>
                             <TableCell>
                               <div className="flex flex-col gap-1">
                                 <span className="text-sm font-bold text-primary">
-                                  {differenceInDays(
-                                    new Date(),
-                                    new Date(project.createdAt),
-                                  )}{" "}
-                                  Days
-                                </span>
-                                <span className="text-xs text-muted-foreground font-semibold">
-                                  Since Start
+                                  {daysSinceDeal} Hari
                                 </span>
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                              <div className="flex flex-col gap-1.5">
+                                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                                   <Calendar className="w-3.5 h-3.5 opacity-60" />
                                   <span>
-                                    {deadline
-                                      ? format(deadline, "dd MMM yy")
-                                      : "-"}
+                                    {project.expectedDate
+                                      ? formatJakartaDate(
+                                          project.expectedDate,
+                                          "date",
+                                        )
+                                      : "No Date"}
                                   </span>
                                 </div>
-                                {diff !== null && (
-                                  <span
-                                    className={cn(
-                                      "text-[11px] font-bold",
-                                      diff < 0
-                                        ? "text-red-600"
-                                        : diff <= 7
-                                          ? "text-orange-600"
-                                          : "text-green-600",
-                                    )}
-                                  >
-                                    {diff < 0
-                                      ? `Delayed ${Math.abs(diff)} days`
-                                      : `${diff} days left`}
-                                  </span>
-                                )}
+                                {getTimelineStatus(project.expectedDate)}
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="flex flex-col gap-1">
-                                <div className="flex items-center gap-2">
+                              <div className="flex flex-col gap-1.5 min-w-50">
+                                <div className="flex items-center justify-between text-xs font-semibold">
+                                  <span className="text-muted-foreground">
+                                    Progress Procurement
+                                  </span>
+                                  <span className="text-primary">
+                                    {procProgress}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-muted rounded-full h-2 overflow-hidden border border-border/20">
                                   <div
                                     className={cn(
-                                      "w-2 h-2 rounded-full",
-                                      currentStatus.color,
+                                      "h-full transition-all duration-300",
+                                      procProgress === 100
+                                        ? "bg-emerald-500"
+                                        : procProgress > 0
+                                          ? "bg-primary"
+                                          : "bg-muted-foreground/30",
                                     )}
+                                    style={{ width: `${procProgress}%` }}
                                   />
-                                  <span className="text-sm font-medium">
-                                    {currentStatus.label}
-                                  </span>
                                 </div>
-                                {project.spbCount > 0 && (
-                                  <div className="flex flex-col gap-1 mt-1">
-                                    <span className="text-[11px] font-semibold text-primary bg-primary/5 border border-primary/20 px-1.5 py-0.5 rounded w-max">
-                                      SPB Dibuat: {project.spbCount}
-                                    </span>
-                                    <span
-                                      className={cn(
-                                        "text-[11px] font-semibold px-1.5 py-0.5 rounded w-max border",
-                                        project.approvedSpbCount ===
-                                          project.spbCount
-                                          ? "bg-emerald-500/5 text-emerald-600 border-emerald-500/20"
-                                          : project.approvedSpbCount > 0
-                                            ? "bg-blue-500/5 text-blue-600 border-blue-500/20"
-                                            : "bg-zinc-500/5 text-zinc-500 border-zinc-500/20",
-                                      )}
-                                    >
-                                      SPB Disetujui:{" "}
-                                      {project.approvedSpbCount || 0}
+                                <div className="flex flex-col gap-0.5 mt-0.5 text-[11px] text-muted-foreground font-medium">
+                                  <div className="flex items-center gap-1">
+                                    <Package className="w-3 h-3 text-indigo-500 shrink-0" />
+                                    <span>
+                                      {spbCount > 0
+                                        ? `${spbCount} SPB Dibuat (${approvedSpbCount} Diproses)`
+                                        : "Belum ada SPB"}
                                     </span>
                                   </div>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex flex-col gap-1">
-                                <div>
-                                  <Badge
-                                    variant="outline"
-                                    className={cn(
-                                      "font-medium text-[11px] px-2 py-0.5",
-                                      getProjectStatusColor(
-                                        project.currentStatus ||
-                                          project.status ||
-                                          "PENDING",
-                                      ),
-                                    )}
-                                  >
-                                    {getProjectStatusLabel(
-                                      project.currentStatus ||
-                                        project.status ||
-                                        "PENDING",
-                                    )}
-                                  </Badge>
                                 </div>
-                                {project.currentDivision && (
-                                  <span className="text-[10px] text-muted-foreground font-medium">
-                                    Divisi:{" "}
-                                    {formatDivision(project.currentDivision)}
-                                  </span>
-                                )}
                               </div>
                             </TableCell>
                             <TableCell className="text-center">
-                              <DocumentManagerDialog
-                                ownerId={project.id}
-                                ownerType="PROJECT"
-                                leadId={project.leadId}
-                                globalDriveUrl={project.globalDriveUrl}
-                                onUploadSuccess={() => router.refresh()}
-                                trigger={
+                              <div className="flex items-center justify-center gap-2 flex-wrap">
+                                {/* 1. Document Hub */}
+                                <div className="relative inline-flex">
+                                  <DocumentManagerDialog
+                                    ownerId={project.id}
+                                    ownerType="PROJECT"
+                                    leadId={project.leadId}
+                                    globalDriveUrl={project.globalDriveUrl}
+                                    onUploadSuccess={() => router.refresh()}
+                                    trigger={
+                                      <Button
+                                        variant="outline"
+                                        size="xs"
+                                        className="h-7 px-2 text-[11px] gap-1 bg-purple-500/10 text-purple-700 hover:bg-purple-500/20 border-purple-200 cursor-pointer"
+                                        title="Buka Document Hub Proyek"
+                                      >
+                                        <FolderOpen className="w-3 h-3 text-purple-600" />
+                                        Doc Hub
+                                      </Button>
+                                    }
+                                  />
+                                  <span className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-purple-600 text-[9px] font-black text-white px-1 shadow-2xs pointer-events-none ring-1 ring-background">
+                                    {totalDocCount}
+                                  </span>
+                                </div>
+
+                                {/* 2. SPB Shortcut */}
+                                <div className="relative inline-flex">
                                   <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="relative h-8 px-2 gap-2 cursor-pointer transition-all border border-transparent"
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={() => setSpbProject(project)}
+                                    className="h-7 px-2 text-[11px] gap-1 bg-indigo-500/10 text-indigo-700 hover:bg-indigo-500/20 border-indigo-200 cursor-pointer"
+                                    title="Buat / Kelola SPB"
                                   >
-                                    <FolderOpen className="w-3.5 h-3.5 text-primary" />
-                                    <span className="text-xs font-medium">
-                                      {project.documentCount || 0}
-                                    </span>
-                                    {project.hasRevisedDocs && (
-                                      <span className="absolute top-0 right-0 -mt-1 flex h-3 w-3">
-                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                        <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border-2 border-background"></span>
-                                      </span>
-                                    )}
+                                    <FileText className="w-3 h-3 text-indigo-600" />
+                                    SPB
                                   </Button>
-                                }
-                              />
+                                  <span className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 text-[9px] font-black text-white px-1 shadow-2xs pointer-events-none ring-1 ring-background">
+                                    {spbCount}
+                                  </span>
+                                </div>
+
+                                {/* 3. SPJ Shortcut */}
+                                <div className="relative inline-flex">
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={() => setSpjProject(project)}
+                                    className="h-7 px-2 text-[11px] gap-1 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 border-emerald-200 cursor-pointer"
+                                    title="Buat / Kelola SPJ (Jasa)"
+                                  >
+                                    <Wrench className="w-3 h-3 text-emerald-600" />
+                                    SPJ
+                                  </Button>
+                                  <span className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-black text-white px-1 shadow-2xs pointer-events-none ring-1 ring-background">
+                                    {project.spj?.length || 0}
+                                  </span>
+                                </div>
+                              </div>
                             </TableCell>
                             <TableCell className="text-right">
                               <DropdownMenu>
@@ -1136,6 +1266,13 @@ export function PpicTable({
                                     >
                                       <FileText className="w-4 h-4 mr-2" />{" "}
                                       Create SPB
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="text-xs font-semibold text-emerald-600 focus:text-emerald-700 focus:bg-emerald-50 cursor-pointer"
+                                      onClick={() => setSpjProject(project)}
+                                    >
+                                      <Wrench className="w-4 h-4 mr-2" /> Create
+                                      SPJ
                                     </DropdownMenuItem>
                                     {project.currentDivision === "PPIC" &&
                                       project.ppicStatus !==
@@ -1185,25 +1322,27 @@ export function PpicTable({
                                       </DropdownMenuItem>
                                     )}
                                     <DropdownMenuSeparator />
-                                    {/* REJECTION / REVISION */}
                                     <DropdownMenuItem
-                                      className="text-xs font-medium text-red-600 cursor-pointer"
+                                      className="text-xs font-semibold text-emerald-700 focus:text-emerald-800 focus:bg-emerald-50 cursor-pointer"
                                       onClick={() => {
-                                        setConfirmDialog({
-                                          show: true,
-                                          projectId: project.id,
-                                          status: "REVISION",
-                                          division: "ENGINEERING",
-                                          notes: "PPIC: Returned for Revision",
-                                          title: "Return to Engineering",
-                                          description:
-                                            "Are you sure you want to return this project to Engineering for revision?",
-                                          type: "return",
-                                        });
+                                        setSelectedGoodsMemoProject(project);
+                                        setGoodsMemoOpen(true);
                                       }}
                                     >
-                                      <RotateCcw className="w-4 h-4 mr-2" />{" "}
-                                      Return to Engineering
+                                      <FileText className="w-4 h-4 mr-2 text-emerald-600" />{" "}
+                                      Memo Pengeluaran Barang
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    {/* SEND NOTE TO ENGINEERING */}
+                                    <DropdownMenuItem
+                                      className="text-xs font-medium text-indigo-600 focus:text-indigo-700 focus:bg-indigo-50 cursor-pointer"
+                                      onClick={() => {
+                                        setNoteToEngProject(project);
+                                        setEngNoteText("");
+                                      }}
+                                    >
+                                      <MessageSquare className="w-4 h-4 mr-2" />{" "}
+                                      Berikan Catatan untuk Engineering
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
                                       className="text-xs font-medium text-primary cursor-pointer"
@@ -1308,14 +1447,14 @@ export function PpicTable({
               <Table>
                 <TableHeader className="bg-muted/20 border-b">
                   <TableRow className="border-border hover:bg-transparent text-sm font-bold">
-                    <TableHead className="w-[50px] text-center">No.</TableHead>
+                    <TableHead className="w-12.5 text-center">No.</TableHead>
                     <TableHead>No. Surat Jalan</TableHead>
                     <TableHead>Proyek</TableHead>
                     <TableHead>Rencana Kirim</TableHead>
                     <TableHead>Tujuan</TableHead>
                     <TableHead>Metode</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="w-[60px] text-right">Aksi</TableHead>
+                    <TableHead className="w-15 text-right">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1368,7 +1507,7 @@ export function PpicTable({
                           )}
                         </TableCell>
                         <TableCell
-                          className="text-xs text-muted-foreground max-w-[200px] truncate"
+                          className="text-xs text-muted-foreground max-w-50 truncate"
                           title={shipment.destination}
                         >
                           {shipment.destination}
@@ -1921,14 +2060,33 @@ export function PpicTable({
                     // Calculate totals & progress across all SPBs for this project
                     let totalItems = 0;
                     let completedItems = 0;
+                    let hasPartiallyIssued = false;
+                    let hasCompleted = false;
+
                     project.spb.forEach((s: any) => {
+                      const st = (s.status || "").toUpperCase();
+                      if (st === "PARTIALLY_ISSUED" || st === "PARTIALLY ISSUED") {
+                        hasPartiallyIssued = true;
+                      }
+                      if (st === "COMPLETED" || st === "FULFILLED" || st === "ISSUED") {
+                        hasCompleted = true;
+                      }
                       s.items.forEach((it: any) => {
                         totalItems++;
+                        const itSt = (it.status || "").toUpperCase();
                         if (
-                          it.status === "FULFILLED" ||
-                          it.status === "RECEIVED"
+                          itSt === "FULFILLED" ||
+                          itSt === "RECEIVED" ||
+                          itSt === "COMPLETED" ||
+                          itSt === "ISSUED"
                         ) {
                           completedItems++;
+                        } else if (
+                          itSt === "PARTIALLY_ISSUED" ||
+                          itSt === "PARTIALLY ISSUED" ||
+                          (it.issuedQty && Number(it.issuedQty) > 0)
+                        ) {
+                          hasPartiallyIssued = true;
                         }
                       });
                     });
@@ -1937,6 +2095,17 @@ export function PpicTable({
                       totalItems > 0
                         ? Math.round((completedItems / totalItems) * 100)
                         : 0;
+
+                    let projectSpbStatusLabel = "";
+                    let projectSpbStatusColor = "";
+
+                    if (totalItems > 0 && completedItems === totalItems) {
+                      projectSpbStatusLabel = "Completed";
+                      projectSpbStatusColor = "bg-emerald-500/10 text-emerald-600 border-emerald-200";
+                    } else if (project.status && project.status !== "WAITING_INVENTORY") {
+                      projectSpbStatusLabel = getProjectStatusLabel(project.status);
+                      projectSpbStatusColor = getProjectStatusColor(project.status);
+                    }
 
                     return (
                       <div
@@ -1969,14 +2138,6 @@ export function PpicTable({
                               <h3 className="text-xs font-bold text-foreground">
                                 {project.projectName}
                               </h3>
-                              <Badge
-                                className={cn(
-                                  "text-xs font-semibold rounded-full shadow-none border",
-                                  getProjectStatusColor(project.status),
-                                )}
-                              >
-                                {getProjectStatusLabel(project.status)}
-                              </Badge>
                             </div>
                             <p className="text-xs text-muted-foreground font-semibold mt-1">
                               Customer: {project.customer?.name || "-"}
@@ -2024,7 +2185,13 @@ export function PpicTable({
                         {/* Accordion Content (SPB Documents list) */}
                         {isExpanded && (
                           <div className="border-t border-border/50 bg-muted/5 p-4 space-y-3 animate-in fade-in duration-200">
-                            {project.spb.map((spb: any) => {
+                            {[...(project.spb || [])]
+                              .sort(
+                                (a: any, b: any) =>
+                                  new Date(b.createdAt || b.date).getTime() -
+                                  new Date(a.createdAt || a.date).getTime(),
+                              )
+                              .map((spb: any) => {
                               const totalSpbItems = spb.items.length;
                               const completedSpbItems = spb.items.filter(
                                 (it: any) =>
@@ -2047,57 +2214,278 @@ export function PpicTable({
                                       <h4 className="text-xs font-bold text-foreground truncate">
                                         {spb.spbNumber}
                                       </h4>
-                                      <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">
-                                        Tanggal:{" "}
-                                        {format(
-                                          new Date(spb.date),
-                                          "dd MMM yyyy",
+                                      <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                        <p className="text-[10px] text-muted-foreground font-semibold">
+                                          Tanggal:{" "}
+                                          {format(
+                                            new Date(spb.date),
+                                            "dd MMM yyyy",
+                                          )}
+                                        </p>
+                                        {spb.deadlineDate && (
+                                          <span className="text-[10px] text-red-500 font-bold">
+                                            • Tenggat: {formatJakartaDate(spb.deadlineDate, "date")}
+                                          </span>
                                         )}
-                                      </p>
+                                      </div>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    {spb.status === "REJECTED" &&
-                                      spb.rejectedReason && (
-                                        <span
-                                          className="text-[10px] text-red-500 font-semibold italic max-w-[120px] truncate"
-                                          title={spb.rejectedReason}
-                                        >
-                                          Alasan: {spb.rejectedReason}
-                                        </span>
-                                      )}
-                                    <Badge
-                                      className={cn(
-                                        "text-[10px] font-semibold rounded-lg border-none shadow-none px-2 py-0.5",
-                                        getSpbStatusColor(spb.status),
-                                      )}
-                                    >
-                                      {getSpbStatusLabel(spb.status)}
-                                    </Badge>
-                                    <Badge
-                                      className={cn(
-                                        "text-[10px] font-semibold rounded-lg border-none shadow-none px-2 py-0.5",
-                                        isSpbCompleted
-                                          ? "bg-emerald-500/10 text-emerald-600"
-                                          : "bg-orange-500/10 text-orange-600",
-                                      )}
-                                    >
-                                      {completedSpbItems}/{totalSpbItems} Item
-                                      Diproses
-                                    </Badge>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => setSelectedDetailSpb(spb)}
-                                      className="h-7 text-xs font-semibold px-2.5 gap-1 cursor-pointer border-border/80 hover:bg-orange-500/5 hover:text-orange-600 hover:border-orange-500/20 rounded-lg shadow-none"
-                                    >
-                                      <Eye className="w-3 h-3" /> Detail
-                                    </Button>
+                                  <div className="flex items-center gap-3 shrink-0">
+                                    {/* Status Badges Stacked Vertically */}
+                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                      {spb.status === "REJECTED" &&
+                                        spb.rejectedReason && (
+                                          <span
+                                            className="text-[10px] text-red-500 font-semibold italic max-w-30 truncate"
+                                            title={spb.rejectedReason}
+                                          >
+                                            Alasan: {spb.rejectedReason}
+                                          </span>
+                                        )}
+                                      <Badge
+                                        className={cn(
+                                          "text-[10px] font-semibold rounded-lg border-none shadow-none px-2 py-0.5",
+                                          getSpbStatusColor(spb.status),
+                                        )}
+                                      >
+                                        {getSpbStatusLabel(spb.status)}
+                                      </Badge>
+                                      <Badge
+                                        className={cn(
+                                          "text-[10px] font-semibold rounded-lg border-none shadow-none px-2 py-0.5",
+                                          isSpbCompleted
+                                            ? "bg-emerald-500/10 text-emerald-600"
+                                            : "bg-orange-500/10 text-orange-600",
+                                        )}
+                                      >
+                                        {completedSpbItems}/{totalSpbItems} Item Diproses
+                                      </Badge>
+                                    </div>
+
+                                    {/* Action Buttons Stacked Vertically & Smaller */}
+                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                      {spb.imageUrl && (() => {
+                                        const parsedUrls = parseSPBImageUrls(spb.imageUrl);
+                                        const count = parsedUrls.length;
+                                        return (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={async () => {
+                                              const res = await getSPBImageUrls(spb.imageUrl);
+                                              if (res.success && res.urls && res.urls.length > 0) {
+                                                setPreviewModalImages(res.urls);
+                                                setActiveImageIndex(0);
+                                              } else {
+                                                toast.error(res.error || "Gagal memuat foto lampiran");
+                                              }
+                                            }}
+                                            className="h-6 text-[10px] font-bold px-2 gap-1 border-primary/30 text-primary hover:bg-primary/10 rounded-md shadow-none cursor-pointer"
+                                          >
+                                            <FileImage className="w-3 h-3" /> Lihat Foto {count > 1 ? `(${count})` : ""}
+                                          </Button>
+                                        );
+                                      })()}
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setSelectedDetailSpb(spb)}
+                                        className="h-6 text-[10px] font-bold px-2 gap-1 cursor-pointer border-border/80 hover:bg-orange-500/5 hover:text-orange-600 hover:border-orange-500/20 rounded-md shadow-none"
+                                      >
+                                        <Eye className="w-3 h-3" /> Detail
+                                      </Button>
+                                    </div>
                                   </div>
                                 </div>
                               );
                             })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        {/* SECTION TAB: MONITORING SPJ (JASA) */}
+        {activeTab === "spj" && (
+          <div className="space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-1 md:max-w-md">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="search"
+                    placeholder="Cari Proyek, No SPJ, atau Item Jasa..."
+                    className="pl-9 w-full shadow-none bg-background rounded-md border-border h-9 text-sm"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Project accordion list for SPJ */}
+            {(() => {
+              const spjProjects = projects.filter((project) => {
+                if (!project.spj || project.spj.length === 0) return false;
+
+                const q = searchInput.toLowerCase();
+                return (
+                  project.projectName.toLowerCase().includes(q) ||
+                  (project.projectNumber || "").toLowerCase().includes(q) ||
+                  (project.customer?.name || "").toLowerCase().includes(q) ||
+                  project.spj.some(
+                    (s: any) =>
+                      s.spjNumber.toLowerCase().includes(q) ||
+                      s.items.some((it: any) =>
+                        it.name.toLowerCase().includes(q),
+                      ),
+                  )
+                );
+              });
+
+              if (spjProjects.length === 0) {
+                return (
+                  <div className="text-center h-48 border border-dashed border-border/60 rounded-2xl bg-muted/5 flex flex-col items-center justify-center text-muted-foreground space-y-2">
+                    <Wrench className="w-10 h-10 text-emerald-600/40" />
+                    <p className="text-sm font-semibold text-foreground">
+                      Belum ada Surat Permintaan Jasa (SPJ)
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Buka via menu Aksi Proyek untuk mengajukan pekerjaan jasa.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-3">
+                  {spjProjects.map((project, idx) => {
+                    const isExpanded = !!expandedProjects[`spj_${project.id}`];
+
+                    let totalJasa = 0;
+                    project.spj.forEach((s: any) => {
+                      totalJasa += s.items?.length || 0;
+                    });
+
+                    return (
+                      <div
+                        key={project.id}
+                        className={cn(
+                          "border border-border/60 rounded-2xl bg-card overflow-hidden transition-all",
+                          isExpanded
+                            ? "shadow-md ring-1 ring-emerald-500/20"
+                            : "shadow-xs hover:border-emerald-500/30",
+                        )}
+                      >
+                        {/* Project Header */}
+                        <div
+                          className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-muted/5 transition-colors select-none"
+                          onClick={() => {
+                            setExpandedProjects((prev) => ({
+                              ...prev,
+                              [`spj_${project.id}`]: !prev[`spj_${project.id}`],
+                            }));
+                          }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-foreground mr-1">
+                                #{idx + 1}
+                              </span>
+                              <span className="text-xs font-semibold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                {project.projectNumber || "-"}
+                              </span>
+                              <h3 className="text-xs font-bold text-foreground">
+                                {project.projectName}
+                              </h3>
+                              <Badge
+                                variant="outline"
+                                className="text-xs font-bold"
+                              >
+                                {project.spj.length} SPJ ({totalJasa} Item Jasa)
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-muted-foreground font-semibold mt-1">
+                              Customer: {project.customer?.name || "-"}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSpjProject(project);
+                              }}
+                              className="h-8 px-3 text-xs font-bold text-emerald-600 border-emerald-500/30 hover:bg-emerald-50 cursor-pointer flex items-center gap-1 rounded-xl"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Buat SPJ Proyek
+                              Ini
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground shrink-0 rounded-lg"
+                            >
+                              {isExpanded ? (
+                                <ChevronUp className="w-4 h-4" />
+                              ) : (
+                                <ChevronDown className="w-4 h-4" />
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Accordion Content (SPJ Documents list) */}
+                        {isExpanded && (
+                          <div className="border-t border-border/50 bg-muted/5 p-4 space-y-3">
+                            {project.spj.map((spj: any) => (
+                              <div
+                                key={spj.id}
+                                className="flex items-center justify-between gap-4 p-3.5 border border-border/40 rounded-xl bg-background hover:border-emerald-500/30 transition-colors shadow-none flex-wrap sm:flex-nowrap"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="h-9 w-9 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 border border-emerald-500/20 shrink-0">
+                                    <Wrench className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <h4 className="text-xs font-bold text-emerald-600 truncate">
+                                      {spj.spjNumber}
+                                    </h4>
+                                    <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">
+                                      Tanggal:{" "}
+                                      {format(
+                                        new Date(spj.createdAt || spj.date),
+                                        "dd MMM yyyy HH:mm",
+                                        { locale: id },
+                                      )}{" "}
+                                      • Pengaju: {spj.makerName || "User"}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-none font-bold text-[10px]">
+                                    {spj.items?.length || 0} Item Jasa
+                                  </Badge>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setSpjProject(project)}
+                                    className="h-8 text-xs font-bold px-3 gap-1 cursor-pointer border-emerald-500/30 text-emerald-600 hover:bg-emerald-50 rounded-xl"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" /> Kelola /
+                                    Print SPJ
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
@@ -2118,7 +2506,7 @@ export function PpicTable({
             }
           }}
         >
-          <DialogContent className="sm:max-w-[900px] max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border shadow-2xl">
+          <DialogContent className="sm:max-w-225 max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border shadow-2xl">
             <DialogHeader className="p-6 pb-4 shrink-0 border-b border-border/50">
               <div className="flex items-center justify-between w-full pr-6">
                 <div className="flex items-center gap-3">
@@ -2129,14 +2517,51 @@ export function PpicTable({
                     <DialogTitle className="text-base font-bold text-foreground">
                       {selectedDetailSpb?.spbNumber}
                     </DialogTitle>
-                    <DialogDescription className="text-xs text-muted-foreground font-medium mt-0.5">
-                      Tanggal Dibuat:{" "}
-                      {selectedDetailSpb &&
-                        format(
-                          new Date(selectedDetailSpb.date),
-                          "dd MMMM yyyy",
-                        )}
-                    </DialogDescription>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <DialogDescription className="text-xs text-muted-foreground font-medium">
+                        Tanggal Dibuat:{" "}
+                        {selectedDetailSpb &&
+                          format(
+                            new Date(selectedDetailSpb.date),
+                            "dd MMMM yyyy",
+                          )}
+                      </DialogDescription>
+                      {selectedDetailSpb?.deadlineDate && (
+                        <span className="text-[11px] text-red-500 font-bold">
+                          • Tenggat: {formatJakartaDate(selectedDetailSpb.deadlineDate, "date")}
+                        </span>
+                      )}
+                      {selectedDetailSpb?.imageUrl && (() => {
+                        const parsedUrls = parseSPBImageUrls(selectedDetailSpb.imageUrl);
+                        const count = parsedUrls.length;
+                        return (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              const res = await getSPBImageUrls(selectedDetailSpb.imageUrl);
+                              if (res.success && res.urls && res.urls.length > 0) {
+                                setPreviewModalImages(res.urls);
+                                setActiveImageIndex(0);
+                              } else {
+                                toast.error(res.error || "Gagal memuat foto lampiran");
+                              }
+                            }}
+                            className="h-7 text-xs font-semibold px-2.5 gap-1 border-primary/30 text-primary hover:bg-primary/10 rounded-lg shadow-none cursor-pointer"
+                          >
+                            <FileImage className="w-3 h-3" /> Lihat Foto {count > 1 ? `(${count})` : ""}
+                          </Button>
+                        );
+                      })()}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPreviewSPB(selectedDetailSpb)}
+                        className="h-7 text-xs font-semibold px-2.5 gap-1 border-primary/30 text-primary hover:bg-primary hover:text-white rounded-lg shadow-none cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5" /> Cetak PDF
+                      </Button>
+                    </div>
                     {selectedDetailSpb?.status === "REJECTED" &&
                       selectedDetailSpb.rejectedReason && (
                         <div className="text-xs text-red-500 font-semibold mt-1">
@@ -2188,7 +2613,7 @@ export function PpicTable({
                   <thead>
                     <tr className="bg-muted/30 text-xs font-semibold text-muted-foreground border-b border-border/30">
                       <th className="px-4 py-3 w-12 text-center">No</th>
-                      <th className="px-4 py-3 w-[120px]">Kode Barang</th>
+                      <th className="px-4 py-3 w-30">Kode Barang</th>
                       <th className="px-4 py-3">Nama Barang</th>
                       <th className="px-4 py-3 text-center w-24">Kuantitas</th>
                       <th className="px-4 py-3 text-center w-24">Sumber</th>
@@ -2325,7 +2750,7 @@ export function PpicTable({
             }
           }}
         >
-          <DialogContent className="sm:max-w-[850px] max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border shadow-2xl">
+          <DialogContent className="sm:max-w-212.5 max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border shadow-2xl">
             <DialogHeader className="p-6 pb-4 shrink-0 border-b border-border/50">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -2612,10 +3037,10 @@ export function PpicTable({
         >
           <DialogContent
             className={cn(
-              "sm:max-w-[600px]",
+              "sm:max-w-150",
               confirmDialog?.type === "handover" &&
                 confirmDialog?.division === "PRODUCTION" &&
-                "sm:max-w-[600px]",
+                "sm:max-w-150",
             )}
           >
             <DialogHeader>
@@ -2642,7 +3067,7 @@ export function PpicTable({
                   placeholder="Masukkan alasan pengembalian untuk revisi..."
                   value={revisionNotes}
                   onChange={(e) => setRevisionNotes(e.target.value)}
-                  className="text-xs min-h-[80px]"
+                  className="text-xs min-h-20"
                   required
                 />
               </div>
@@ -2669,7 +3094,7 @@ export function PpicTable({
                       </p>
                     </div>
                   ) : (
-                    <div className="max-h-[160px] overflow-y-auto border border-border/40 rounded-xl p-2.5 bg-muted/10 space-y-3">
+                    <div className="max-h-40 overflow-y-auto border border-border/40 rounded-xl p-2.5 bg-muted/10 space-y-3">
                       {dialogSpbList.map((spb) => (
                         <div
                           key={spb.dbId}
@@ -2704,16 +3129,19 @@ export function PpicTable({
                               };
 
                               const getStatusLabel = (status: string) => {
-                                const s = status.toUpperCase();
+                                const s = (status || "").toUpperCase();
                                 switch (s) {
                                   case "PENDING":
                                     return "Menunggu Verifikasi";
                                   case "APPROVED":
-                                    return "Disetujui Gudang";
+                                    return "Disetujui PPIC";
                                   case "PREPARING":
                                     return "Sedang Disiapkan";
                                   case "FULFILLED":
                                     return "Sudah Dikeluarkan";
+                                  case "COMPLETED":
+                                  case "ISSUED":
+                                    return "Selesai";
                                   case "WAITING_PO":
                                     return "Menunggu PO";
                                   case "PO_CREATED":
@@ -2723,6 +3151,7 @@ export function PpicTable({
                                   case "REJECTED":
                                     return "Ditolak";
                                   case "PARTIALLY_ISSUED":
+                                  case "PARTIALLY ISSUED":
                                     return "Diproses Sebagian";
                                   default:
                                     return status;
@@ -2739,7 +3168,7 @@ export function PpicTable({
                                   </span>
                                   <span
                                     className={cn(
-                                      "px-1.5 py-0.5 rounded-[4px] text-[9px] font-black border",
+                                      "px-1.5 py-0.5 rounded-lg text-[9px] font-black border",
                                       getStatusStyle(item.status),
                                     )}
                                   >
@@ -2862,12 +3291,17 @@ export function PpicTable({
           open={!!spbProject}
           onOpenChange={(open) => !open && setSpbProject(null)}
         />
+        <CreateSPJDialog
+          project={spjProject}
+          open={!!spjProject}
+          onOpenChange={(open) => !open && setSpjProject(null)}
+        />
         {/* Dialog Monitoring Shipping Eksekusi */}
         <Dialog
           open={!!shippingProject}
           onOpenChange={(open) => !open && setShippingProject(null)}
         >
-          <DialogContent className="sm:max-w-[550px] max-h-[85vh] flex flex-col">
+          <DialogContent className="sm:max-w-137.5 max-h-[85vh] flex flex-col">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-foreground">
                 <Truck className="w-5 h-5 text-blue-600" />
@@ -3088,7 +3522,7 @@ export function PpicTable({
           open={!!spbMonitorProject}
           onOpenChange={(open) => !open && setSpbMonitorProject(null)}
         >
-          <DialogContent className="sm:max-w-[650px] max-h-[85vh] flex flex-col p-0 overflow-hidden">
+          <DialogContent className="sm:max-w-162.5 max-h-[85vh] flex flex-col p-0 overflow-hidden">
             <DialogHeader className="p-6 pb-2 shrink-0">
               <DialogTitle className="flex items-center gap-2 text-foreground text-lg font-bold">
                 <ClipboardCheck className="w-5 h-5 text-orange-600 shrink-0" />
@@ -3130,7 +3564,12 @@ export function PpicTable({
                         totalItems++;
                         if (
                           it.status === "FULFILLED" ||
-                          it.status === "RECEIVED"
+                          it.status === "RECEIVED" ||
+                          it.status === "ISSUED" ||
+                          it.status === "COMPLETED" ||
+                          it.status === "PARTIALLY_ISSUED" ||
+                          it.status === "PARTIALLY ISSUED" ||
+                          (it.issuedQty && Number(it.issuedQty) > 0)
                         ) {
                           processedItems++;
                         }
@@ -3198,7 +3637,13 @@ export function PpicTable({
                     {spbMonitorHistory.map((spb) => {
                       const spbProcessed = spb.items.filter(
                         (it: any) =>
-                          it.status === "FULFILLED" || it.status === "RECEIVED",
+                          it.status === "FULFILLED" ||
+                          it.status === "RECEIVED" ||
+                          it.status === "ISSUED" ||
+                          it.status === "COMPLETED" ||
+                          it.status === "PARTIALLY_ISSUED" ||
+                          it.status === "PARTIALLY ISSUED" ||
+                          (it.issuedQty && Number(it.issuedQty) > 0),
                       ).length;
                       const spbTotal = spb.items.length;
                       const isAll = spbProcessed === spbTotal;
@@ -3379,6 +3824,7 @@ export function PpicTable({
                                                 Catatan: {it.note}
                                               </p>
                                             )}
+                                            <SPBSubstitutionCard item={it} />
                                           </div>
                                         </td>
                                         <td className="px-4 py-3 text-center font-bold text-primary">
@@ -3440,7 +3886,7 @@ export function PpicTable({
           open={!!detailShipment}
           onOpenChange={(open) => !open && setDetailShipment(null)}
         >
-          <DialogContent className="sm:max-w-[550px] max-h-[85vh] flex flex-col">
+          <DialogContent className="sm:max-w-137.5 max-h-[85vh] flex flex-col">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-foreground">
                 <Truck className="w-5 h-5 text-blue-600" />
@@ -3607,7 +4053,7 @@ export function PpicTable({
                                   {pkg.code}
                                 </TableCell>
                                 <TableCell
-                                  className="font-medium max-w-[120px] truncate"
+                                  className="font-medium max-w-30 truncate"
                                   title={pkg.itemName}
                                 >
                                   {pkg.itemName}
@@ -3652,6 +4098,327 @@ export function PpicTable({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {/* Dialog Catatan untuk Engineering */}
+        <Dialog
+          open={!!noteToEngProject}
+          onOpenChange={(open) => !open && setNoteToEngProject(null)}
+        >
+          <DialogContent className="max-w-xl! p-6 rounded-2xl">
+            <DialogHeader>
+              <DialogTitle className="text-base font-bold flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-indigo-600" />
+                Catatan untuk Engineering
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Kirim catatan atau instruksi khusus untuk tim Engineering
+                mengenai proyek{" "}
+                <span className="font-semibold text-foreground">
+                  {noteToEngProject?.projectName}
+                </span>
+                .
+              </DialogDescription>
+            </DialogHeader>
+
+            {(() => {
+              const pastEngNotes = (noteToEngProject?.history || []).filter(
+                (h: any) => {
+                  const act = (h.action || "").toLowerCase();
+                  const remark = (h.remark || "").toLowerCase();
+                  const notes = (h.notes || "").toLowerCase();
+                  return (
+                    act.includes("catatan dari ppic") ||
+                    remark.includes("ppic note") ||
+                    (h.division === "ENGINEERING" && notes.length > 0)
+                  );
+                },
+              );
+
+              return (
+                <div className="space-y-4 py-2">
+                  {/* Button trigger for past notes dialog */}
+                  {pastEngNotes.length > 0 && (
+                    <div className="flex items-center justify-between bg-indigo-50/60 border border-indigo-200/80 rounded-xl p-3">
+                      <div className="flex items-center gap-2.5">
+                        <History className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <div className="text-xs">
+                          <span className="font-semibold text-foreground block">
+                            Terdapat {pastEngNotes.length} catatan sebelumnya
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            Lihat rekam jejak catatan PPIC untuk Engineering
+                          </span>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        type="button"
+                        onClick={() => setShowEngNotesHistory(true)}
+                        className="h-7 px-2.5 text-xs gap-1 border-indigo-300 text-indigo-700 hover:bg-indigo-100 cursor-pointer font-semibold shrink-0"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        Lihat Catatan ({pastEngNotes.length})
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Input New Note */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-foreground">
+                      {pastEngNotes.length > 0
+                        ? "Tambah Catatan Baru"
+                        : "Isi Catatan / Feedback"}
+                    </label>
+                    <Textarea
+                      placeholder="Ketik catatan perbaikan drawing, spesifikasi material, atau revisi yang diperlukan..."
+                      rows={4}
+                      value={engNoteText}
+                      onChange={(e) => setEngNoteText(e.target.value)}
+                      className="text-xs resize-none"
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setNoteToEngProject(null)}
+                disabled={isSendingEngNote}
+              >
+                Batal
+              </Button>
+              <Button
+                size="sm"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white gap-1.5 cursor-pointer"
+                onClick={handleSendEngNote}
+                disabled={isSendingEngNote || !engNoteText.trim()}
+              >
+                {isSendingEngNote ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <MessageSquare className="w-4 h-4" />
+                )}
+                Kirim Catatan
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        {/* Modal Dialog khusus Riwayat Catatan PPIC */}
+        <Dialog
+          open={showEngNotesHistory}
+          onOpenChange={setShowEngNotesHistory}
+        >
+          <DialogContent className="max-w-xl! p-6 rounded-2xl">
+            <DialogHeader>
+              <DialogTitle className="text-base font-bold flex items-center gap-2">
+                <History className="w-5 h-5 text-indigo-600" />
+                Riwayat Catatan PPIC
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Daftar catatan kronologis untuk proyek{" "}
+                <span className="font-semibold text-foreground">
+                  {noteToEngProject?.projectName}
+                </span>
+                .
+              </DialogDescription>
+            </DialogHeader>
+
+            {(() => {
+              const pastEngNotes = (noteToEngProject?.history || []).filter(
+                (h: any) => {
+                  const act = (h.action || "").toLowerCase();
+                  const remark = (h.remark || "").toLowerCase();
+                  const notes = (h.notes || "").toLowerCase();
+                  return (
+                    act.includes("catatan dari ppic") ||
+                    remark.includes("ppic note") ||
+                    (h.division === "ENGINEERING" && notes.length > 0)
+                  );
+                },
+              );
+
+              return (
+                <div className="max-h-72 overflow-y-auto space-y-2.5 py-2 pr-1">
+                  {pastEngNotes.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-4">
+                      Belum ada riwayat catatan sebelumnya.
+                    </p>
+                  ) : (
+                    pastEngNotes.map((item: any, idx: number) => (
+                      <div
+                        key={item.id || idx}
+                        className="p-3 rounded-xl bg-muted/20 border border-border/50 space-y-1.5 shadow-2xs"
+                      >
+                        <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium">
+                          <span className="font-bold text-foreground flex items-center gap-1">
+                            <MessageSquare className="w-3 h-3 text-indigo-500" />
+                            {item.updatedBy || "PPIC"}
+                          </span>
+                          <span>
+                            {item.createdAt || item.entryDate
+                              ? format(
+                                  new Date(item.createdAt || item.entryDate),
+                                  "dd MMM yyyy, HH:mm",
+                                )
+                              : "-"}
+                          </span>
+                        </div>
+                        <p className="text-foreground text-xs whitespace-pre-wrap leading-relaxed">
+                          {(item.notes || "")
+                            .replace(
+                              /\.?\s*Engineering KPI diselesaikan\.?/gi,
+                              "",
+                            )
+                            .trim()}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              );
+            })()}
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowEngNotesHistory(false)}
+                className="cursor-pointer"
+              >
+                Tutup
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        {/* IMAGE PREVIEW DIALOG */}
+        <Dialog
+          open={previewModalImages.length > 0}
+          onOpenChange={(open) => !open && setPreviewModalImages([])}
+        >
+          <DialogContent className="w-[95vw] sm:max-w-3xl rounded-2xl p-4 sm:p-6 flex flex-col items-center">
+            <DialogHeader className="w-full flex flex-row items-center justify-between">
+              <DialogTitle className="text-sm sm:text-base font-bold text-primary flex items-center gap-2">
+                <FileImage className="w-5 h-5 text-primary" /> Lampiran Foto SPB{" "}
+                {previewModalImages.length > 1
+                  ? `(${activeImageIndex + 1}/${previewModalImages.length})`
+                  : ""}
+              </DialogTitle>
+            </DialogHeader>
+            {previewModalImages.length > 0 && (
+              <div className="w-full flex flex-col items-center my-2 space-y-3">
+                <div className="w-full max-h-[65vh] flex items-center justify-center overflow-hidden rounded-xl border border-border/50 bg-black/5 p-2 relative group">
+                  <img
+                    src={previewModalImages[activeImageIndex]}
+                    alt={`Lampiran SPB ${activeImageIndex + 1}`}
+                    className="max-w-full max-h-[60vh] object-contain rounded-lg shadow-md"
+                  />
+
+                  {previewModalImages.length > 1 && (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="icon"
+                        onClick={() =>
+                          setActiveImageIndex((prev) =>
+                            prev > 0 ? prev - 1 : previewModalImages.length - 1,
+                          )
+                        }
+                        className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full opacity-80 hover:opacity-100 shadow-md h-9 w-9 cursor-pointer"
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </Button>
+
+                      <Button
+                        variant="secondary"
+                        size="icon"
+                        onClick={() =>
+                          setActiveImageIndex((prev) =>
+                            prev < previewModalImages.length - 1 ? prev + 1 : 0,
+                          )
+                        }
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full opacity-80 hover:opacity-100 shadow-md h-9 w-9 cursor-pointer"
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+
+                {/* Thumbnail Selector */}
+                {previewModalImages.length > 1 && (
+                  <div className="flex items-center gap-2 max-w-full overflow-x-auto p-1">
+                    {previewModalImages.map((url, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setActiveImageIndex(idx)}
+                        className={`w-12 h-12 rounded-lg overflow-hidden border-2 transition-all cursor-pointer shrink-0 ${
+                          activeImageIndex === idx
+                            ? "border-primary ring-2 ring-primary/30"
+                            : "border-transparent opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <img
+                          src={url}
+                          alt={`Thumb ${idx + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* SPB PDF PREVIEW DIALOG */}
+        <Dialog
+          open={!!previewSPB}
+          onOpenChange={(open) => !open && setPreviewSPB(null)}
+        >
+          <DialogContent className="max-w-4xl! h-[90vh] flex flex-col p-6 rounded-2xl bg-zinc-950 border border-zinc-800 text-white">
+            <DialogHeader className="flex-none">
+              <DialogTitle className="text-base font-bold text-white">
+                Pratinjau Cetak SPB
+              </DialogTitle>
+              <DialogDescription className="text-zinc-400 text-xs">
+                Pratinjau dokumen PDF Surat Permintaan Barang (
+                {previewSPB?.spbNumber || previewSPB?.id || "-"}).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex-1 w-full overflow-hidden rounded-xl bg-zinc-900 border border-zinc-800 mt-4 relative">
+              {previewSPB && typeof window !== "undefined" && (
+                <PDFViewer
+                  width="100%"
+                  height="100%"
+                  showToolbar={true}
+                  className="border-0"
+                >
+                  <SPBPDFDocument spb={previewSPB} project={previewSPB?.project || selectedGoodsMemoProject || {}} />
+                </PDFViewer>
+              )}
+            </div>
+            <DialogFooter className="mt-4 flex-none">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPreviewSPB(null)}
+                className="cursor-pointer font-semibold rounded-lg bg-transparent text-white border-zinc-700 hover:bg-zinc-800 hover:text-white"
+              >
+                Tutup
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <GoodsMemoDialog
+          open={goodsMemoOpen}
+          onOpenChange={setGoodsMemoOpen}
+          project={selectedGoodsMemoProject}
+        />
       </div>
     </TooltipProvider>
   );

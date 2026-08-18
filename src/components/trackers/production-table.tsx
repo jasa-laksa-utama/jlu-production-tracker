@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useTransition, useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import {
   Table,
   TableBody,
@@ -16,15 +17,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { formatJakartaDate } from "@/lib/date-utils";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Search,
+  Eye,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
   ChevronUp,
   Plus,
-  Play,
+  Download,
   CheckCircle2,
   AlertCircle,
   AlertTriangle,
@@ -33,6 +36,7 @@ import {
   History,
   MoreHorizontal,
   Settings,
+  Play,
   Users,
   User,
   Hammer,
@@ -48,6 +52,12 @@ import {
   Trash2,
   X,
   Pencil,
+  Calendar,
+  TrendingUp,
+  Percent,
+  BarChart3,
+  Settings2,
+  Check,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -70,18 +80,50 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { format, differenceInDays } from "date-fns";
 import { ProjectDetailDialog } from "@/components/project-detail-dialog";
 import { ProjectHistoryDialog } from "@/components/project-history-dialog";
 import { DocumentManagerDialog } from "@/components/document-manager-dialog";
+import { GoodsMemoDialog } from "@/components/trackers/goods-memo-dialog";
 import { requestDrawingRevision } from "@/app/actions/projects";
+import { getDocumentDownloadUrl } from "@/app/actions/documents";
+import { calcProjectDivisionKPIs } from "@/lib/kpi-calculator";
+
+import { BoQPDFDocument } from "./boq-pdf-document";
+import { SPBPDFDocument } from "./spb-pdf-document";
+
+const PDFViewer = dynamic(
+  () => import("@react-pdf/renderer").then((m) => m.PDFViewer),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-125 w-full flex flex-col items-center justify-center text-muted-foreground gap-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <span className="text-sm font-semibold">Memuat PDF Viewer...</span>
+      </div>
+    ),
+  },
+);
 
 // New Conveyor Masterplan components
 import { MasterplanSetup } from "./masterplan-setup";
 import { SCurveChart } from "./s-curve-chart";
+import { MasterScheduleTable } from "./master-schedule-table";
 import { StructureProgressTable } from "./structure-progress-table";
 import { MechanicalProgressTable } from "./mechanical-progress-table";
 import { SummaryProgressTable } from "./summary-progress-table";
+import {
+  ProductionRevisionQuickDialog,
+  getProjectActiveRevisions,
+} from "./production-revision-quick-dialog";
+import { ShieldAlert } from "lucide-react";
 
 // Import real backend server actions
 import {
@@ -94,7 +136,10 @@ import {
   renameComponent,
   includeComponentStage,
 } from "@/app/actions/production";
-import { addConveyorUnitAfter } from "@/app/actions/conveyor-progress";
+import {
+  addConveyorUnitAfter,
+  updatePhaseProgressDirect,
+} from "@/app/actions/conveyor-progress";
 
 export const STAGE_STEPS: Record<string, string[]> = {
   Fabrikasi: ["Cutting", "Assembly", "Welding"],
@@ -211,7 +256,7 @@ const getProjectStatusLabel = (status: string) => {
     case "PENDING":
       return "Pending";
     case "WAITING_INVENTORY":
-      return "Waiting Inventory";
+      return "";
     case "IN_PROGRESS":
     case "ON_PROGRESS":
       return "In Progress";
@@ -306,22 +351,77 @@ export function ProductionTable({
 
   // New Conveyor Masterplan view states
   const [conveyorTabs, setConveyorTabs] = useState<Record<string, string>>({});
-  const [setupMasterplanProjectId, setSetupMasterplanProjectId] = useState<string | null>(null);
+  const [setupMasterplanProjectId, setSetupMasterplanProjectId] = useState<
+    string | null
+  >(null);
+
+  // Production Log filter & pagination state
+  const [logFilterCategory, setLogFilterCategory] = useState<
+    Record<string, "ALL" | "UPDATE" | "MEMO">
+  >({});
+  const [logCurrentPages, setLogCurrentPages] = useState<
+    Record<string, number>
+  >({});
 
   // Add unit after setup states
   const [addUnitProjectId, setAddUnitProjectId] = useState<string | null>(null);
   const [addUnitName, setAddUnitName] = useState("");
-  const [addUnitType, setAddUnitType] = useState<"BOTH" | "STRUCTURE" | "MECHANICAL">("BOTH");
-  const [addUnitSatuan, setAddUnitSatuan] = useState("unit");
+  const [addUnitType, setAddUnitType] = useState<
+    "BOTH" | "STRUCTURE" | "MECHANICAL"
+  >("BOTH");
+  const [addUnitSatuan, setAddUnitSatuan] = useState("set");
   const [addUnitVolume, setAddUnitVolume] = useState(1);
-  const [addUnitStructureItems, setAddUnitStructureItems] = useState("");
-  const [addUnitMechanicalItems, setAddUnitMechanicalItems] = useState("");
+  const [addUnitStructureItems, setAddUnitStructureItems] = useState<
+    Array<{ name: string; qty: number | string; satuan: string }>
+  >([{ name: "", qty: 1, satuan: "set" }]);
+  const [goodsMemoOpen, setGoodsMemoOpen] = useState(false);
+  const [selectedGoodsMemoProject, setSelectedGoodsMemoProject] = useState<
+    any | undefined
+  >(undefined);
+  const [addUnitMechanicalItems, setAddUnitMechanicalItems] = useState<
+    Array<{ name: string; qty: number | string; satuan: string }>
+  >([{ name: "", qty: 1, satuan: "set" }]);
   const [isAddingUnitPending, startAddingUnitTransition] = useTransition();
 
   // Revision request states
   const [revisionProject, setRevisionProject] = useState<any | null>(null);
   const [revisionNotes, setRevisionNotes] = useState("");
   const [isPendingRevision, startRevisionTransition] = useTransition();
+
+  // Quick Revision Summary Dialog state
+  const [selectedRevisionSummaryProject, setSelectedRevisionSummaryProject] =
+    useState<any | null>(null);
+
+  // Edit Masterplan Phase progress modal states
+  const [editPhaseModal, setEditPhaseModal] = useState<{
+    phaseId: string;
+    phaseName: string;
+    currentProgress: number;
+    code?: string;
+  } | null>(null);
+  const [editPhaseValue, setEditPhaseValue] = useState<number>(0);
+  const [editPhaseNotes, setEditPhaseNotes] = useState<string>("");
+  const [isUpdatingPhase, startUpdatingPhaseTransition] = useTransition();
+
+  const handleSavePhaseProgress = () => {
+    if (!editPhaseModal) return;
+    startUpdatingPhaseTransition(async () => {
+      const res = await updatePhaseProgressDirect(
+        editPhaseModal.phaseId,
+        editPhaseValue,
+        editPhaseNotes,
+      );
+      if (res.success) {
+        toast.success(
+          `Progress tahapan "${editPhaseModal.phaseName}" berhasil diperbarui ke ${editPhaseValue}%.`,
+        );
+        setEditPhaseModal(null);
+        router.refresh();
+      } else {
+        toast.error(res.error || "Gagal memperbarui progress tahapan.");
+      }
+    });
+  };
 
   // Setup form states
   const [drawingApproved, setDrawingApproved] = useState(false);
@@ -388,6 +488,19 @@ export function ProductionTable({
   const [isComponentPending, startComponentTransition] = useTransition();
   const [stageSubSteps, setStageSubSteps] = useState<any[]>([]);
   const [finishingWarning, setFinishingWarning] = useState<string | null>(null);
+
+  // PDF Preview states
+  const [previewPdfType, setPreviewPdfType] = useState<"BOQ" | "SPB" | null>(
+    null,
+  );
+  const [previewPdfData, setPreviewPdfData] = useState<any>(null);
+
+  // Details list states (BoQ & SPB DB records detail modal)
+  const [viewingDetailType, setViewingDetailType] = useState<
+    "BOQ" | "SPB" | null
+  >(null);
+  const [viewingDetailData, setViewingDetailData] = useState<any>(null);
+  const [detailSearchQuery, setDetailSearchQuery] = useState("");
 
   const totalPages = meta?.totalPages || 1;
   const pageSize = currentLimit;
@@ -531,22 +644,84 @@ export function ProductionTable({
     }
     if (!addUnitProjectId) return;
 
+    // Validate structure items
+    if (addUnitType === "BOTH" || addUnitType === "STRUCTURE") {
+      for (const item of addUnitStructureItems) {
+        if (
+          item.name.trim() !== "" &&
+          (item.qty === ("" as any) ||
+            item.qty === null ||
+            item.qty === undefined ||
+            isNaN(Number(item.qty)) ||
+            Number(item.qty) <= 0)
+        ) {
+          toast.error(
+            `Jumlah (Qty) untuk "${item.name}" tidak boleh kosong atau 0!`,
+          );
+          return;
+        }
+      }
+    }
+
+    // Validate mechanical items
+    if (addUnitType === "BOTH" || addUnitType === "MECHANICAL") {
+      for (const item of addUnitMechanicalItems) {
+        if (
+          item.name.trim() !== "" &&
+          (item.qty === ("" as any) ||
+            item.qty === null ||
+            item.qty === undefined ||
+            isNaN(Number(item.qty)) ||
+            Number(item.qty) <= 0)
+        ) {
+          toast.error(
+            `Jumlah (Qty) untuk "${item.name}" tidak boleh kosong atau 0!`,
+          );
+          return;
+        }
+      }
+    }
+
     startAddingUnitTransition(async () => {
       const structureList = addUnitStructureItems
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+        .filter((item) => item.name.trim().length > 0)
+        .map((item) => ({
+          name: item.name.trim(),
+          qty: Number(item.qty) || 1,
+          satuan: (item.satuan || "unit").trim(),
+        }));
+
+      if (
+        structureList.length === 0 &&
+        (addUnitType === "BOTH" || addUnitType === "STRUCTURE")
+      ) {
+        structureList.push({ name: "Rangka Utama", qty: 1, satuan: "unit" });
+      }
 
       const mechanicalList = addUnitMechanicalItems
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+        .filter((item) => item.name.trim().length > 0)
+        .map((item) => ({
+          name: item.name.trim(),
+          qty: Number(item.qty) || 1,
+          satuan: (item.satuan || "unit").trim(),
+        }));
+
+      if (
+        mechanicalList.length === 0 &&
+        (addUnitType === "BOTH" || addUnitType === "MECHANICAL")
+      ) {
+        mechanicalList.push({
+          name: "Komponen Mekanik",
+          qty: 1,
+          satuan: "unit",
+        });
+      }
 
       const res = await addConveyorUnitAfter(addUnitProjectId, {
         name: addUnitName,
         unitType: addUnitType,
-        satuan: addUnitSatuan,
-        volume: addUnitVolume,
+        satuan: addUnitSatuan || "unit",
+        volume: Number(addUnitVolume) || 1,
         structureItems: structureList,
         mechanicalItems: mechanicalList,
       });
@@ -558,8 +733,8 @@ export function ProductionTable({
         setAddUnitType("BOTH");
         setAddUnitSatuan("unit");
         setAddUnitVolume(1);
-        setAddUnitStructureItems("");
-        setAddUnitMechanicalItems("");
+        setAddUnitStructureItems([{ name: "", qty: 1, satuan: "unit" }]);
+        setAddUnitMechanicalItems([{ name: "", qty: 1, satuan: "unit" }]);
         router.refresh();
       } else {
         toast.error(res.error || "Gagal menambahkan unit conveyor");
@@ -749,7 +924,9 @@ export function ProductionTable({
         setConfirmIncludeStageData(null);
         router.refresh();
       } else {
-        toast.error(res.error || "Gagal mengaktifkan kembali tahapan komponen.");
+        toast.error(
+          res.error || "Gagal mengaktifkan kembali tahapan komponen.",
+        );
       }
     });
   };
@@ -809,6 +986,16 @@ export function ProductionTable({
 
   // Average progress calculate helper
   const getOverallProgress = (project: any): number => {
+    if (project.masterplan?.phases && project.masterplan.phases.length > 0) {
+      return Math.round(
+        project.masterplan.phases.reduce((sum: number, phase: any) => {
+          const weight = Number(phase.weightPercent || 0);
+          const progress = Number(phase.actualProgress || 0);
+          return sum + (progress * weight) / 100;
+        }, 0),
+      );
+    }
+
     if (
       project.prodStatus === "PENDING" ||
       !project.productionStages ||
@@ -841,6 +1028,23 @@ export function ProductionTable({
     );
   };
 
+  const handleDownloadDoc = async (doc: any) => {
+    try {
+      if (doc.isExternal) {
+        window.open(doc.url, "_blank");
+      } else {
+        const { success, url, error } = await getDocumentDownloadUrl(doc.id);
+        if (success && url) {
+          window.open(url, "_blank");
+        } else {
+          toast.error(error || "Gagal membuka file.");
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Gagal mengunduh berkas");
+    }
+  };
+
   // Get active stages based on IN_PROGRESS or PAUSED status, or partial progress
   const getActiveStages = (
     project: any,
@@ -870,12 +1074,23 @@ export function ProductionTable({
   // Get progress for Fabrikasi, Machining, Mechanical, Finishing OR masterplan phases
   const getStageAverageProgress = (
     project: any,
-  ): { name: string; progress: number }[] => {
+  ): {
+    id?: string;
+    code?: string;
+    name: string;
+    weightPercent?: number;
+    progress: number;
+  }[] => {
     // If project has masterplan, use dynamic phases
     if (project.masterplan?.phases && project.masterplan.phases.length > 0) {
-      const sortedPhases = [...project.masterplan.phases].sort((a, b) => a.orderIndex - b.orderIndex);
+      const sortedPhases = [...project.masterplan.phases].sort(
+        (a, b) => a.orderIndex - b.orderIndex,
+      );
       return sortedPhases.map((phase: any) => ({
+        id: phase.id,
+        code: phase.code,
         name: phase.name,
+        weightPercent: Number(phase.weightPercent || 0),
         progress: Math.round(phase.actualProgress || 0),
       }));
     }
@@ -902,7 +1117,6 @@ export function ProductionTable({
       return { name, progress: avg };
     });
   };
-
   return (
     <div className="space-y-6">
       {/* Filter & Search Controls */}
@@ -967,7 +1181,6 @@ export function ProductionTable({
                   ))}
                 </div>
               </div>
-
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-muted-foreground">
                   Urutan
@@ -1077,20 +1290,22 @@ export function ProductionTable({
         <Table>
           <TableHeader className="bg-muted/20 border-b border-border/80">
             <TableRow className="border-border hover:bg-transparent text-sm font-bold">
-              <TableHead className="w-[50px] text-center font-medium">
+              <TableHead className="w-12.5 text-center font-medium">
                 No.
               </TableHead>
-              <TableHead className="min-w-[200px] font-medium">
+              <TableHead className="min-w-50 font-medium">
                 Project & Customer
               </TableHead>
-              <TableHead className="font-medium">Timeline</TableHead>
-              <TableHead className="font-medium">Status Produksi</TableHead>
-              <TableHead className="font-medium">Project Status</TableHead>
-              <TableHead className="font-medium">Progress Produksi</TableHead>
+              <TableHead className="font-medium">Tanggal Deal</TableHead>
+              <TableHead className="font-medium">Running</TableHead>
+              <TableHead className="font-medium">Deadline</TableHead>
+              <TableHead className="font-medium">
+                Status & Progress Produksi
+              </TableHead>
               <TableHead className="font-medium text-center">
                 Document Hub
               </TableHead>
-              <TableHead className="w-[80px] text-right font-medium">
+              <TableHead className="w-20 text-right font-medium">
                 Aksi
               </TableHead>
             </TableRow>
@@ -1113,9 +1328,14 @@ export function ProductionTable({
             ) : (
               projects.map((project, index) => {
                 const isExpanded = !!expandedRows[project.id];
-                const totalRunningDays = project.startDate
-                  ? differenceInDays(new Date(), new Date(project.startDate))
+                const dealDate =
+                  project.dealAt || project.startDate || project.createdAt;
+                const totalRunningDays = dealDate
+                  ? differenceInDays(new Date(), new Date(dealDate))
                   : 0;
+                const daysLeft = project.expectedDate
+                  ? differenceInDays(new Date(project.expectedDate), new Date())
+                  : null;
 
                 const isHandoverAllowed = isHandoverToQCAllowed(project);
 
@@ -1153,6 +1373,28 @@ export function ProductionTable({
                                 Revisi Drawing
                               </Badge>
                             )}
+                            {(() => {
+                              const activeQcRevisions =
+                                getProjectActiveRevisions(project).length;
+
+                              if (activeQcRevisions > 0) {
+                                return (
+                                  <Badge
+                                    variant="outline"
+                                    onClick={() =>
+                                      setSelectedRevisionSummaryProject(project)
+                                    }
+                                    className="bg-red-500/10 text-red-600 border-red-300 font-bold text-[10px] px-2 py-0.5 animate-pulse shrink-0 gap-1 cursor-pointer hover:bg-red-500/20 transition-colors"
+                                    title="Klik untuk melihat Ringkasan Revisi QC"
+                                  >
+                                    <span>
+                                      ⚠️ {activeQcRevisions} Revisi QC
+                                    </span>
+                                  </Badge>
+                                );
+                              }
+                              return null;
+                            })()}
                           </div>
                           <div className="flex items-center gap-2 text-[11px] text-muted-foreground mt-0.5">
                             <span className="font-semibold text-foreground/70">
@@ -1168,181 +1410,215 @@ export function ProductionTable({
                           </div>
                         </div>
                       </TableCell>
+                      {/* Tanggal Deal */}
                       <TableCell onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => setTimelineProject(project)}
-                          className="flex flex-col text-left hover:text-primary transition-colors cursor-pointer group/timeline border-none bg-transparent"
-                        >
-                          <span className="text-xs font-bold text-primary flex items-center gap-1.5">
-                            <Clock className="w-3.5 h-3.5 text-primary shrink-0 group-hover/timeline:animate-pulse" />
-                            {totalRunningDays} Hari
-                          </span>
-                          <span className="text-[10px] text-muted-foreground mt-0.5">
-                            Deadline:{" "}
-                            {project.expectedDate
-                              ? format(
-                                  new Date(project.expectedDate),
-                                  "dd MMM yy",
-                                )
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-foreground whitespace-nowrap">
+                          <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>
+                            {dealDate
+                              ? formatJakartaDate(dealDate, "date")
                               : "-"}
                           </span>
-                        </button>
-                      </TableCell>
-                      <TableCell onClick={(e) => e.stopPropagation()}>
-                        <div className="flex flex-wrap gap-1.5 max-w-[150px]">
-                          {project.prodStatus === "PENDING" ? (
-                            <Badge
-                              variant="outline"
-                              className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
-                            >
-                              <AlertCircle className="w-3 h-3" /> Menunggu
-                              Persiapan
-                            </Badge>
-                          ) : project.prodStatus === "DONE" ? (
-                            <Badge
-                              variant="outline"
-                              className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
-                            >
-                              <CheckCircle2 className="w-3 h-3" />{" "}
-                              {project.qcStatus === "APPROVED" ||
-                              (project.productionStages &&
-                                project.productionStages.length > 0 &&
-                                project.productionStages.every(
-                                  (s: any) => s.qcStatus === "APPROVED",
-                                ))
-                                ? "Lolos QC (Selesai)"
-                                : "Selesai Produksi"}
-                            </Badge>
-                          ) : (
-                            (() => {
-                              const activeStages = getActiveStages(project);
-                              const avgProgress = getOverallProgress(project);
-                              if (avgProgress === 100) {
-                                return (
-                                  <Badge
-                                    variant="outline"
-                                    className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
-                                  >
-                                    <CheckCircle2 className="w-3 h-3" />{" "}
-                                    {project.qcStatus === "APPROVED" ||
-                                    (project.productionStages &&
-                                      project.productionStages.length > 0 &&
-                                      project.productionStages.every(
-                                        (s: any) => s.qcStatus === "APPROVED",
-                                      ))
-                                      ? "Lolos QC (Selesai)"
-                                      : "Selesai Produksi"}
-                                  </Badge>
-                                );
-                              }
-                              if (activeStages.length === 0) {
-                                return (
-                                  <Badge
-                                    variant="outline"
-                                    className="bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
-                                  >
-                                    <Clock className="w-3 h-3" /> Persiapan
-                                  </Badge>
-                                );
-                              }
-                              return activeStages.map((actStage) => {
-                                const stageName = actStage.name;
-                                const isRevision =
-                                  actStage.status === "REVISION";
-                                let icon = <Layers className="w-3 h-3" />;
-                                let colorClass =
-                                  "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-200/50";
-                                if (isRevision) {
-                                  icon = (
-                                    <AlertTriangle className="w-3 h-3 text-red-500 animate-bounce" />
-                                  );
-                                  colorClass =
-                                    "bg-red-500/10 text-red-600 dark:text-red-400 border-red-200/50 font-extrabold animate-pulse";
-                                } else if (stageName === "Fabrikasi") {
-                                  icon = <Hammer className="w-3 h-3" />;
-                                  colorClass =
-                                    "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-200/50";
-                                } else if (stageName === "Machining") {
-                                  icon = <Settings className="w-3 h-3" />;
-                                  colorClass =
-                                    "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-200/50";
-                                } else if (stageName === "Mechanical") {
-                                  icon = <Wrench className="w-3 h-3" />;
-                                  colorClass =
-                                    "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-200/50";
-                                } else if (stageName === "Finishing") {
-                                  icon = <Paintbrush className="w-3 h-3" />;
-                                  colorClass =
-                                    "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-200/50";
-                                }
-                                return (
-                                  <Badge
-                                    key={stageName}
-                                    variant="outline"
-                                    className={cn(
-                                      "font-bold text-[10px] flex items-center gap-1 w-fit",
-                                      colorClass,
-                                    )}
-                                  >
-                                    {icon} {stageName}{" "}
-                                    {isRevision && "(REVISI)"}
-                                  </Badge>
-                                );
-                              });
-                            })()
-                          )}
                         </div>
                       </TableCell>
+                      {/* Running Duration */}
                       <TableCell onClick={(e) => e.stopPropagation()}>
-                        <div className="flex flex-col gap-1">
-                          <div>
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "font-medium text-[11px] px-2 py-0.5",
-                                getProjectStatusColor(
-                                  project.currentStatus ||
-                                    project.status ||
-                                    "PENDING",
-                                ),
-                              )}
-                            >
-                              {getProjectStatusLabel(
-                                project.currentStatus ||
-                                  project.status ||
-                                  "PENDING",
-                              )}
-                            </Badge>
-                          </div>
-                          {project.currentDivision && (
-                            <span className="text-[10px] text-muted-foreground font-medium">
-                              Divisi: {formatDivision(project.currentDivision)}
+                        <span className="text-sm font-black text-orange-600 dark:text-orange-400 whitespace-nowrap">
+                          {totalRunningDays} Hari
+                        </span>
+                      </TableCell>
+                      {/* Deadline & Remaining Days Badge */}
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-col gap-1 text-xs whitespace-nowrap">
+                          <div className="flex items-center gap-1.5 text-muted-foreground font-medium">
+                            <Calendar className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
+                            <span>
+                              {project.expectedDate
+                                ? formatJakartaDate(
+                                    project.expectedDate,
+                                    "date",
+                                  )
+                                : "-"}
                             </span>
+                          </div>
+                          {project.expectedDate && daysLeft !== null && (
+                            <div>
+                              {daysLeft > 0 ? (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[10px] px-2 py-0.5 font-bold flex items-center gap-1 w-fit rounded-full"
+                                >
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  {daysLeft} days left
+                                </Badge>
+                              ) : daysLeft === 0 ? (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] px-2 py-0.5 font-bold flex items-center gap-1 w-fit rounded-full"
+                                >
+                                  <Clock className="w-3 h-3 text-amber-600" />
+                                  Hari Ini
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30 text-[10px] px-2 py-0.5 font-bold flex items-center gap-1 w-fit rounded-full"
+                                >
+                                  <AlertCircle className="w-3 h-3 text-red-600" />
+                                  Telat {Math.abs(daysLeft)} Hari
+                                </Badge>
+                              )}
+                            </div>
                           )}
                         </div>
                       </TableCell>
-                      <TableCell>
-                        {project.prodStatus === "PENDING" ? (
-                          <span className="text-xs text-muted-foreground font-medium">
-                            -
-                          </span>
-                        ) : (
-                          <div className="flex flex-col gap-1 text-[11px] min-w-[180px] max-w-[220px]">
-                            {getStageAverageProgress(project).map((sa) => (
-                              <div
-                                key={sa.name}
-                                className="flex items-center justify-between gap-3 border-b border-border/20 pb-0.5"
-                              >
-                                <span className="text-muted-foreground font-medium text-left truncate max-w-[170px]" title={sa.name}>
-                                  {sa.name}
+                      {/* Combined Status & Progress Produksi */}
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-col gap-2 min-w-44 max-w-56">
+                          {/* Progress Bar & Percentage */}
+                          {project.prodStatus !== "PENDING" && (
+                            <div className="flex flex-col gap-1 mt-1">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-extrabold text-foreground">
+                                  {getOverallProgress(project)}%
                                 </span>
-                                <span className="font-bold text-foreground font-mono shrink-0">
-                                  {sa.progress}%
+                                <span className="text-[10px] text-muted-foreground font-semibold">
+                                  Actual Progress
                                 </span>
                               </div>
-                            ))}
+                              <div className="w-full bg-muted dark:bg-muted/40 rounded-full h-1.5 overflow-hidden border border-border/20">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-all duration-300",
+                                    getOverallProgress(project) === 100
+                                      ? "bg-emerald-500"
+                                      : getOverallProgress(project) > 0
+                                        ? "bg-primary"
+                                        : "bg-muted-foreground/30",
+                                  )}
+                                  style={{
+                                    width: `${getOverallProgress(project)}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-1.5">
+                            {project.prodStatus === "PENDING" ? (
+                              <Badge
+                                variant="outline"
+                                className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
+                              >
+                                <AlertCircle className="w-3 h-3" /> Menunggu
+                                Persiapan
+                              </Badge>
+                            ) : project.prodStatus === "DONE" ? (
+                              <Badge
+                                variant="outline"
+                                className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
+                              >
+                                <CheckCircle2 className="w-3 h-3" />{" "}
+                                {project.qcStatus === "APPROVED" ||
+                                (project.productionStages &&
+                                  project.productionStages.length > 0 &&
+                                  project.productionStages.every(
+                                    (s: any) => s.qcStatus === "APPROVED",
+                                  ))
+                                  ? "Lolos QC (Selesai)"
+                                  : "Selesai Produksi"}
+                              </Badge>
+                            ) : (
+                              (() => {
+                                const activeStages = getActiveStages(project);
+                                const avgProgress = getOverallProgress(project);
+                                if (avgProgress === 100) {
+                                  return (
+                                    <Badge
+                                      variant="outline"
+                                      className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
+                                    >
+                                      <CheckCircle2 className="w-3 h-3" />{" "}
+                                      {project.qcStatus === "APPROVED" ||
+                                      (project.productionStages &&
+                                        project.productionStages.length > 0 &&
+                                        project.productionStages.every(
+                                          (s: any) => s.qcStatus === "APPROVED",
+                                        ))
+                                        ? "Lolos QC (Selesai)"
+                                        : "Selesai Produksi"}
+                                    </Badge>
+                                  );
+                                }
+                                if (activeStages.length === 0) {
+                                  if (avgProgress > 0) {
+                                    return (
+                                      <Badge
+                                        variant="outline"
+                                        className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
+                                      >
+                                        <Hammer className="w-3 h-3" /> Dalam
+                                        Proses Produksi
+                                      </Badge>
+                                    );
+                                  }
+                                  return (
+                                    <Badge
+                                      variant="outline"
+                                      className="bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-200/50 font-bold text-[10px] flex items-center gap-1 w-fit"
+                                    >
+                                      <Clock className="w-3 h-3" /> Persiapan
+                                    </Badge>
+                                  );
+                                }
+                                return activeStages.map((actStage) => {
+                                  const stageName = actStage.name;
+                                  const isRevision =
+                                    actStage.status === "REVISION";
+                                  let icon = <Layers className="w-3 h-3" />;
+                                  let colorClass =
+                                    "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-200/50";
+                                  if (isRevision) {
+                                    icon = (
+                                      <AlertTriangle className="w-3 h-3 text-red-500 animate-bounce" />
+                                    );
+                                    colorClass =
+                                      "bg-red-500/10 text-red-600 dark:text-red-400 border-red-200/50 font-extrabold animate-pulse";
+                                  } else if (stageName === "Fabrikasi") {
+                                    icon = <Hammer className="w-3 h-3" />;
+                                    colorClass =
+                                      "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-200/50";
+                                  } else if (stageName === "Machining") {
+                                    icon = <Settings className="w-3 h-3" />;
+                                    colorClass =
+                                      "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-200/50";
+                                  } else if (stageName === "Mechanical") {
+                                    icon = <Wrench className="w-3 h-3" />;
+                                    colorClass =
+                                      "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-200/50";
+                                  } else if (stageName === "Finishing") {
+                                    icon = <Paintbrush className="w-3 h-3" />;
+                                    colorClass =
+                                      "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-200/50";
+                                  }
+                                  return (
+                                    <Badge
+                                      key={stageName}
+                                      variant="outline"
+                                      className={cn(
+                                        "font-bold text-[10px] flex items-center gap-1 w-fit",
+                                        colorClass,
+                                      )}
+                                    >
+                                      {icon} {stageName}{" "}
+                                      {isRevision && "(REVISI)"}
+                                    </Badge>
+                                  );
+                                });
+                              })()
+                            )}
                           </div>
-                        )}
+                        </div>
                       </TableCell>
                       <TableCell
                         className="text-center"
@@ -1355,9 +1631,7 @@ export function ProductionTable({
                           categories={[
                             "BRIEF",
                             "DRAWING",
-                            "BOQ",
                             "MECH_PART_LIST",
-                            "SPB",
                             "PRODUCTION",
                             "QC",
                             "OTHER",
@@ -1468,110 +1742,1174 @@ export function ProductionTable({
                     {/* Expandable Section: Production Stages Progress */}
                     {isExpanded && (
                       <TableRow className="bg-muted/10 border-t-0 hover:bg-muted/10">
-                        <TableCell colSpan={8} className="p-0">
-                          <div className="p-6 border-t border-border/40 bg-muted/20 animate-in fade-in duration-300 slide-in-from-top-2">
+                        <TableCell
+                          colSpan={8}
+                          className="p-0 max-w-0 w-full overflow-hidden"
+                        >
+                          <div className="p-6 border-t border-border/40 bg-muted/20 w-full max-w-full overflow-x-hidden space-y-6 animate-in fade-in duration-300 slide-in-from-top-2">
                             {setupMasterplanProjectId === project.id ? (
                               <div className="space-y-4 w-full">
                                 <div className="flex justify-between items-center bg-card p-4 rounded-xl border border-border/80 shadow-xs">
-                                  <span className="text-xs font-bold text-muted-foreground">Setup Masterplan Mode</span>
+                                  <span className="text-xs font-bold text-muted-foreground">
+                                    Setup Masterplan Mode
+                                  </span>
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => setSetupMasterplanProjectId(null)}
+                                    onClick={() =>
+                                      setSetupMasterplanProjectId(null)
+                                    }
                                     className="h-8 text-xs font-semibold px-3 rounded-lg hover:bg-destructive/5 text-destructive cursor-pointer"
                                   >
                                     Batalkan Setup
                                   </Button>
                                 </div>
-                                <MasterplanSetup project={project} onSuccess={() => { setSetupMasterplanProjectId(null); router.refresh(); }} />
+                                <MasterplanSetup
+                                  project={project}
+                                  onSuccess={() => {
+                                    setSetupMasterplanProjectId(null);
+                                    router.refresh();
+                                  }}
+                                />
                               </div>
                             ) : project.masterplan ? (
                               // Conveyor Masterplan view
-                              <div className="space-y-6">
-                                {/* Tab Header Navigation */}
-                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-card p-4 rounded-xl border border-border/80 gap-4 shadow-xs">
-                                  <div className="flex flex-wrap gap-2">
-                                    {[
-                                      { id: "s-curve", label: "S-Curve Chart" },
-                                      { id: "structure", label: "Fabrikasi Struktur" },
-                                      { id: "mechanical", label: "Mekanikal" },
-                                      { id: "summary", label: "Rekap Progress" },
-                                      { id: "tim-memo", label: "Tim & Memo" }
-                                    ].map((tab) => {
-                                      const activeTab = conveyorTabs[project.id] || "s-curve";
-                                      const isActive = activeTab === tab.id;
+                              <div className="space-y-6 w-full max-w-full overflow-x-hidden">
+                                {/* Tab Header Navigation - Dropdown Menu View Selector */}
+                                <div className="flex flex-wrap sm:flex-nowrap justify-between items-center bg-card p-3 rounded-2xl border border-border/80 gap-3 shadow-xs w-full max-w-full">
+                                  {/* Left: View Menu Dropdown */}
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-muted-foreground hidden sm:inline-block">
+                                      Tampilan:
+                                    </span>
+                                    {(() => {
+                                      const views = [
+                                        {
+                                          id: "s-curve",
+                                          label: "S-Curve Chart",
+                                          icon: TrendingUp,
+                                        },
+                                        {
+                                          id: "progres-tahapan",
+                                          label: "Persentase Progres",
+                                          icon: Percent,
+                                        },
+                                        {
+                                          id: "documents",
+                                          label: "Dokumen",
+                                          icon: FolderOpen,
+                                        },
+                                        {
+                                          id: "structure",
+                                          label: "Fabrikasi Struktur",
+                                          icon: Hammer,
+                                        },
+                                        {
+                                          id: "mechanical",
+                                          label: "Mekanikal",
+                                          icon: Wrench,
+                                        },
+                                        {
+                                          id: "summary",
+                                          label: "Rekap Progress",
+                                          icon: BarChart3,
+                                        },
+                                        {
+                                          id: "tim-memo",
+                                          label: "Tim & Memo",
+                                          icon: Users,
+                                        },
+                                        {
+                                          id: "history",
+                                          label: "Log Riwayat Produksi",
+                                          icon: History,
+                                        },
+                                      ];
+                                      const activeTabId =
+                                        conveyorTabs[project.id] || "s-curve";
+                                      const currentView =
+                                        views.find(
+                                          (v) => v.id === activeTabId,
+                                        ) || views[0];
+                                      const CurrentIcon = currentView.icon;
+
+                                      return (
+                                        <DropdownMenu>
+                                          <DropdownMenuTrigger className="h-9 px-3.5 rounded-xl border border-border/80 bg-background/90 font-bold text-xs gap-2 shadow-xs hover:bg-muted text-foreground cursor-pointer flex items-center min-w-44 justify-between">
+                                            <div className="flex items-center gap-2 truncate">
+                                              <CurrentIcon className="w-4 h-4 text-primary shrink-0" />
+                                              <span className="truncate">
+                                                {currentView.label}
+                                              </span>
+                                            </div>
+                                            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0 opacity-70" />
+                                          </DropdownMenuTrigger>
+                                          <DropdownMenuContent
+                                            align="start"
+                                            className="w-56 rounded-xl p-1.5 shadow-xl border-border/80"
+                                          >
+                                            {views.map((v) => {
+                                              const Icon = v.icon;
+                                              const isSelected =
+                                                activeTabId === v.id;
+                                              return (
+                                                <DropdownMenuItem
+                                                  key={v.id}
+                                                  onClick={() =>
+                                                    setConveyorTabs((prev) => ({
+                                                      ...prev,
+                                                      [project.id]: v.id,
+                                                    }))
+                                                  }
+                                                  className={cn(
+                                                    "flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors",
+                                                    isSelected
+                                                      ? "bg-primary/10 text-primary font-bold"
+                                                      : "hover:bg-muted/80 text-foreground",
+                                                  )}
+                                                >
+                                                  <div className="flex items-center gap-2.5">
+                                                    <Icon
+                                                      className={cn(
+                                                        "w-4 h-4",
+                                                        isSelected
+                                                          ? "text-primary"
+                                                          : "text-muted-foreground",
+                                                      )}
+                                                    />
+                                                    <span>{v.label}</span>
+                                                  </div>
+                                                  {isSelected && (
+                                                    <Check className="w-3.5 h-3.5 text-primary ml-2 shrink-0" />
+                                                  )}
+                                                </DropdownMenuItem>
+                                              );
+                                            })}
+                                          </DropdownMenuContent>
+                                        </DropdownMenu>
+                                      );
+                                    })()}
+
+                                    {/* Quick Dialog Button for Production Revisions / NCRs */}
+                                    {(() => {
+                                      const totalActiveRevisions =
+                                        getProjectActiveRevisions(
+                                          project,
+                                        ).length;
+
                                       return (
                                         <Button
-                                          key={tab.id}
-                                          variant={isActive ? "default" : "outline"}
+                                          variant="outline"
                                           size="sm"
-                                          onClick={() => setConveyorTabs(prev => ({ ...prev, [project.id]: tab.id }))}
-                                          className="h-8 rounded-lg text-xs font-semibold shadow-none cursor-pointer"
+                                          onClick={() =>
+                                            setSelectedRevisionSummaryProject(
+                                              project,
+                                            )
+                                          }
+                                          className={cn(
+                                            "h-9 text-xs font-bold px-3.5 rounded-xl shadow-xs border cursor-pointer flex items-center gap-1.5 shrink-0 transition-all",
+                                            totalActiveRevisions > 0
+                                              ? "bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-300 hover:bg-rose-500/20 animate-pulse"
+                                              : "bg-background text-foreground border-border/60 hover:bg-muted",
+                                          )}
+                                          title="Rangkuman Revisi Produksi & QC"
                                         >
-                                          {tab.label}
+                                          <ShieldAlert
+                                            className={cn(
+                                              "w-3.5 h-3.5",
+                                              totalActiveRevisions > 0
+                                                ? "text-rose-600"
+                                                : "text-muted-foreground",
+                                            )}
+                                          />
+                                          <span>
+                                            {totalActiveRevisions > 0
+                                              ? `${totalActiveRevisions} Revisi QC`
+                                              : "Ringkasan Revisi"}
+                                          </span>
                                         </Button>
                                       );
-                                    })}
+                                    })()}
                                   </div>
 
-                                  <div className="flex items-center gap-2">
+                                  {/* Right: Action Buttons Group */}
+                                  <div className="flex items-center gap-2 shrink-0 overflow-x-auto py-0.5 max-w-full">
                                     <Button
                                       variant="default"
                                       size="sm"
-                                      onClick={() => setAddUnitProjectId(project.id)}
-                                      className="h-8 text-xs font-semibold px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer flex items-center gap-1 border-none shadow-sm"
+                                      onClick={() =>
+                                        setAddUnitProjectId(project.id)
+                                      }
+                                      className="h-9 text-xs font-bold px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer flex items-center gap-1.5 border-none shadow-xs shrink-0"
                                     >
-                                      <Plus className="w-3.5 h-3.5" /> Unit Conveyor
+                                      <Plus className="w-3.5 h-3.5" /> Unit
+                                      Conveyor
                                     </Button>
+
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      onClick={() => setSetupMasterplanProjectId(project.id)}
-                                      className="h-8 text-xs font-semibold px-3 rounded-lg shadow-none hover:bg-primary/5 hover:text-primary cursor-pointer"
+                                      onClick={() =>
+                                        setSetupMasterplanProjectId(project.id)
+                                      }
+                                      className="h-9 text-xs font-medium px-3.5 rounded-xl shadow-xs border-border/60 hover:bg-muted text-foreground cursor-pointer flex items-center gap-1.5 shrink-0"
                                     >
-                                      Re-Setup Masterplan
+                                      <Settings2 className="w-3.5 h-3.5 text-muted-foreground" />{" "}
+                                      Re-Setup
+                                    </Button>
+
+                                    <Button
+                                      variant="default"
+                                      size="sm"
+                                      onClick={() => {
+                                        setSelectedGoodsMemoProject(project);
+                                        setGoodsMemoOpen(true);
+                                      }}
+                                      className="h-9 text-xs font-bold px-3.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white cursor-pointer flex items-center gap-1.5 border-none shadow-xs shrink-0"
+                                    >
+                                      <FileText className="w-3.5 h-3.5" /> Memo
+                                      Pengeluaran
                                     </Button>
                                   </div>
                                 </div>
 
                                 {/* Active Tab Contents */}
                                 {(() => {
-                                  const activeTab = conveyorTabs[project.id] || "s-curve";
+                                  const activeTab =
+                                    conveyorTabs[project.id] || "s-curve";
                                   if (activeTab === "s-curve") {
-                                    return <SCurveChart data={project.masterplan.weeklyPlans} />;
+                                    return (
+                                      <MasterScheduleTable project={project} />
+                                    );
+                                  }
+                                  if (activeTab === "progres-tahapan") {
+                                    return (
+                                      <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
+                                        <CardHeader className="bg-linear-to-r from-primary/5 via-transparent to-primary/5 pt-4 px-6 pb-4 border-b border-border/20">
+                                          <CardTitle className="text-lg font-bold gap-1.5 flex items-center">
+                                            <Layers className="w-5 h-5 text-primary" />{" "}
+                                            Persentase Progress per Tahapan
+                                          </CardTitle>
+                                          <CardDescription className="text-xs text-muted-foreground/80">
+                                            Status kemajuan pekerjaan proyek
+                                            untuk setiap tahapan/fase produksi
+                                            berdasarkan masterplan.
+                                          </CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="pt-6">
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                                            {getStageAverageProgress(
+                                              project,
+                                            ).map((sa) => (
+                                              <div
+                                                key={sa.name}
+                                                className="flex flex-col p-4 rounded-xl border border-border/50 bg-background/20 backdrop-blur-xs justify-between gap-3 relative group"
+                                              >
+                                                <div className="flex justify-between items-start gap-2">
+                                                  <div className="flex flex-col">
+                                                    <span className="font-bold text-sm text-foreground leading-snug">
+                                                      {sa.name}
+                                                    </span>
+                                                    {sa.weightPercent !==
+                                                      undefined && (
+                                                      <span className="text-[10px] text-muted-foreground font-semibold mt-0.5">
+                                                        Bobot:{" "}
+                                                        {sa.weightPercent}%
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  <div className="flex items-center gap-2">
+                                                    <span className="font-extrabold text-base text-primary font-mono shrink-0">
+                                                      {sa.progress}%
+                                                    </span>
+                                                    {sa.id && (
+                                                      <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg cursor-pointer shrink-0"
+                                                        title="Update Progress Tahapan"
+                                                        onClick={() => {
+                                                          setEditPhaseModal({
+                                                            phaseId: sa.id!,
+                                                            phaseName: sa.name,
+                                                            currentProgress:
+                                                              sa.progress,
+                                                            code: sa.code,
+                                                          });
+                                                          setEditPhaseValue(
+                                                            sa.progress,
+                                                          );
+                                                          setEditPhaseNotes("");
+                                                        }}
+                                                      >
+                                                        <Pencil className="w-3.5 h-3.5" />
+                                                      </Button>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                                <div className="w-full bg-muted dark:bg-muted/40 rounded-full h-1.5 overflow-hidden">
+                                                  <div
+                                                    className={cn(
+                                                      "h-full rounded-full transition-all duration-300",
+                                                      sa.progress === 100
+                                                        ? "bg-emerald-500"
+                                                        : sa.progress > 0
+                                                          ? "bg-primary"
+                                                          : "bg-muted-foreground/20",
+                                                    )}
+                                                    style={{
+                                                      width: `${sa.progress}%`,
+                                                    }}
+                                                  />
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </CardContent>
+                                      </Card>
+                                    );
+                                  }
+                                  if (activeTab === "documents") {
+                                    // Gather unique documents from project and its lead
+                                    const allDocs = [
+                                      ...(project.documents || []),
+                                      ...(project.lead?.documents || []),
+                                    ];
+                                    const uniqueDocs = Array.from(
+                                      new Map(
+                                        allDocs.map((doc: any) => [
+                                          doc.id,
+                                          doc,
+                                        ]),
+                                      ).values(),
+                                    );
+
+                                    // 1. Drawing items:
+                                    const drawingDocs = uniqueDocs
+                                      .filter(
+                                        (d: any) =>
+                                          d.category?.toUpperCase() ===
+                                          "DRAWING",
+                                      )
+                                      .map((d: any) => ({
+                                        id: d.id,
+                                        label:
+                                          d.label ||
+                                          d.fileName ||
+                                          d.name ||
+                                          "Gambar Kerja",
+                                        version: `v${d.version || 1}`,
+                                        uploadedBy: d.uploadedBy || "System",
+                                        date: d.createdAt,
+                                        isSystem: false,
+                                        onClick: () => handleDownloadDoc(d),
+                                      }));
+
+                                    // 2. Mechanical Part List items:
+                                    const mechDocs = uniqueDocs
+                                      .filter(
+                                        (d: any) =>
+                                          d.category?.toUpperCase() ===
+                                          "MECH_PART_LIST",
+                                      )
+                                      .map((d: any) => ({
+                                        id: d.id,
+                                        label:
+                                          d.label ||
+                                          d.fileName ||
+                                          d.name ||
+                                          "Part List",
+                                        version: `v${d.version || 1}`,
+                                        uploadedBy: d.uploadedBy || "System",
+                                        date: d.createdAt,
+                                        isSystem: false,
+                                        onClick: () => handleDownloadDoc(d),
+                                      }));
+
+                                    // 3. BoQ items (Document Hub + BoQ database table records):
+                                    const boqHubDocs = uniqueDocs
+                                      .filter(
+                                        (d: any) =>
+                                          d.category?.toUpperCase() === "BOQ",
+                                      )
+                                      .map((d: any) => ({
+                                        id: d.id,
+                                        label:
+                                          d.label ||
+                                          d.fileName ||
+                                          d.name ||
+                                          "BoQ File",
+                                        version: `v${d.version || 1}`,
+                                        uploadedBy: d.uploadedBy || "System",
+                                        date: d.createdAt,
+                                        isSystem: false,
+                                        onClick: () => handleDownloadDoc(d),
+                                      }));
+
+                                    const boqDbDocs = (project.boqs || []).map(
+                                      (boq: any) => ({
+                                        id: boq.id,
+                                        label: `${boq.boqNumber} (System BoQ)`,
+                                        version: boq.boqStatus,
+                                        uploadedBy: boq.boqMakerName || "PPIC",
+                                        date: boq.createdAt,
+                                        isSystem: true,
+                                        onViewDetails: () => {
+                                          setViewingDetailType("BOQ");
+                                          setViewingDetailData({
+                                            ...boq,
+                                            projectName: project.projectName,
+                                          });
+                                        },
+                                        onClick: () => {
+                                          setPreviewPdfType("BOQ");
+                                          setPreviewPdfData({
+                                            project: {
+                                              ...project,
+                                              boqNumber: boq.boqNumber,
+                                              boqStatus: boq.boqStatus,
+                                              boqMakerName: boq.boqMakerName,
+                                              boqApprovedByPpic:
+                                                boq.boqApprovedByPpic,
+                                              boqApprovedByPm:
+                                                boq.boqApprovedByPm,
+                                              createdAt: boq.createdAt,
+                                            },
+                                            items: boq.boqItems.map(
+                                              (bi: any) => ({
+                                                itemId: bi.itemId,
+                                                itemCode:
+                                                  bi.item?.itemCode || "",
+                                                itemName:
+                                                  bi.item?.itemName || "",
+                                                itemTypeMerk:
+                                                  bi.item?.typeMerk || "",
+                                                qty: bi.qty,
+                                                unit: bi.unit,
+                                                price: Number(bi.price) || 0,
+                                                note: bi.note || "",
+                                              }),
+                                            ),
+                                          });
+                                        },
+                                      }),
+                                    );
+
+                                    const allBoqItems = [
+                                      ...boqHubDocs,
+                                      ...boqDbDocs,
+                                    ];
+
+                                    // 4. SPB items (Document Hub + SPB database table records):
+                                    const spbHubDocs = uniqueDocs
+                                      .filter(
+                                        (d: any) =>
+                                          d.category?.toUpperCase() === "SPB",
+                                      )
+                                      .map((d: any) => ({
+                                        id: d.id,
+                                        label:
+                                          d.label ||
+                                          d.fileName ||
+                                          d.name ||
+                                          "SPB File",
+                                        version: `v${d.version || 1}`,
+                                        uploadedBy: d.uploadedBy || "System",
+                                        date: d.createdAt,
+                                        isSystem: false,
+                                        onClick: () => handleDownloadDoc(d),
+                                      }));
+
+                                    const spbDbDocs = (project.spb || []).map(
+                                      (spb: any) => ({
+                                        id: spb.id,
+                                        label: `${spb.spbNumber} (System SPB)`,
+                                        version: spb.status.replace(/_/g, " "),
+                                        uploadedBy:
+                                          spb.makerName || "Engineering",
+                                        date: spb.createdAt,
+                                        isSystem: true,
+                                        onViewDetails: () => {
+                                          setViewingDetailType("SPB");
+                                          setViewingDetailData({
+                                            ...spb,
+                                            projectName: project.projectName,
+                                          });
+                                        },
+                                        onClick: () => {
+                                          setPreviewPdfType("SPB");
+                                          setPreviewPdfData({ spb, project });
+                                        },
+                                      }),
+                                    );
+
+                                    const allSpbItems = [
+                                      ...spbHubDocs,
+                                      ...spbDbDocs,
+                                    ];
+
+                                    const sections = [
+                                      {
+                                        label: "Drawing (Gambar Kerja)",
+                                        items: drawingDocs,
+                                      },
+                                      {
+                                        label: "Mechanical Part List",
+                                        items: mechDocs,
+                                      },
+                                      {
+                                        label: "Bill of Quantities (BoQ)",
+                                        items: allBoqItems,
+                                      },
+                                      {
+                                        label: "Surat Permintaan Barang (SPB)",
+                                        items: allSpbItems,
+                                      },
+                                    ];
+
+                                    return (
+                                      <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
+                                        <CardHeader className="bg-linear-to-r from-primary/5 via-transparent to-primary/5 pt-4 px-6 pb-4 border-b border-border/20 flex flex-row items-center justify-between">
+                                          <div className="space-y-1">
+                                            <CardTitle className="text-lg font-bold gap-1.5 flex items-center">
+                                              <FileText className="w-5 h-5 text-primary" />{" "}
+                                              Hub Dokumen Proyek
+                                            </CardTitle>
+                                            <CardDescription className="text-xs text-muted-foreground/80">
+                                              Lihat dan unduh berkas Drawing,
+                                              Mechanical Part List, BoQ, dan
+                                              dokumen SPB terkait proyek ini.
+                                            </CardDescription>
+                                          </div>
+
+                                          <DocumentManagerDialog
+                                            ownerId={project.id}
+                                            ownerType="PROJECT"
+                                            leadId={project.leadId}
+                                            categories={[
+                                              "BRIEF",
+                                              "DRAWING",
+                                              "MECH_PART_LIST",
+                                            ]}
+                                            trigger={
+                                              <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="text-xs font-semibold gap-1.5 h-8 cursor-pointer rounded-lg border-primary/20 hover:bg-primary/5 text-primary bg-background shadow-none"
+                                              >
+                                                <FolderOpen className="w-3.5 h-3.5" />{" "}
+                                                Kelola Berkas
+                                              </Button>
+                                            }
+                                          />
+                                        </CardHeader>
+                                        <CardContent className="pt-6">
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            {sections.map((sect) => (
+                                              <div
+                                                key={sect.label}
+                                                className="border border-border/50 rounded-xl bg-background/20 p-4 space-y-3 flex flex-col justify-between"
+                                              >
+                                                <div className="space-y-2">
+                                                  <h5 className="font-semibold text-sm text-primary flex items-center justify-between border-b pb-1.5 border-border/40">
+                                                    <span>{sect.label}</span>
+                                                    <Badge
+                                                      variant="outline"
+                                                      className="h-6 px-1.5 text-[10px] font-semibold bg-muted border-border/40"
+                                                    >
+                                                      {sect.items.length} Berkas
+                                                    </Badge>
+                                                  </h5>
+
+                                                  {sect.items.length === 0 ? (
+                                                    <p className="text-[11px] text-muted-foreground/60 italic py-4 text-center">
+                                                      Belum ada file diunggah.
+                                                    </p>
+                                                  ) : (
+                                                    <div className="divide-y divide-border/30 max-h-45 overflow-y-auto pr-1">
+                                                      {sect.items.map(
+                                                        (
+                                                          item: any,
+                                                          idx: number,
+                                                        ) => (
+                                                          <div
+                                                            key={item.id}
+                                                            className="py-2 text-[11px] flex items-center justify-between gap-3 group"
+                                                          >
+                                                            <div className="min-w-0 flex-1 space-y-0.5">
+                                                              <p
+                                                                className="font-semibold text-foreground truncate"
+                                                                title={
+                                                                  item.label
+                                                                }
+                                                              >
+                                                                {idx + 1}.{" "}
+                                                                {item.label}
+                                                              </p>
+                                                              <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
+                                                                <span className="uppercase font-medium text-[9px] px-1 bg-primary/10 text-primary rounded-xs">
+                                                                  {item.version}
+                                                                </span>
+                                                                <span>•</span>
+                                                                <span className="truncate">
+                                                                  Oleh:{" "}
+                                                                  {
+                                                                    item.uploadedBy
+                                                                  }
+                                                                </span>
+                                                              </p>
+                                                            </div>
+                                                            <div className="flex items-center gap-1 shrink-0">
+                                                              {item.isSystem && (
+                                                                <Button
+                                                                  variant="ghost"
+                                                                  size="sm"
+                                                                  onClick={
+                                                                    item.onViewDetails
+                                                                  }
+                                                                  className="h-7 px-2 rounded-lg text-primary hover:bg-primary/5 cursor-pointer text-[10px] font-bold gap-1 shrink-0"
+                                                                >
+                                                                  <Search className="w-3 h-3" />{" "}
+                                                                  Lihat
+                                                                </Button>
+                                                              )}
+                                                              <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                onClick={
+                                                                  item.onClick
+                                                                }
+                                                                className="h-7 w-7 rounded-lg text-primary hover:bg-primary/5 cursor-pointer"
+                                                                title="Pratinjau PDF"
+                                                              >
+                                                                <Eye className="w-3.5 h-3.5" />
+                                                              </Button>
+                                                            </div>
+                                                          </div>
+                                                        ),
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </CardContent>
+                                      </Card>
+                                    );
                                   }
                                   if (activeTab === "structure") {
-                                    return <StructureProgressTable units={project.conveyorUnits} />;
+                                    return (
+                                      <StructureProgressTable
+                                        units={project.conveyorUnits}
+                                      />
+                                    );
                                   }
                                   if (activeTab === "mechanical") {
-                                    return <MechanicalProgressTable units={project.conveyorUnits} />;
+                                    return (
+                                      <MechanicalProgressTable
+                                        units={project.conveyorUnits}
+                                      />
+                                    );
                                   }
                                   if (activeTab === "summary") {
-                                    return <SummaryProgressTable project={project} masterplan={project.masterplan} units={project.conveyorUnits} />;
+                                    return (
+                                      <SummaryProgressTable
+                                        project={project}
+                                        masterplan={project.masterplan}
+                                        units={project.conveyorUnits}
+                                      />
+                                    );
+                                  }
+                                  if (activeTab === "history") {
+                                    const historyLogs = (project.history || [])
+                                      .filter((log: any) => {
+                                        const div = (
+                                          log.division || ""
+                                        ).toUpperCase();
+                                        const act = (
+                                          log.action || ""
+                                        ).toUpperCase();
+
+                                        if (
+                                          [
+                                            "ENGINEERING",
+                                            "PPIC",
+                                            "QUALITY_CONTROL",
+                                            "QC",
+                                            "INVENTORY",
+                                            "LOGISTIC",
+                                          ].includes(div)
+                                        ) {
+                                          return false;
+                                        }
+
+                                        return (
+                                          div === "PRODUCTION" ||
+                                          div === "PRODUKSI" ||
+                                          act.startsWith("PROD_") ||
+                                          act.startsWith("PRODUCTION_") ||
+                                          act.startsWith("SETUP_") ||
+                                          act.startsWith("STAGE_") ||
+                                          act.startsWith("PROGRESS_") ||
+                                          act.startsWith("FABRICATION_") ||
+                                          act.startsWith("MECHANICAL_")
+                                        );
+                                      })
+                                      .map((log: any) => ({
+                                        id: log.id,
+                                        division: log.division || "PRODUCTION",
+                                        action:
+                                          log.action || "Aktivitas Produksi",
+                                        notes:
+                                          (log.notes || "")
+                                            .replace(
+                                              /\.?\s*Engineering KPI diselesaikan\.?/gi,
+                                              "",
+                                            )
+                                            .trim() || "-",
+                                        user: log.updatedBy || log.user || "-",
+                                        date: new Date(
+                                          log.createdAt ||
+                                            log.entryDate ||
+                                            Date.now(),
+                                        ),
+                                      }));
+
+                                    const pLogs = (
+                                      project.productionLogs || []
+                                    ).map((log: any) => ({
+                                      id: log.id,
+                                      division: "PRODUCTION",
+                                      action:
+                                        log.action ||
+                                        log.title ||
+                                        "Update Produksi",
+                                      notes: log.message || log.notes || "-",
+                                      user: log.user || log.updatedBy || "-",
+                                      date: new Date(
+                                        log.createdAt || Date.now(),
+                                      ),
+                                    }));
+
+                                    const allProdLogs = [
+                                      ...historyLogs,
+                                      ...pLogs,
+                                    ].sort(
+                                      (a, b) =>
+                                        b.date.getTime() - a.date.getTime(),
+                                    );
+
+                                    const currentCategoryFilter =
+                                      logFilterCategory[project.id] || "ALL";
+
+                                    const filteredLogs = allProdLogs.filter(
+                                      (log: any) => {
+                                        if (currentCategoryFilter === "ALL")
+                                          return true;
+
+                                        const act = (
+                                          log.action || ""
+                                        ).toUpperCase();
+                                        const notes = (
+                                          log.notes || ""
+                                        ).toUpperCase();
+                                        const isMemo =
+                                          act.includes("MEMO") ||
+                                          act.includes("GOODS") ||
+                                          notes.includes("MEMO") ||
+                                          notes.includes("PENGELUARAN BARANG");
+
+                                        if (currentCategoryFilter === "MEMO") {
+                                          return isMemo;
+                                        }
+
+                                        if (
+                                          currentCategoryFilter === "UPDATE"
+                                        ) {
+                                          return !isMemo;
+                                        }
+
+                                        return true;
+                                      },
+                                    );
+
+                                    const logCurrentPage =
+                                      logCurrentPages[project.id] || 1;
+                                    const logPageSize = 10;
+                                    const totalLogPages =
+                                      Math.ceil(
+                                        filteredLogs.length / logPageSize,
+                                      ) || 1;
+                                    const activeLogPage = Math.min(
+                                      logCurrentPage,
+                                      totalLogPages,
+                                    );
+
+                                    const paginatedLogs = filteredLogs.slice(
+                                      (activeLogPage - 1) * logPageSize,
+                                      activeLogPage * logPageSize,
+                                    );
+
+                                    return (
+                                      <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
+                                        <CardHeader className="bg-linear-to-r from-primary/5 via-transparent to-primary/5 pt-4 px-6 pb-4 border-b border-border/20">
+                                          <CardTitle className="text-lg font-bold gap-2 flex items-center text-foreground">
+                                            <History className="w-5 h-5 text-primary" />
+                                            Log Riwayat Pengupdatean Produksi
+                                            Proyek
+                                          </CardTitle>
+                                          <CardDescription className="text-xs text-muted-foreground/80">
+                                            Catatan riwayat aktivitas, progres
+                                            tahapan, dan pengupdatean khusus
+                                            divisi Produksi.
+                                          </CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="pt-6 space-y-4">
+                                          {/* Control Bar: Filter Dropdown & Pagination */}
+                                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-muted/20 p-3 rounded-xl border border-border/40">
+                                            {/* Filter Dropdown */}
+                                            <div className="flex items-center gap-2">
+                                              <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                              <span className="text-xs font-semibold text-muted-foreground">
+                                                Filter Log:
+                                              </span>
+                                              <DropdownMenu>
+                                                <DropdownMenuTrigger className="h-8 px-3 rounded-lg border border-border/80 bg-background font-semibold text-xs gap-2 hover:bg-muted text-foreground cursor-pointer flex items-center min-w-44 justify-between shadow-2xs">
+                                                  <span>
+                                                    {currentCategoryFilter ===
+                                                    "ALL"
+                                                      ? "Semua Log Produksi"
+                                                      : currentCategoryFilter ===
+                                                          "UPDATE"
+                                                        ? "Log Update Progress Aja"
+                                                        : "Log Memo Aja"}
+                                                  </span>
+                                                  <ChevronDown className="w-3.5 h-3.5 text-muted-foreground opacity-70" />
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent
+                                                  align="start"
+                                                  className="w-48 rounded-xl p-1 shadow-lg"
+                                                >
+                                                  <DropdownMenuItem
+                                                    onClick={() => {
+                                                      setLogFilterCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [project.id]: "ALL",
+                                                        }),
+                                                      );
+                                                      setLogCurrentPages(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [project.id]: 1,
+                                                        }),
+                                                      );
+                                                    }}
+                                                    className={cn(
+                                                      "text-xs font-semibold cursor-pointer",
+                                                      currentCategoryFilter ===
+                                                        "ALL" &&
+                                                        "bg-primary/10 text-primary font-bold",
+                                                    )}
+                                                  >
+                                                    Semua Log Produksi
+                                                  </DropdownMenuItem>
+                                                  <DropdownMenuItem
+                                                    onClick={() => {
+                                                      setLogFilterCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [project.id]:
+                                                            "UPDATE",
+                                                        }),
+                                                      );
+                                                      setLogCurrentPages(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [project.id]: 1,
+                                                        }),
+                                                      );
+                                                    }}
+                                                    className={cn(
+                                                      "text-xs font-semibold cursor-pointer",
+                                                      currentCategoryFilter ===
+                                                        "UPDATE" &&
+                                                        "bg-primary/10 text-primary font-bold",
+                                                    )}
+                                                  >
+                                                    Log Update Progress Aja
+                                                  </DropdownMenuItem>
+                                                  <DropdownMenuItem
+                                                    onClick={() => {
+                                                      setLogFilterCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [project.id]: "MEMO",
+                                                        }),
+                                                      );
+                                                      setLogCurrentPages(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [project.id]: 1,
+                                                        }),
+                                                      );
+                                                    }}
+                                                    className={cn(
+                                                      "text-xs font-semibold cursor-pointer",
+                                                      currentCategoryFilter ===
+                                                        "MEMO" &&
+                                                        "bg-primary/10 text-primary font-bold",
+                                                    )}
+                                                  >
+                                                    Log Memo Aja
+                                                  </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                              </DropdownMenu>
+                                            </div>
+
+                                            {/* Top Pagination Controls */}
+                                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                                              <span className="text-xs text-muted-foreground font-medium whitespace-nowrap">
+                                                Halaman{" "}
+                                                <span className="text-muted-foreground">
+                                                  {activeLogPage}
+                                                </span>{" "}
+                                                dari{" "}
+                                                <span className="text-muted-foreground">
+                                                  {totalLogPages}
+                                                </span>
+                                              </span>
+                                              <div className="flex items-center gap-1">
+                                                <Button
+                                                  type="button"
+                                                  variant="outline"
+                                                  size="icon"
+                                                  disabled={activeLogPage <= 1}
+                                                  onClick={() =>
+                                                    setLogCurrentPages(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [project.id]: Math.max(
+                                                          1,
+                                                          activeLogPage - 1,
+                                                        ),
+                                                      }),
+                                                    )
+                                                  }
+                                                  className="h-7 w-7 rounded-lg border-border/80 cursor-pointer disabled:opacity-40"
+                                                  title="Halaman Sebelumnya"
+                                                >
+                                                  <ChevronLeft className="w-3.5 h-3.5" />
+                                                </Button>
+                                                <Button
+                                                  type="button"
+                                                  variant="outline"
+                                                  size="icon"
+                                                  disabled={
+                                                    activeLogPage >=
+                                                    totalLogPages
+                                                  }
+                                                  onClick={() =>
+                                                    setLogCurrentPages(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [project.id]: Math.min(
+                                                          totalLogPages,
+                                                          activeLogPage + 1,
+                                                        ),
+                                                      }),
+                                                    )
+                                                  }
+                                                  className="h-7 w-7 rounded-lg border-border/80 cursor-pointer disabled:opacity-40"
+                                                  title="Halaman Selanjutnya"
+                                                >
+                                                  <ChevronRight className="w-3.5 h-3.5" />
+                                                </Button>
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          {/* Log Item List */}
+                                          <div className="max-h-80 overflow-y-auto overflow-x-hidden divide-y divide-border/40 rounded-xl border bg-muted/10">
+                                            {paginatedLogs.length === 0 ? (
+                                              <p className="text-xs text-muted-foreground p-6 text-center">
+                                                Belum ada log riwayat
+                                                pengupdatean produksi untuk
+                                                filter ini.
+                                              </p>
+                                            ) : (
+                                              paginatedLogs.map(
+                                                (log: any, lIdx: number) => (
+                                                  <div
+                                                    key={log.id || lIdx}
+                                                    className="p-3.5 text-xs flex justify-between items-start gap-4 hover:bg-muted/20 transition-colors"
+                                                  >
+                                                    <div className="min-w-0 flex-1 space-y-1 break-words [overflow-wrap:anywhere]">
+                                                      <div className="flex items-center gap-2 flex-wrap">
+                                                        <Badge
+                                                          variant="outline"
+                                                          className="text-[10px] font-bold bg-background shrink-0 text-emerald-600 border-emerald-300"
+                                                        >
+                                                          {log.division}
+                                                        </Badge>
+                                                        <span className="font-bold text-foreground">
+                                                          {log.action}
+                                                        </span>
+                                                      </div>
+                                                      <p className="text-muted-foreground text-xs leading-relaxed break-words whitespace-normal mt-1 [overflow-wrap:anywhere]">
+                                                        {log.notes}
+                                                      </p>
+                                                    </div>
+                                                    <div className="text-right shrink-0 whitespace-nowrap pl-3 pr-1">
+                                                      <p className="text-[11px] text-muted-foreground font-mono">
+                                                        {log.date.toLocaleString(
+                                                          "id-ID",
+                                                        )}
+                                                      </p>
+                                                      <p className="text-[10px] font-medium text-foreground">
+                                                        {log.user}
+                                                      </p>
+                                                    </div>
+                                                  </div>
+                                                ),
+                                              )
+                                            )}
+                                          </div>
+                                        </CardContent>
+                                      </Card>
+                                    );
                                   }
                                   // Default: tim-memo view
+                                  const projectMemos =
+                                    project.goodsReleaseMemos || [];
                                   return (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-card border border-border/80 p-6 rounded-xl shadow-xs">
-                                      <div className="space-y-4">
-                                        <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5 border-b pb-2">
-                                          Tim & Leader Divisi
-                                        </h4>
-                                        <div className="space-y-2 text-xs">
-                                          {project.masterplan.divisionLeaders.map((dl: any) => (
-                                            <div key={dl.id} className="flex justify-between items-center py-1.5 border-b border-border/40">
-                                              <span className="font-semibold text-muted-foreground uppercase">{dl.divisionName}</span>
-                                              <span className="font-bold text-foreground">{dl.leaderName}</span>
-                                            </div>
-                                          ))}
+                                    <div className="space-y-6">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-card border border-border/80 p-6 rounded-xl shadow-xs">
+                                        <div className="space-y-4">
+                                          <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5 border-b pb-2">
+                                            Tim & Leader Divisi
+                                          </h4>
+                                          <div className="space-y-2 text-xs">
+                                            {project.masterplan.divisionLeaders.map(
+                                              (dl: any) => (
+                                                <div
+                                                  key={dl.id}
+                                                  className="flex justify-between items-center py-1.5 border-b border-border/40"
+                                                >
+                                                  <span className="font-semibold text-muted-foreground uppercase">
+                                                    {dl.divisionName}
+                                                  </span>
+                                                  <span className="font-bold text-foreground">
+                                                    {dl.leaderName}
+                                                  </span>
+                                                </div>
+                                              ),
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className="space-y-4">
+                                          <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5 border-b pb-2">
+                                            Instruksi & Catatan Proyek
+                                          </h4>
+                                          <div className="bg-muted/30 p-4 rounded-xl border text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
+                                            {project.productionSetup
+                                              ?.instructionMemo ||
+                                              "Tidak ada memo instruksi lapangan."}
+                                          </div>
                                         </div>
                                       </div>
-                                      <div className="space-y-4">
-                                        <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5 border-b pb-2">
-                                          Instruksi & Memo Lapangan
-                                        </h4>
-                                        <div className="bg-muted/30 p-4 rounded-xl border text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
-                                          {project.productionSetup?.instructionMemo || "Tidak ada memo instruksi lapangan."}
+
+                                      {/* Goods Release Memos section for this project */}
+                                      <div className="bg-card border border-border/80 p-6 rounded-xl space-y-4 shadow-xs">
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/40 pb-3">
+                                          <div>
+                                            <h4 className="font-extrabold text-sm text-foreground flex items-center gap-2">
+                                              <FileText className="w-4.5 h-4.5 text-emerald-600" />
+                                              Memo Pengeluaran Barang Proyek (
+                                              {projectMemos.length})
+                                            </h4>
+                                            <p className="text-xs text-muted-foreground">
+                                              Request barang & pengembalian
+                                              sisa/alat terikat khusus untuk
+                                              proyek {project.projectName}.
+                                            </p>
+                                          </div>
+
+                                          <Button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedGoodsMemoProject(
+                                                project,
+                                              );
+                                              setGoodsMemoOpen(true);
+                                            }}
+                                            className="h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs cursor-pointer shadow-md shadow-emerald-600/20 flex items-center gap-2 shrink-0"
+                                          >
+                                            <Plus className="w-4 h-4" />
+                                            Buat Memo Pengeluaran Barang
+                                          </Button>
                                         </div>
+
+                                        {projectMemos.length === 0 ? (
+                                          <div className="py-8 text-center text-muted-foreground text-xs bg-muted/10 rounded-xl border border-dashed border-border/60 space-y-2">
+                                            <FileText className="w-8 h-8 opacity-30 mx-auto text-emerald-600" />
+                                            <p className="font-semibold">
+                                              Belum ada request memo barang
+                                              untuk proyek ini.
+                                            </p>
+                                            <p className="text-[11px] text-muted-foreground">
+                                              Klik tombol hijau di atas untuk
+                                              membuat memo baru.
+                                            </p>
+                                          </div>
+                                        ) : (
+                                          <div className="space-y-3">
+                                            {projectMemos.map((memo: any) => (
+                                              <div
+                                                key={memo.id}
+                                                className="p-4 rounded-xl border border-border/60 bg-muted/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                                              >
+                                                <div className="space-y-1">
+                                                  <div className="flex items-center gap-2">
+                                                    <span className="font-extrabold text-foreground">
+                                                      {memo.memoNumber}
+                                                    </span>
+                                                    <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-none text-[10px] font-bold">
+                                                      ✓ Terkirim ke Inventory
+                                                    </Badge>
+                                                  </div>
+                                                  <div className="text-muted-foreground">
+                                                    Pemohon:{" "}
+                                                    <strong className="text-foreground">
+                                                      {memo.requesterName}
+                                                    </strong>{" "}
+                                                    ({memo.division}) •{" "}
+                                                    {memo.items?.length || 0}{" "}
+                                                    Barang
+                                                  </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                  <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => {
+                                                      setSelectedGoodsMemoProject(
+                                                        project,
+                                                      );
+                                                      setGoodsMemoOpen(true);
+                                                    }}
+                                                    className="h-8 px-3 rounded-lg text-xs font-bold border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+                                                  >
+                                                    Lihat & Kelola Memo
+                                                  </Button>
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -1587,7 +2925,9 @@ export function ProductionTable({
                                     Produksi Belum Dimulai
                                   </h4>
                                   <p className="text-xs text-muted-foreground max-w-sm text-wrap">
-                                    Sebelum pengerjaan dimulai, silakan atur Masterplan Proyek atau gunakan formulir inisialisasi default.
+                                    Sebelum pengerjaan dimulai, silakan atur
+                                    Masterplan Proyek atau gunakan formulir
+                                    inisialisasi default.
                                   </p>
                                 </div>
                                 <div className="flex gap-3">
@@ -1595,7 +2935,9 @@ export function ProductionTable({
                                     variant="default"
                                     size="sm"
                                     className="cursor-pointer font-bold text-xs bg-amber-600 hover:bg-amber-700 shadow-xs rounded-lg"
-                                    onClick={() => setSetupMasterplanProjectId(project.id)}
+                                    onClick={() =>
+                                      setSetupMasterplanProjectId(project.id)
+                                    }
                                   >
                                     Setup Masterplan Conveyor
                                   </Button>
@@ -1611,14 +2953,17 @@ export function ProductionTable({
                                     Masterplan Belum Terkonfigurasi
                                   </h4>
                                   <p className="text-xs text-muted-foreground max-w-sm text-wrap">
-                                    Silakan konfigurasi Masterplan Conveyor untuk memulai pelacakan kemajuan proyek ini.
+                                    Silakan konfigurasi Masterplan Conveyor
+                                    untuk memulai pelacakan kemajuan proyek ini.
                                   </p>
                                 </div>
                                 <Button
                                   variant="default"
                                   size="sm"
                                   className="cursor-pointer font-bold text-xs bg-amber-600 hover:bg-amber-700 shadow-xs rounded-lg"
-                                  onClick={() => setSetupMasterplanProjectId(project.id)}
+                                  onClick={() =>
+                                    setSetupMasterplanProjectId(project.id)
+                                  }
                                 >
                                   Setup Masterplan Conveyor
                                 </Button>
@@ -1641,7 +2986,7 @@ export function ProductionTable({
         open={!!setupModalProject}
         onOpenChange={(open) => !open && setSetupModalProject(null)}
       >
-        <DialogContent className="sm:max-w-[850px] md:max-w-[900px] w-full max-h-[95vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-212.5 md:max-w-225 w-full max-h-[95vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ClipboardList className="w-5 h-5 text-amber-600" />
@@ -1896,7 +3241,7 @@ export function ProductionTable({
                         placeholder="Catat status spb item jika ada yang belum terpenuhi..."
                         value={materialsNotes}
                         onChange={(e) => setMaterialsNotes(e.target.value)}
-                        className="text-xs bg-background min-h-[60px] resize-y"
+                        className="text-xs bg-background min-h-15 resize-y"
                       />
                     </div>
                   </div>
@@ -1986,7 +3331,7 @@ export function ProductionTable({
                       placeholder="Tulis instruksi khusus pengerjaan conveyor di lapangan..."
                       value={instructionMemo}
                       onChange={(e) => setInstructionMemo(e.target.value)}
-                      className="text-xs flex-1 min-h-[150px] resize-y"
+                      className="text-xs flex-1 min-h-37.5 resize-y"
                       required
                     />
                   </div>
@@ -2025,7 +3370,7 @@ export function ProductionTable({
         open={!!stageModalData}
         onOpenChange={(open) => !open && setStageModalData(null)}
       >
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-125">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-1.5 text-base">
               <Hammer className="w-5 h-5 text-primary" />
@@ -2263,7 +3608,7 @@ export function ProductionTable({
         open={!!timelineProject}
         onOpenChange={(open) => !open && setTimelineProject(null)}
       >
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="sm:max-w-105">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Clock className="w-5 h-5 text-primary" />
@@ -2312,7 +3657,7 @@ export function ProductionTable({
                   <div className="relative border-l-2 border-primary/20 pl-5 space-y-5 ml-2.5">
                     {/* Step 1: Deal */}
                     <div className="relative">
-                      <div className="absolute -left-[27px] top-0.5 bg-primary text-primary-foreground rounded-full p-1 border-2 border-background">
+                      <div className="absolute -left-6.75 top-0.5 bg-primary text-primary-foreground rounded-full p-1 border-2 border-background">
                         <CheckCircle2 className="w-3.5 h-3.5 text-background fill-primary" />
                       </div>
                       <div>
@@ -2330,7 +3675,7 @@ export function ProductionTable({
 
                     {/* Step 2: Handover to Production */}
                     <div className="relative">
-                      <div className="absolute -left-[27px] top-0.5 bg-primary text-primary-foreground rounded-full p-1 border-2 border-background">
+                      <div className="absolute -left-6.75 top-0.5 bg-primary text-primary-foreground rounded-full p-1 border-2 border-background">
                         <CheckCircle2 className="w-3.5 h-3.5 text-background fill-primary" />
                       </div>
                       <div>
@@ -2352,7 +3697,7 @@ export function ProductionTable({
                     <div className="relative">
                       <div
                         className={cn(
-                          "absolute -left-[27px] top-0.5 rounded-full p-1 border-2 border-background",
+                          "absolute -left-6.75 top-0.5 rounded-full p-1 border-2 border-background",
                           productionStartedDate
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted text-muted-foreground border-muted",
@@ -2384,7 +3729,7 @@ export function ProductionTable({
 
                     {/* Step 3: Deadline */}
                     <div className="relative">
-                      <div className="absolute -left-[27px] top-0.5 bg-red-500 text-white rounded-full p-1 border-2 border-background">
+                      <div className="absolute -left-6.75 top-0.5 bg-red-500 text-white rounded-full p-1 border-2 border-background">
                         <AlertCircle className="w-3.5 h-3.5 text-background fill-red-500" />
                       </div>
                       <div>
@@ -2441,7 +3786,7 @@ export function ProductionTable({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-1.5 text-sm font-bold text-rose-600">
               <AlertTriangle className="w-4 h-4" />
@@ -2469,7 +3814,7 @@ export function ProductionTable({
               <Textarea
                 id="revisionNotes"
                 placeholder="Jelaskan bagian gambar mana yang salah atau perlu direvisi..."
-                className="min-h-[100px] text-xs resize-y"
+                className="min-h-25 text-xs resize-y"
                 value={revisionNotes}
                 onChange={(e) => setRevisionNotes(e.target.value)}
               />
@@ -2508,7 +3853,7 @@ export function ProductionTable({
         open={!!addComponentModalProject}
         onOpenChange={(open) => !open && setAddComponentModalProject(null)}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Plus className="w-5 h-5 text-primary" />
@@ -2612,7 +3957,7 @@ export function ProductionTable({
         open={!!editCompStageData}
         onOpenChange={(open) => !open && setEditCompStageData(null)}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Layers className="w-5 h-5 text-primary" />
@@ -2851,7 +4196,7 @@ export function ProductionTable({
         open={!!editComponentNameData}
         onOpenChange={(open) => !open && setEditComponentNameData(null)}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Layers className="w-5 h-5 text-primary" />
@@ -2917,7 +4262,7 @@ export function ProductionTable({
         open={!!confirmDeleteComponent}
         onOpenChange={(open) => !open && setConfirmDeleteComponent(null)}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-rose-600">
               <AlertTriangle className="w-5 h-5" />
@@ -2965,7 +4310,7 @@ export function ProductionTable({
         open={!!confirmExcludeStageData}
         onOpenChange={(open) => !open && setConfirmExcludeStageData(null)}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-rose-600">
               <AlertTriangle className="w-5 h-5" />
@@ -3016,7 +4361,7 @@ export function ProductionTable({
         open={!!confirmIncludeStageData}
         onOpenChange={(open) => !open && setConfirmIncludeStageData(null)}
       >
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-100">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-primary">
               <Plus className="w-5 h-5" />
@@ -3071,25 +4416,28 @@ export function ProductionTable({
             setAddUnitType("BOTH");
             setAddUnitSatuan("unit");
             setAddUnitVolume(1);
-            setAddUnitStructureItems("");
-            setAddUnitMechanicalItems("");
+            setAddUnitStructureItems([{ name: "", qty: 1, satuan: "unit" }]);
+            setAddUnitMechanicalItems([{ name: "", qty: 1, satuan: "unit" }]);
           }
         }}
       >
-        <DialogContent className="sm:max-w-[550px] rounded-2xl border-border/80">
+        <DialogContent className="sm:max-w-200! rounded-2xl border-border/80 max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-primary font-bold text-base">
               <Plus className="w-5 h-5 text-emerald-600" />
               Tambah Unit Conveyor Baru
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Masukkan informasi Unit Conveyor tambahan untuk ditambahkan ke Masterplan proyek ini secara langsung.
+              Masukkan informasi Unit Conveyor tambahan untuk ditambahkan ke
+              Masterplan proyek ini secara langsung.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-muted-foreground uppercase">Nama Unit Conveyor</Label>
+              <Label className="text-xs font-bold text-muted-foreground">
+                Nama Unit Conveyor
+              </Label>
               <Input
                 type="text"
                 placeholder="Contoh: Belt Conveyor BC 04 - BW 1.0 x L.12 Mtr"
@@ -3099,70 +4447,226 @@ export function ProductionTable({
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-muted-foreground uppercase">Tipe Unit</Label>
-                <select
-                  value={addUnitType}
-                  onChange={(e: any) => setAddUnitType(e.target.value)}
-                  className="flex h-9 w-full rounded-xl border border-input bg-background/50 px-3 text-xs shadow-none transition-all placeholder:text-muted-foreground focus-visible:outline-hidden focus:outline-hidden focus:ring-1 focus:ring-ring"
-                >
-                  <option value="BOTH">Struktur & Mekanikal</option>
-                  <option value="STRUCTURE">Hanya Struktur</option>
-                  <option value="MECHANICAL">Hanya Mekanikal</option>
-                </select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-muted-foreground uppercase">Satuan</Label>
-                <Input
-                  type="text"
-                  placeholder="unit"
-                  value={addUnitSatuan}
-                  onChange={(e) => setAddUnitSatuan(e.target.value)}
-                  className="h-9 rounded-xl text-xs text-center bg-background/50 focus:bg-background"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-muted-foreground uppercase">Volume</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={addUnitVolume}
-                  onChange={(e) => setAddUnitVolume(Number(e.target.value))}
-                  className="h-9 rounded-xl text-xs text-center bg-background/50 focus:bg-background"
-                />
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-muted-foreground">
+                Jenis Progress
+              </Label>
+              <select
+                value={addUnitType}
+                onChange={(e: any) => setAddUnitType(e.target.value)}
+                className="flex h-9 w-full rounded-xl border border-input bg-background/50 px-3 text-xs shadow-none transition-all placeholder:text-muted-foreground focus-visible:outline-hidden focus:outline-hidden focus:ring-1 focus:ring-ring"
+              >
+                <option value="BOTH">Struktur & Mekanikal</option>
+                <option value="STRUCTURE">Hanya Struktur</option>
+                <option value="MECHANICAL">Hanya Mekanikal</option>
+              </select>
             </div>
 
-            {addUnitType !== "MECHANICAL" && (
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-muted-foreground uppercase">
-                  Checklist Pekerjaan Struktur (Opsional)
-                </Label>
-                <Textarea
-                  placeholder="Masukkan item, pisahkan dengan koma atau baris baru. E.g.:&#10;Stringer Frame&#10;Support Trestle&#10;Head Chute"
-                  value={addUnitStructureItems}
-                  onChange={(e) => setAddUnitStructureItems(e.target.value)}
-                  rows={3}
-                  className="rounded-xl text-xs bg-background/50 focus:bg-background"
-                />
+            {(addUnitType === "BOTH" || addUnitType === "STRUCTURE") && (
+              <div className="space-y-2 animate-in fade-in duration-200 border border-border/60 rounded-xl p-3 bg-muted/20">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-foreground">
+                    Komponen Struktur (Rangka)
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setAddUnitStructureItems((prev) => [
+                        ...prev,
+                        { name: "", qty: 1, satuan: "unit" },
+                      ])
+                    }
+                    className="h-6 text-[11px] font-semibold text-primary hover:text-primary/80 px-2 cursor-pointer gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> Tambah Komponen
+                  </Button>
+                </div>
+
+                <div className="space-y-2">
+                  {addUnitStructureItems.map((item, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5">
+                      <Input
+                        type="text"
+                        placeholder="Nama Komponen / Rangka (e.g. Room Hopper)"
+                        value={item.name}
+                        onChange={(e) => {
+                          const updated = [...addUnitStructureItems];
+                          updated[idx].name = e.target.value;
+                          setAddUnitStructureItems(updated);
+                        }}
+                        className="h-8 text-xs bg-background rounded-lg flex-1"
+                      />
+                      <Input
+                        type="number"
+                        min={1}
+                        placeholder=""
+                        value={item.qty === "" ? "" : item.qty}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const val = raw === "" ? "" : Number(raw);
+                          const updated = [...addUnitStructureItems];
+                          updated[idx].qty = val as any;
+                          setAddUnitStructureItems(updated);
+                        }}
+                        className="h-8 text-xs bg-background rounded-lg w-16 text-center font-semibold"
+                      />
+                      <select
+                        value={item.satuan || "unit"}
+                        onChange={(e) => {
+                          const updated = [...addUnitStructureItems];
+                          updated[idx].satuan = e.target.value;
+                          setAddUnitStructureItems(updated);
+                        }}
+                        className="h-8 text-[11px] font-semibold bg-background border border-input rounded-lg px-1.5 cursor-pointer text-foreground"
+                      >
+                        <option value="set">set</option>
+                        <option value="unit">unit</option>
+                        <option value="pcs">pcs</option>
+                        <option value="mtr">mtr</option>
+                        <option value="lot">lot</option>
+                        <option value="batang">batang</option>
+                        <option value="lembar">lembar</option>
+                        <option value="kg">kg</option>
+                      </select>
+                      {addUnitStructureItems.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setAddUnitStructureItems((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            );
+                          }}
+                          className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setAddUnitStructureItems((prev) => [
+                      ...prev,
+                      { name: "", qty: 1, satuan: "set" },
+                    ])
+                  }
+                  className="w-full h-8 border-dashed border-primary/40 text-primary hover:bg-primary/10 rounded-xl gap-1 font-semibold text-xs cursor-pointer shadow-none mt-2"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Tambah Baris Komponen Rangka
+                </Button>
               </div>
             )}
 
-            {addUnitType !== "STRUCTURE" && (
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold text-muted-foreground uppercase">
-                  Checklist Pekerjaan Mekanikal (Opsional)
-                </Label>
-                <Textarea
-                  placeholder="Masukkan item, pisahkan dengan koma atau baris baru. E.g.:&#10;Drive Pulley&#10;Snub Pulley&#10;Roller Carry&#10;Impact Roller"
-                  value={addUnitMechanicalItems}
-                  onChange={(e) => setAddUnitMechanicalItems(e.target.value)}
-                  rows={3}
-                  className="rounded-xl text-xs bg-background/50 focus:bg-background"
-                />
+            {(addUnitType === "BOTH" || addUnitType === "MECHANICAL") && (
+              <div className="space-y-2 animate-in fade-in duration-200 border border-border/60 rounded-xl p-3 bg-muted/20">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-foreground">
+                    Komponen Mekanikal (Motor/Roller/dll)
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setAddUnitMechanicalItems((prev) => [
+                        ...prev,
+                        { name: "", qty: 1, satuan: "set" },
+                      ])
+                    }
+                    className="h-6 text-[11px] font-semibold text-primary hover:text-primary/80 px-2 cursor-pointer gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> Tambah Komponen
+                  </Button>
+                </div>
+
+                <div className="space-y-2">
+                  {addUnitMechanicalItems.map((item, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5">
+                      <Input
+                        type="text"
+                        placeholder="Nama Komponen / Part (e.g. Drive Pulley)"
+                        value={item.name}
+                        onChange={(e) => {
+                          const updated = [...addUnitMechanicalItems];
+                          updated[idx].name = e.target.value;
+                          setAddUnitMechanicalItems(updated);
+                        }}
+                        className="h-8 text-xs bg-background rounded-lg flex-1"
+                      />
+                      <Input
+                        type="number"
+                        min={1}
+                        placeholder=""
+                        value={item.qty === "" ? "" : item.qty}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const val = raw === "" ? "" : Number(raw);
+                          const updated = [...addUnitMechanicalItems];
+                          updated[idx].qty = val as any;
+                          setAddUnitMechanicalItems(updated);
+                        }}
+                        className="h-8 text-xs bg-background rounded-lg w-16 text-center font-semibold"
+                      />
+                      <select
+                        value={item.satuan || "set"}
+                        onChange={(e) => {
+                          const updated = [...addUnitMechanicalItems];
+                          updated[idx].satuan = e.target.value;
+                          setAddUnitMechanicalItems(updated);
+                        }}
+                        className="h-8 text-[11px] font-semibold bg-background border border-input rounded-lg px-1.5 cursor-pointer text-foreground"
+                      >
+                        <option value="set">set</option>
+                        <option value="unit">unit</option>
+                        <option value="pcs">pcs</option>
+                        <option value="mtr">mtr</option>
+                        <option value="lot">lot</option>
+                        <option value="batang">batang</option>
+                        <option value="lembar">lembar</option>
+                        <option value="kg">kg</option>
+                      </select>
+                      {addUnitMechanicalItems.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setAddUnitMechanicalItems((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            );
+                          }}
+                          className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setAddUnitMechanicalItems((prev) => [
+                      ...prev,
+                      { name: "", qty: 1, satuan: "set" },
+                    ])
+                  }
+                  className="w-full h-8 border-dashed border-primary/40 text-primary hover:bg-primary/10 rounded-xl gap-1 font-semibold text-xs cursor-pointer shadow-none mt-2"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Tambah Baris Komponen Mekanikal
+                </Button>
               </div>
             )}
           </div>
@@ -3178,8 +4682,12 @@ export function ProductionTable({
                 setAddUnitType("BOTH");
                 setAddUnitSatuan("unit");
                 setAddUnitVolume(1);
-                setAddUnitStructureItems("");
-                setAddUnitMechanicalItems("");
+                setAddUnitStructureItems([
+                  { name: "", qty: 1, satuan: "unit" },
+                ]);
+                setAddUnitMechanicalItems([
+                  { name: "", qty: 1, satuan: "unit" },
+                ]);
               }}
               disabled={isAddingUnitPending}
               className="text-xs h-9 px-4 rounded-xl cursor-pointer"
@@ -3216,6 +4724,472 @@ export function ProductionTable({
         project={historyProject}
         open={!!historyProject}
         onOpenChange={(open) => !open && setHistoryProject(null)}
+      />
+
+      {/* Dialog Preview BoQ / SPB PDF */}
+      <Dialog
+        open={!!previewPdfType}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewPdfType(null);
+            setPreviewPdfData(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl! h-[90vh] flex flex-col p-6 bg-zinc-950 border border-zinc-800 text-white rounded-2xl">
+          <DialogHeader className="flex-none">
+            <DialogTitle className="text-base font-bold text-white">
+              Pratinjau Cetak {previewPdfType === "BOQ" ? "BoQ" : "SPB"}
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400 text-xs">
+              Pratinjau dokumen PDF{" "}
+              {previewPdfType === "BOQ"
+                ? `Bill of Quantities (${previewPdfData?.boqNumber || "-"})`
+                : `Surat Permintaan Barang (${previewPdfData?.spbNumber || "-"})`}
+              .
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 w-full overflow-hidden rounded-xl bg-zinc-900 border border-zinc-800 mt-4 relative">
+            {previewPdfType === "BOQ" && previewPdfData && (
+              <PDFViewer
+                width="100%"
+                height="100%"
+                showToolbar={true}
+                className="border-0"
+              >
+                <BoQPDFDocument
+                  project={previewPdfData.project}
+                  items={previewPdfData.items}
+                />
+              </PDFViewer>
+            )}
+            {previewPdfType === "SPB" && previewPdfData && (
+              <PDFViewer
+                width="100%"
+                height="100%"
+                showToolbar={true}
+                className="border-0"
+              >
+                <SPBPDFDocument
+                  spb={previewPdfData.spb}
+                  project={previewPdfData.project}
+                />
+              </PDFViewer>
+            )}
+          </div>
+          <DialogFooter className="mt-4 flex-none">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setPreviewPdfType(null);
+                setPreviewPdfData(null);
+              }}
+              className="cursor-pointer font-semibold rounded-lg bg-transparent text-white border-zinc-700 hover:bg-zinc-800 hover:text-white"
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Dialog Detail Item BoQ / SPB */}
+      <Dialog
+        open={!!viewingDetailType}
+        onOpenChange={(open) => {
+          if (!open) {
+            setViewingDetailType(null);
+            setViewingDetailData(null);
+            setDetailSearchQuery("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-200 max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border/80 shadow-2xl bg-background">
+          <DialogHeader className="p-6 pb-4 shrink-0 border-b border-border/50">
+            <div className="flex items-center justify-between w-full pr-6">
+              <div className="flex items-center gap-3">
+                <div
+                  className={cn(
+                    "h-10 w-10 rounded-xl flex items-center justify-center border shrink-0",
+                    viewingDetailType === "BOQ"
+                      ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
+                      : "bg-orange-500/10 text-orange-600 border-orange-500/20",
+                  )}
+                >
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-bold text-foreground">
+                    Detail Item{" "}
+                    {viewingDetailType === "BOQ"
+                      ? `BoQ: ${viewingDetailData?.boqNumber}`
+                      : `SPB: ${viewingDetailData?.spbNumber}`}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground font-medium mt-0.5">
+                    Proyek: {viewingDetailData?.projectName || "-"}
+                  </DialogDescription>
+                </div>
+              </div>
+              <Badge
+                className={cn(
+                  "border-none shadow-none text-[10px] font-bold rounded-lg px-2.5 py-1",
+                  viewingDetailType === "BOQ"
+                    ? viewingDetailData?.boqStatus === "APPROVED"
+                      ? "bg-green-500/10 text-green-700"
+                      : "bg-amber-500/10 text-amber-700"
+                    : viewingDetailData?.status === "APPROVED"
+                      ? "bg-green-500/10 text-green-700"
+                      : "bg-amber-500/10 text-amber-700",
+                )}
+              >
+                {viewingDetailType === "BOQ"
+                  ? viewingDetailData?.boqStatus
+                  : viewingDetailData?.status?.replace(/_/g, " ")}
+              </Badge>
+            </div>
+          </DialogHeader>
+
+          {/* Search Bar */}
+          <div className="px-6 py-2 border-b border-border/30 bg-muted/10 shrink-0">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="Cari nama barang atau kode..."
+                className="pl-9 w-full shadow-none bg-background rounded-lg border-border h-9 text-xs"
+                value={detailSearchQuery}
+                onChange={(e) => setDetailSearchQuery(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Items Table inside the Dialog */}
+          <div className="flex-1 overflow-y-auto p-6 bg-muted/5">
+            <div className="border border-border/40 rounded-xl overflow-x-auto shadow-xs bg-card">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-muted/30 text-xs font-semibold text-muted-foreground border-b border-border/30">
+                    <th className="p-3 w-12 text-center">No</th>
+                    {viewingDetailType === "BOQ" && (
+                      <th className="p-3 w-32">Kode Barang</th>
+                    )}
+                    <th className="p-3">Nama Barang</th>
+                    <th className="p-3 w-40">Tipe / Merk</th>
+                    <th className="p-3 text-center w-28">Kuantitas</th>
+                    {viewingDetailType === "SPB" && (
+                      <th className="p-3 text-center w-36">Sumber Barang</th>
+                    )}
+                    {viewingDetailType === "SPB" && (
+                      <th className="p-3 text-center w-32">Status Item</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const q = detailSearchQuery.toLowerCase();
+                    if (viewingDetailType === "BOQ") {
+                      const items = (viewingDetailData?.boqItems || []).filter(
+                        (bi: any) =>
+                          (bi.item?.name || "").toLowerCase().includes(q) ||
+                          (bi.item?.code || "").toLowerCase().includes(q) ||
+                          (bi.item?.typeMerk || "").toLowerCase().includes(q),
+                      );
+
+                      if (items.length === 0) {
+                        return (
+                          <tr>
+                            <td
+                              colSpan={5}
+                              className="p-8 text-center text-muted-foreground italic"
+                            >
+                              Tidak ada item yang ditemukan.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return items.map((item: any, idx: number) => (
+                        <tr
+                          key={item.id}
+                          className="border-b border-border/10 last:border-0 hover:bg-muted/5 transition-colors"
+                        >
+                          <td className="p-3 text-center text-foreground font-bold">
+                            {idx + 1}
+                          </td>
+                          <td className="p-3 font-mono text-muted-foreground">
+                            {item.item?.code || "-"}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-semibold text-foreground">
+                              {item.item?.name}
+                            </div>
+                            {item.note && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                Note: {item.note}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 font-medium text-foreground/80">
+                            {item.item?.typeMerk || "-"}
+                          </td>
+                          <td className="p-3 text-center font-bold text-foreground">
+                            {item.qty} {item.unit}
+                          </td>
+                        </tr>
+                      ));
+                    } else {
+                      const items = (viewingDetailData?.items || []).filter(
+                        (it: any) =>
+                          (it.name || "").toLowerCase().includes(q) ||
+                          (it.typeMerk || "").toLowerCase().includes(q),
+                      );
+
+                      if (items.length === 0) {
+                        return (
+                          <tr>
+                            <td
+                              colSpan={5}
+                              className="p-8 text-center text-muted-foreground italic"
+                            >
+                              Tidak ada item yang ditemukan.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return items.map((item: any, idx: number) => (
+                        <tr
+                          key={item.id}
+                          className="border-b border-border/10 last:border-0 hover:bg-muted/5 transition-colors"
+                        >
+                          <td className="p-3 text-center text-foreground font-bold">
+                            {idx + 1}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-semibold text-foreground">
+                              {item.name}
+                            </div>
+                            {item.note && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                Note: {item.note}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 font-medium text-foreground/80">
+                            {item.typeMerk || "-"}
+                          </td>
+                          <td className="p-3 text-center font-bold text-foreground">
+                            {item.qty} {item.unit}
+                          </td>
+                          <td className="p-3 text-center">
+                            <Badge
+                              className={
+                                item.source === "WAREHOUSE"
+                                  ? "bg-blue-500/10 text-blue-600 border-none shadow-none text-[9px] font-black rounded"
+                                  : "bg-orange-500/10 text-orange-600 border-none shadow-none text-[9px] font-black rounded"
+                              }
+                            >
+                              {item.source === "WAREHOUSE"
+                                ? "GUDANG"
+                                : "TRADING / BELI"}
+                            </Badge>
+                          </td>
+                          <td className="p-3 text-center">
+                            <span
+                              className={cn(
+                                "px-1.5 py-0.5 rounded-lg text-[9px] font-black border inline-block",
+                                (() => {
+                                  const s = (
+                                    item.status || "PENDING"
+                                  ).toUpperCase();
+                                  if (s === "FULFILLED" || s === "RECEIVED")
+                                    return "bg-green-500/10 text-green-700 border-green-500/20";
+                                  if (
+                                    s === "PENDING" ||
+                                    s === "WAITING_PO" ||
+                                    s === "PARTIALLY_ISSUED"
+                                  )
+                                    return "bg-amber-500/10 text-amber-700 border-amber-500/20";
+                                  if (s === "REJECTED")
+                                    return "bg-red-500/10 text-red-700 border-red-500/20";
+                                  return "bg-blue-500/10 text-blue-700 border-blue-500/20";
+                                })(),
+                              )}
+                            >
+                              {(() => {
+                                const s = (
+                                  item.status || "PENDING"
+                                ).toUpperCase();
+                                switch (s) {
+                                  case "PENDING":
+                                    return "Menunggu Verifikasi";
+                                  case "APPROVED":
+                                    return "Disetujui PPIC";
+                                  case "PREPARING":
+                                    return "Sedang Disiapkan";
+                                  case "FULFILLED":
+                                    return "Sudah Dikeluarkan";
+                                  case "WAITING_PO":
+                                    return "Menunggu PO";
+                                  case "PO_CREATED":
+                                    return "PO Dibuat";
+                                  case "RECEIVED":
+                                    return "Barang Diterima";
+                                  case "REJECTED":
+                                    return "Ditolak";
+                                  case "PARTIALLY_ISSUED":
+                                    return "Sebagian Keluar";
+                                  default:
+                                    return s;
+                                }
+                              })()}
+                            </span>
+                          </td>
+                        </tr>
+                      ));
+                    }
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <DialogFooter className="p-4 bg-muted/10 border-t border-border/50 shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setViewingDetailType(null);
+                setViewingDetailData(null);
+                setDetailSearchQuery("");
+              }}
+              className="cursor-pointer font-semibold rounded-lg"
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <GoodsMemoDialog
+        open={goodsMemoOpen}
+        onOpenChange={setGoodsMemoOpen}
+        project={selectedGoodsMemoProject}
+      />
+
+      {/* Edit Phase Progress Modal */}
+      <Dialog
+        open={!!editPhaseModal}
+        onOpenChange={(open) => {
+          if (!open) setEditPhaseModal(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md rounded-2xl p-6">
+          <DialogHeader className="space-y-1">
+            <DialogTitle className="text-lg font-extrabold flex items-center gap-2">
+              <Pencil className="w-5 h-5 text-primary" />
+              Update Progress: {editPhaseModal?.phaseName}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Masukkan persentase progress aktual (%) dan catatan pengerjaan
+              untuk tahapan ini.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-foreground flex justify-between">
+                <span>Progress Fisik Pekerjaan (%)</span>
+                <span className="font-extrabold text-primary font-mono">
+                  {editPhaseValue}%
+                </span>
+              </Label>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                value={editPhaseValue}
+                onChange={(e) =>
+                  setEditPhaseValue(
+                    Math.min(100, Math.max(0, Number(e.target.value) || 0)),
+                  )
+                }
+                className="h-10 text-sm font-semibold rounded-xl"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-foreground">
+                Catatan / Keterangan Lapangan
+              </Label>
+              <Textarea
+                placeholder="Contoh: Pembersihan lahan selesai 100%, siap pondasi."
+                value={editPhaseNotes}
+                onChange={(e) => setEditPhaseNotes(e.target.value)}
+                className="text-xs rounded-xl min-h-20"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEditPhaseModal(null)}
+              className="rounded-xl cursor-pointer"
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={isUpdatingPhase}
+              onClick={handleSavePhaseProgress}
+              className="rounded-xl font-bold gap-2 cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {isUpdatingPhase && <Loader2 className="w-4 h-4 animate-spin" />}
+              Simpan Progress
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Revision Summary Dialog for Production */}
+      <ProductionRevisionQuickDialog
+        open={!!selectedRevisionSummaryProject}
+        onOpenChange={(open) =>
+          !open && setSelectedRevisionSummaryProject(null)
+        }
+        project={selectedRevisionSummaryProject}
+        onNavigateToItem={(tab, itemId, unitId) => {
+          if (!selectedRevisionSummaryProject) return;
+          const projId = selectedRevisionSummaryProject.id;
+
+          // 1. Expand project row if needed
+          setExpandedRows((prev) => ({ ...prev, [projId]: true }));
+
+          // 2. Switch tab
+          setConveyorTabs((prev) => ({
+            ...prev,
+            [projId]: tab,
+          }));
+
+          // 3. Scroll to target element
+          setTimeout(() => {
+            if (itemId) {
+              const el =
+                document.getElementById(`item-${itemId}`) ||
+                document.getElementById(`unit-${unitId}`);
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+                el.classList.add("ring-2", "ring-primary", "transition-all");
+                setTimeout(
+                  () => el.classList.remove("ring-2", "ring-primary"),
+                  3000,
+                );
+              }
+            }
+          }, 300);
+        }}
       />
     </div>
   );

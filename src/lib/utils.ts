@@ -50,3 +50,21 @@ export function formatPhoneNumber(phone: string): string {
   // For now, just clean it up to keep it as digits
   return cleaned;
 }
+
+/**
+ * Utility to parse single URL string, comma-separated string, or JSON string array into string[]
+ */
+export function parseSPBImageUrls(imageUrl?: string | null): string[] {
+  if (!imageUrl || !imageUrl.trim()) return [];
+  const trimmed = imageUrl.trim();
+  try {
+    if (trimmed.startsWith("[")) {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.filter((s) => typeof s === "string" && s.trim());
+    }
+    if (trimmed.includes(",")) {
+      return trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+  } catch {}
+  return [trimmed];
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Plus,
@@ -26,7 +27,12 @@ import {
   AlertTriangle,
   X,
   Send,
+  Download,
+  Upload,
+  FileSpreadsheet,
 } from "lucide-react";
+import { downloadBoQTemplate, parseBoQExcelFile, SmartExcelRow } from "@/lib/boq-excel-utils";
+import { BoQSmartImportDialog } from "@/components/trackers/boq-smart-import-dialog";
 import {
   Popover,
   PopoverContent,
@@ -65,7 +71,7 @@ const PDFViewer = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="h-[500px] w-full flex flex-col items-center justify-center text-muted-foreground gap-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+      <div className="h-125 w-full flex flex-col items-center justify-center text-muted-foreground gap-3 bg-zinc-900 border border-zinc-800 rounded-lg">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
         <span className="text-sm font-semibold">Memuat PDF Viewer...</span>
       </div>
@@ -73,7 +79,7 @@ const PDFViewer = dynamic(
   },
 );
 
-interface BoQItemDisplay {
+export interface BoQItemDisplay {
   id: string; // Temp client ID or database ID
   itemId: string;
   itemCode: string;
@@ -166,6 +172,69 @@ export function BoQManagerDialog({
     boqStatus === "PENDING_APPROVAL" || boqStatus === "APPROVED";
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+
+  // Excel Template & Import
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [smartImportOpen, setSmartImportOpen] = useState(false);
+  const [parsedExcelRows, setParsedExcelRows] = useState<SmartExcelRow[]>([]);
+
+  const handleDownloadTemplate = () => {
+    downloadBoQTemplate(masterItems);
+    toast.success("Template Excel berhasil diunduh.");
+  };
+
+  const handleConfirmSmartImport = (importedItems: BoQItemDisplay[]) => {
+    const existingIds = new Set(boqItems.map((it) => it.itemId));
+    const newUniqueItems = importedItems.filter(
+      (it) => !existingIds.has(it.itemId),
+    );
+
+    setBoqItems((prev) => [...prev, ...newUniqueItems]);
+    toast.success(
+      `Berhasil mengimpor ${newUniqueItems.length} barang ke daftar BoQ.`,
+    );
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    try {
+      const result = await parseBoQExcelFile(file, masterItems);
+
+      if (result.rows.length === 0) {
+        toast.warning(
+          result.errors.length > 0
+            ? result.errors.join("; ")
+            : "Tidak ada data barang yang valid ditemukan di file Excel.",
+        );
+        return;
+      }
+
+      // Open Smart Import Dialog for user review & confirmation
+      setParsedExcelRows(result.rows);
+      setSmartImportOpen(true);
+
+      if (result.errors.length > 0) {
+        toast.warning(
+          `Ada ${result.errors.length} baris tidak dapat dibaca dari Excel.`,
+          {
+            description: result.errors.slice(0, 3).join("; "),
+            duration: 7000,
+          },
+        );
+      }
+    } catch (err: any) {
+      toast.error(
+        "Gagal mengimpor file Excel: " + (err.message || "Format file tidak valid."),
+      );
+    } finally {
+      setIsImporting(false);
+      if (e.target) e.target.value = "";
+    }
+  };
 
   const formatInputRupiah = (value: string) => {
     const numberString = value.replace(/[^0-9]/g, "");
@@ -284,7 +353,8 @@ export function BoQManagerDialog({
 
   const handleSelectItem = (item: any) => {
     setSelectedItem(item);
-    setInputUnit((item.unit?.name || "pcs").toLowerCase());
+    const itemUnit = (item.unit?.name || item.unit || "pcs").toLowerCase();
+    setInputUnit(itemUnit);
     setInputPrice("");
     setOpenPopover(false);
     setSearchQuery("");
@@ -293,6 +363,18 @@ export function BoQManagerDialog({
   const handleAddItem = () => {
     if (!selectedItem) {
       toast.error("Silakan pilih barang dari Master Data terlebih dahulu.");
+      return;
+    }
+
+    const expectedUnit = (
+      selectedItem.unit?.name ||
+      selectedItem.unit ||
+      "pcs"
+    ).toLowerCase();
+    if (inputUnit.toLowerCase() !== expectedUnit) {
+      toast.error(
+        `Satuan barang harus sesuai dengan stok master data (${expectedUnit.toUpperCase()}).`,
+      );
       return;
     }
 
@@ -492,7 +574,7 @@ export function BoQManagerDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-[950px]! max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-2xl">
+        <DialogContent className="max-w-5xl! max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-2xl">
           <Tabs
             value={activeTab}
             onValueChange={setActiveTab}
@@ -514,7 +596,7 @@ export function BoQManagerDialog({
                   </div>
                 </div>
 
-                <TabsList className="grid w-[280px] grid-cols-2 bg-muted/50 p-1 mr-4">
+                <TabsList className="grid w-70 grid-cols-2 bg-muted/50 p-1 mr-4">
                   <TabsTrigger
                     value="create"
                     className="text-xs font-semibold data-[state=active]:bg-primary data-[state=active]:text-white transition-all cursor-pointer"
@@ -661,13 +743,54 @@ export function BoQManagerDialog({
 
                   {/* Input Form for adding a new item */}
                   <div className="p-5 rounded-2xl border-2 border-border/40 bg-background space-y-4 shadow-xs">
-                    <span className="text-xs font-bold text-muted-foreground block">
-                      Input Item BoQ Baru
-                    </span>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-border/40 pb-3">
+                      <span className="text-xs font-bold text-muted-foreground block">
+                        Input Item BoQ Baru
+                      </span>
 
-                    <div className="grid grid-cols-[1.8fr_120px_120px_160px] gap-4 items-end">
+                      <div className="flex items-center gap-2 flex-wrap shrink-0">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownloadTemplate}
+                          className="h-8 text-[11px] font-bold gap-1.5 rounded-xl border-dashed border-primary/40 text-primary hover:bg-primary/5 cursor-pointer shadow-2xs"
+                          title="Unduh Template Excel Pengisian BoQ"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Download Template Excel
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isImporting || isReadOnly}
+                          onClick={() => fileInputRef.current?.click()}
+                          className="h-8 text-[11px] font-bold gap-1.5 rounded-xl border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer shadow-2xs"
+                          title="Import Barang dari File Excel"
+                        >
+                          {isImporting ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="w-3.5 h-3.5" />
+                          )}
+                          Import dari Excel
+                        </Button>
+
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleFileUpload}
+                          accept=".xlsx, .xls, .csv"
+                          className="hidden"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_100px_90px_140px] gap-3 items-end">
                       {/* Master Item Search */}
-                      <div className="space-y-1.5 flex flex-col">
+                      <div className="space-y-1.5 flex flex-col min-w-0">
                         <Label className="text-[11px] font-semibold text-muted-foreground">
                           Cari Barang dari Master Data *
                         </Label>
@@ -678,19 +801,19 @@ export function BoQManagerDialog({
                           <PopoverTrigger
                             disabled={isReadOnly}
                             className={cn(
-                              "h-10 w-full flex items-center justify-between bg-muted/20 border-2 border-border/60 text-left rounded-xl px-3 hover:bg-muted/30 outline-hidden cursor-pointer",
+                              "h-10 w-full flex items-center justify-between bg-muted/20 border-2 border-border/60 text-left rounded-xl px-3 hover:bg-muted/30 outline-hidden cursor-pointer min-w-0 overflow-hidden",
                               isReadOnly && "pointer-events-none opacity-50",
                             )}
                           >
-                            <span className="truncate text-xs font-semibold text-foreground">
+                            <span className="truncate text-xs font-semibold text-foreground min-w-0 block">
                               {selectedItem
-                                ? `[${selectedItem.code}] ${selectedItem.name}`
+                                ? `[${selectedItem.code}] ${selectedItem.name} (${selectedItem.unit?.name || selectedItem.unit || "pcs"})`
                                 : "Cari berdasarkan nama atau kode..."}
                             </span>
-                            <ChevronDown className="h-4 w-4 shrink-0 opacity-50 text-muted-foreground" />
+                            <ChevronDown className="h-4 w-4 shrink-0 opacity-50 text-muted-foreground ml-1" />
                           </PopoverTrigger>
                           <PopoverContent
-                            className="w-[450px] p-0 rounded-xl border border-border shadow-xl bg-background"
+                            className="w-112.5 p-0 rounded-xl border border-border shadow-xl bg-background"
                             align="start"
                           >
                             <Command>
@@ -698,7 +821,7 @@ export function BoQManagerDialog({
                                 placeholder="Ketik nama atau kode barang..."
                                 onValueChange={setSearchQuery}
                               />
-                              <CommandList className="max-h-[220px] overflow-y-auto">
+                              <CommandList className="max-h-55 overflow-y-auto">
                                 <CommandEmpty className="p-3 text-center text-xs text-muted-foreground">
                                   {isLoadingMaster
                                     ? "Memuat barang..."
@@ -712,7 +835,12 @@ export function BoQManagerDialog({
                                       return (
                                         item.name?.toLowerCase().includes(q) ||
                                         item.code?.toLowerCase().includes(q) ||
-                                        item.typeMerk?.toLowerCase().includes(q)
+                                        item.typeMerk
+                                          ?.toLowerCase()
+                                          .includes(q) ||
+                                        (item.unit?.name || item.unit || "")
+                                          .toLowerCase()
+                                          .includes(q)
                                       );
                                     })
                                     .slice(0, 50)
@@ -721,16 +849,24 @@ export function BoQManagerDialog({
                                         key={item.id}
                                         value={`${item.code}_${item.name}`}
                                         onSelect={() => handleSelectItem(item)}
-                                        className="text-xs font-medium cursor-pointer hover:bg-primary/5 p-2 rounded-lg"
+                                        className="text-xs font-medium cursor-pointer hover:bg-primary/5 p-2.5 rounded-lg border-b border-border/20 last:border-0"
                                       >
-                                        <div className="flex flex-col">
-                                          <span className="font-bold text-foreground">
-                                            {item.name}
-                                          </span>
+                                        <div className="flex flex-col gap-1 w-full">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="font-bold text-foreground">
+                                              {item.name}
+                                            </span>
+                                            <span className="text-[10px] font-bold px-2 py-0.5 text-primary shrink-0">
+                                              Satuan:{" "}
+                                              {item.unit?.name ||
+                                                item.unit ||
+                                                "pcs"}
+                                            </span>
+                                          </div>
                                           <span className="text-[10px] text-muted-foreground">
-                                            Kode: {item.code}{" "}
+                                            Kode: {item.code}
                                             {item.typeMerk
-                                              ? `• Tipe: ${item.typeMerk}`
+                                              ? ` • Tipe: ${item.typeMerk}`
                                               : ""}
                                           </span>
                                         </div>
@@ -758,18 +894,19 @@ export function BoQManagerDialog({
                         />
                       </div>
 
-                      {/* Unit Dropdown */}
+                      {/* Unit Dropdown (Locked to Selected Item's Master Stock Unit) */}
                       <div className="space-y-1.5">
-                        <Label className="text-[11px] font-semibold text-muted-foreground">
-                          Satuan *
+                        <Label className="text-[11px] font-semibold text-muted-foreground flex items-center justify-between">
+                          <span>Satuan *</span>
                         </Label>
                         <select
                           value={inputUnit}
                           onChange={(e) => setInputUnit(e.target.value)}
-                          disabled={isReadOnly}
+                          disabled={isReadOnly || !!selectedItem}
                           className={cn(
-                            "h-10 w-full flex items-center bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-semibold px-2 cursor-pointer outline-hidden focus-visible:border-primary/50",
-                            isReadOnly && "pointer-events-none opacity-50",
+                            "h-10 w-full flex items-center bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-bold px-2.5 cursor-pointer outline-hidden focus-visible:border-primary/50 uppercase",
+                            (isReadOnly || !!selectedItem) &&
+                              "pointer-events-none opacity-80 bg-muted/40 text-foreground cursor-not-allowed",
                           )}
                         >
                           {dbUnits.length > 0 ? (
@@ -785,40 +922,40 @@ export function BoQManagerDialog({
                           ) : (
                             <>
                               <option
-                                value="PCS"
+                                value="pcs"
                                 className="text-foreground bg-background"
                               >
-                                PCS
+                                pcs
                               </option>
                               <option
-                                value="MTR"
+                                value="mtr"
                                 className="text-foreground bg-background"
                               >
-                                MTR
+                                mtr
                               </option>
                               <option
-                                value="KG"
+                                value="kg"
                                 className="text-foreground bg-background"
                               >
-                                KG
+                                kg
                               </option>
                               <option
-                                value="SET"
+                                value="set"
                                 className="text-foreground bg-background"
                               >
-                                SET
+                                set
                               </option>
                               <option
-                                value="LSN"
+                                value="lsn"
                                 className="text-foreground bg-background"
                               >
-                                LSN
+                                lsn
                               </option>
                               <option
-                                value="SAK"
+                                value="sak"
                                 className="text-foreground bg-background"
                               >
-                                SAK
+                                sak
                               </option>
                             </>
                           )}
@@ -845,18 +982,18 @@ export function BoQManagerDialog({
                     </div>
 
                     {/* Note, Rupiah Subtext, and Add Button */}
-                    <div className="grid grid-cols-[1fr_auto] gap-4 items-center pt-2">
-                      <div className="space-y-1">
+                    <div className="flex flex-col sm:flex-row gap-3 items-end justify-between pt-2">
+                      <div className="space-y-1 flex-1 min-w-0 w-full">
                         <Label className="text-[11px] font-semibold text-muted-foreground">
                           Catatan (Opsional)
                         </Label>
-                        <Input
-                          type="text"
+                        <Textarea
                           placeholder="e.g. untuk kebutuhan frame utama, toleransi 1mm"
                           value={inputNote}
                           onChange={(e) => setInputNote(e.target.value)}
                           disabled={isReadOnly}
-                          className="h-10 bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-medium px-3 focus-visible:ring-primary/20"
+                          rows={2}
+                          className="min-h-12 bg-muted/20 border-2 border-border/60 rounded-xl text-xs font-medium px-3 py-2 focus-visible:ring-primary/20 resize-none w-full"
                         />
                         {(() => {
                           const parsedQty = parseFloat(
@@ -879,7 +1016,7 @@ export function BoQManagerDialog({
                         })()}
                       </div>
 
-                      <div className="flex items-center gap-2 self-end">
+                      <div className="flex items-center gap-2 shrink-0 pb-0.5">
                         {editingItemId && (
                           <Button
                             variant="outline"
@@ -926,29 +1063,28 @@ export function BoQManagerDialog({
                       Daftar Barang BoQ ({boqItems.length} Item)
                     </span>
 
-                    <div className="border border-border rounded-xl overflow-hidden shadow-xs bg-card">
-                      <div className="max-h-[250px] overflow-y-auto">
+                    <div className="border border-border rounded-xl overflow-x-auto shadow-xs bg-card">
+                      <div className="max-h-62.5 overflow-y-auto min-w-140">
                         <table className="w-full text-left border-collapse text-xs">
                           <thead>
                             <tr className="bg-muted/40 border-b border-border/50 font-bold text-muted-foreground select-none">
-                              <th className="p-3 w-[60px] text-center font-bold">
+                              <th className="p-3 w-12 text-center font-bold">
                                 No
                               </th>
-                              <th className="p-3 w-[120px] font-bold">
+                              <th className="p-3 w-28 font-bold">
                                 Kode Barang
                               </th>
                               <th className="p-3 font-bold">Nama Barang</th>
-                              <th className="p-3 w-[100px] text-right font-bold">
-                                Kuantitas
+                              <th className="p-3 w-24 text-center font-bold">
+                                Qty
                               </th>
-                              <th className="p-3 w-[80px] font-bold">Satuan</th>
-                              <th className="p-3 w-[150px] text-right font-bold">
+                              <th className="p-3 w-32 text-right font-bold">
                                 Harga Satuan
                               </th>
-                              <th className="p-3 w-[150px] text-right font-bold">
+                              <th className="p-3 w-32 text-right font-bold">
                                 Subtotal
                               </th>
-                              <th className="p-3 w-[80px] text-center font-bold">
+                              <th className="p-3 w-16 text-center font-bold">
                                 Aksi
                               </th>
                             </tr>
@@ -957,7 +1093,7 @@ export function BoQManagerDialog({
                             {boqItems.length === 0 ? (
                               <tr>
                                 <td
-                                  colSpan={8}
+                                  colSpan={7}
                                   className="p-10 text-center text-muted-foreground opacity-50 font-medium"
                                 >
                                   Belum ada barang dalam list BoQ. Silakan
@@ -977,27 +1113,38 @@ export function BoQManagerDialog({
                                     {item.itemCode}
                                   </td>
                                   <td className="p-3">
-                                    <div className="flex flex-col gap-0.5">
-                                      <span className="font-bold text-foreground">
+                                    <div className="flex flex-col gap-0.5 min-w-0">
+                                      <span
+                                        className="font-bold text-foreground leading-tight"
+                                        title={item.itemName}
+                                      >
                                         {item.itemName}
                                       </span>
+                                      {item.itemTypeMerk && (
+                                        <span className="text-[11px] font-medium text-muted-foreground leading-tight">
+                                          {item.itemTypeMerk}
+                                        </span>
+                                      )}
                                       {item.note && (
-                                        <span className="text-[10px] text-muted-foreground font-medium italic">
+                                        <span
+                                          className="text-[10px] text-muted-foreground/80 font-medium italic truncate block mt-0.5"
+                                          title={item.note}
+                                        >
                                           Catatan: {item.note}
                                         </span>
                                       )}
                                     </div>
                                   </td>
-                                  <td className="p-3 text-right font-black text-foreground">
-                                    {item.qty}
+                                  <td className="p-3 text-center font-bold text-foreground whitespace-nowrap">
+                                    {item.qty}{" "}
+                                    <span className="text-xs font-semibold text-muted-foreground lowercase">
+                                      {item.unit}
+                                    </span>
                                   </td>
-                                  <td className="p-3 text-muted-foreground lowercase font-semibold">
-                                    {item.unit}
-                                  </td>
-                                  <td className="p-3 text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                                  <td className="p-3 text-right font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
                                     {formatRupiah(item.price)}
                                   </td>
-                                  <td className="p-3 text-right font-extrabold text-foreground">
+                                  <td className="p-3 text-right font-extrabold text-foreground whitespace-nowrap">
                                     {formatRupiah(item.qty * item.price)}
                                   </td>
                                   <td className="p-3 text-center">
@@ -1133,7 +1280,7 @@ export function BoQManagerDialog({
                             </div>
 
                             {/* Actions */}
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap shrink-0">
                               {(isEngineering ||
                                 roles.includes("Superadmin") ||
                                 roles.includes("Admin")) &&
@@ -1141,7 +1288,7 @@ export function BoQManagerDialog({
                                   boq.boqStatus === "REJECTED") && (
                                   <Button
                                     size="sm"
-                                    className="h-9 text-[11px] font-bold px-4 gap-1.5 cursor-pointer bg-amber-600 hover:bg-amber-700 text-white shadow-sm rounded-lg"
+                                    className="h-8 text-xs font-bold px-3 gap-1 cursor-pointer bg-orange-600 hover:bg-orange-700 text-white shadow-xs rounded-lg shrink-0"
                                     onClick={() => {
                                       setTargetBoQ(boq);
                                       setShowSubmitConfirm(true);
@@ -1154,7 +1301,7 @@ export function BoQManagerDialog({
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-9 text-[11px] font-bold px-3 gap-1.5 cursor-pointer border border-border/80 hover:bg-muted"
+                                className="h-8 text-xs font-semibold px-2.5 gap-1 cursor-pointer border border-border/80 hover:bg-muted rounded-lg shrink-0"
                                 onClick={async () => {
                                   setSelectedBoQId(boq.id);
                                   const details = await getProjectBoQ(boq.id);
@@ -1171,7 +1318,7 @@ export function BoQManagerDialog({
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-9 text-[11px] font-bold px-3 gap-1.5 cursor-pointer border border-border/80 hover:bg-primary/5 hover:text-primary hover:border-primary/20"
+                                className="h-8 text-xs font-semibold px-2.5 gap-1 cursor-pointer border border-border/80 hover:bg-primary/5 hover:text-primary hover:border-primary/20 rounded-lg shrink-0"
                                 onClick={() => loadSavedBoqForEdit(boq)}
                                 disabled={isBoqReadOnly}
                               >
@@ -1180,7 +1327,7 @@ export function BoQManagerDialog({
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-9 text-[11px] font-bold px-3 gap-1.5 cursor-pointer border border-border/80 hover:bg-orange-500/5 hover:text-orange-600 hover:border-orange-500/20"
+                                className="h-8 text-xs font-semibold px-2.5 gap-1 cursor-pointer border border-border/80 hover:bg-orange-500/5 hover:text-orange-600 hover:border-orange-500/20 rounded-lg shrink-0"
                                 onClick={async () => {
                                   setSelectedBoQId(boq.id);
                                   const details = await getProjectBoQ(boq.id);
@@ -1202,7 +1349,7 @@ export function BoQManagerDialog({
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-9 text-[11px] font-bold px-3 gap-1.5 cursor-pointer border border-border/80 hover:bg-red-500/5 hover:text-red-500 hover:border-red-500/20"
+                                className="h-8 text-xs font-semibold px-2.5 gap-1 cursor-pointer border border-border/80 hover:bg-rose-500/10 hover:text-rose-600 hover:border-rose-300 rounded-lg shrink-0"
                                 onClick={() => {
                                   setTargetBoQ(boq);
                                   setShowDeleteConfirm(true);
@@ -1217,7 +1364,7 @@ export function BoQManagerDialog({
                       })}
                     </div>
                   ) : (
-                    <div className="h-[250px] border border-dashed border-border rounded-xl flex flex-col items-center justify-center text-muted-foreground gap-3">
+                    <div className="h-62.5 border border-dashed border-border rounded-xl flex flex-col items-center justify-center text-muted-foreground gap-3">
                       <FileText className="w-12 h-12 opacity-20" />
                       <p className="text-xs font-bold">
                         Belum ada riwayat BoQ untuk project ini.
@@ -1274,7 +1421,8 @@ export function BoQManagerDialog({
               Pratinjau Cetak BoQ
             </DialogTitle>
             <DialogDescription className="text-zinc-400 text-xs">
-              Pratinjau dokumen PDF Bill of Quantities ({savedBoQNumber || "-"}).
+              Pratinjau dokumen PDF Bill of Quantities ({savedBoQNumber || "-"}
+              ).
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 w-full overflow-hidden rounded-xl bg-zinc-900 border border-zinc-800 mt-4 relative">
@@ -1316,7 +1464,7 @@ export function BoQManagerDialog({
       </Dialog>
       {/* BoQ  Dialog */}
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="max-w-[900px]! max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl">
+        <DialogContent className="max-w-225! max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl">
           <DialogHeader className="p-6 pb-4 shrink-0 border-b border-border/50">
             <DialogTitle className="text-base font-bold flex items-center gap-1.5">
               <FileText className="w-5 h-5 text-primary" />
@@ -1373,18 +1521,17 @@ export function BoQManagerDialog({
           </div>
 
           {/* Detail List Table */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6">
             <div className="border border-border rounded-xl overflow-x-auto shadow-xs bg-card">
-              <table className="w-full text-left border-collapse text-[11px]">
+              <table className="w-full text-left border-collapse text-[11px] min-w-130">
                 <thead>
                   <tr className="bg-muted/40 border-b border-border/50 font-bold text-muted-foreground select-none">
-                    <th className="p-3 w-[50px] text-center">No</th>
-                    <th className="p-3 w-[120px]">Kode Barang</th>
+                    <th className="p-3 w-12 text-center">No</th>
+                    <th className="p-3 w-28">Kode Barang</th>
                     <th className="p-3">Nama Barang</th>
-                    <th className="p-3 w-[80px] text-right">Kuantitas</th>
-                    <th className="p-3 w-[70px]">Satuan</th>
-                    <th className="p-3 w-[120px] text-right">Harga Satuan</th>
-                    <th className="p-3 w-[120px] text-right">Subtotal</th>
+                    <th className="p-3 w-22 text-center">Qty</th>
+                    <th className="p-3 w-30 text-right">Harga Satuan</th>
+                    <th className="p-3 w-30 text-right">Subtotal</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1403,7 +1550,7 @@ export function BoQManagerDialog({
                       return (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={6}
                             className="p-8 text-center text-muted-foreground italic"
                           >
                             Tidak ada barang yang cocok dengan kata kunci
@@ -1424,27 +1571,39 @@ export function BoQManagerDialog({
                         <td className="p-3 font-semibold text-primary">
                           {item.itemCode}
                         </td>
-                        <td className="p-3 font-bold text-foreground">
-                          {item.itemName}
-                          {item.itemTypeMerk && (
-                            <span className="text-[10px] font-normal text-foreground ml-1.5">
-                              ({item.itemTypeMerk})
+                        <td className="p-3">
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            <span
+                              className="font-bold text-foreground leading-tight"
+                              title={item.itemName}
+                            >
+                              {item.itemName}
                             </span>
-                          )}
-                          {item.note && (
-                            <div className="text-[10px] font-medium text-muted-foreground italic mt-0.5">
-                              Catatan: {item.note}
-                            </div>
-                          )}
+                            {item.itemTypeMerk && (
+                              <span className="text-[11px] font-medium text-muted-foreground leading-tight">
+                                {item.itemTypeMerk}
+                              </span>
+                            )}
+                            {item.note && (
+                              <span
+                                className="text-[10px] text-muted-foreground/80 font-medium italic truncate block mt-0.5"
+                                title={item.note}
+                              >
+                                Catatan: {item.note}
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className="p-3 text-right font-bold">{item.qty}</td>
-                        <td className="p-3 text-foreground uppercase font-semibold">
-                          {item.unit}
+                        <td className="p-3 text-center font-bold text-foreground whitespace-nowrap">
+                          {item.qty}{" "}
+                          <span className="text-xs font-semibold text-muted-foreground lowercase">
+                            {item.unit}
+                          </span>
                         </td>
-                        <td className="p-3 text-right text-emerald-600 dark:text-emerald-400 font-semibold">
+                        <td className="p-3 text-right text-emerald-600 dark:text-emerald-400 font-semibold whitespace-nowrap">
                           {formatRupiah(item.price)}
                         </td>
-                        <td className="p-3 text-right font-extrabold">
+                        <td className="p-3 text-right font-extrabold whitespace-nowrap">
                           {formatRupiah(item.qty * item.price)}
                         </td>
                       </tr>
@@ -1467,7 +1626,7 @@ export function BoQManagerDialog({
       </Dialog>
       {/* Delete BoQ Confirmation Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader className="space-y-2">
             <DialogTitle className="flex items-center gap-2 text-rose-600 font-bold">
               <AlertTriangle className="w-5 h-5" />
@@ -1505,7 +1664,7 @@ export function BoQManagerDialog({
       </Dialog>
       {/* Submit Approval Confirmation Dialog */}
       <Dialog open={showSubmitConfirm} onOpenChange={setShowSubmitConfirm}>
-        <DialogContent className="sm:max-w-[420px] rounded-2xl border border-border shadow-2xl p-6">
+        <DialogContent className="sm:max-w-105 rounded-2xl border border-border shadow-2xl p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-foreground font-bold">
               <Send className="w-5 h-5 text-amber-600" />
@@ -1570,6 +1729,16 @@ export function BoQManagerDialog({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Smart Excel Import Resolution Dialog */}
+      <BoQSmartImportDialog
+        open={smartImportOpen}
+        onOpenChange={setSmartImportOpen}
+        parsedRows={parsedExcelRows}
+        masterItems={masterItems}
+        dbUnits={dbUnits}
+        onConfirmImport={handleConfirmSmartImport}
+      />
     </>
   );
 }

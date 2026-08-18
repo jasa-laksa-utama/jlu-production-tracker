@@ -1,7 +1,5 @@
-import {
-  getProjectsByDivision,
-  getDivisionStats,
-} from "@/app/actions/projects";
+import { getProjects, getDivisionStats } from "@/app/actions/projects";
+import { getPOReceiptsForQC } from "@/app/actions/qc-receipt";
 import { QCTable } from "@/components/trackers/qc-table";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Metadata } from "next";
@@ -9,7 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 
 export const metadata: Metadata = {
   title: "Quality Control Tracker | PT. JLU Production",
-  description: "Track and approve/reject production stages in parallel.",
+  description: "Track and approve/reject production stages and PO goods receipt QC.",
 };
 
 export default async function QualityControlTrackerPage({
@@ -24,18 +22,21 @@ export default async function QualityControlTrackerPage({
   const status = (resolvedParams.status as string) || "ALL";
   const sort = (resolvedParams.sort as string) || "desc";
 
-  const [projectsResult, statsResult] = await Promise.all([
-    getProjectsByDivision("QUALITY_CONTROL", {
+  const [projectsResult, statsResult, poReceiptsResult] = await Promise.all([
+    getProjects({
       page,
       pageSize: limit,
       search,
       status,
       sortOrder: sort as any,
+      division: "QUALITY_CONTROL",
     }),
     getDivisionStats("QUALITY_CONTROL"),
+    getPOReceiptsForQC("ALL"),
   ]);
 
   const projects = projectsResult.success ? (projectsResult.data as any[]) : [];
+  const poReceipts = poReceiptsResult.success ? (poReceiptsResult.data as any[]) : [];
   const meta = projectsResult.success
     ? projectsResult.meta
     : { totalPages: 1, totalCount: 0, currentPage: 1 };
@@ -58,13 +59,20 @@ export default async function QualityControlTrackerPage({
 
         <main className="flex-1 w-full p-6 pb-2 overflow-y-auto overflow-x-hidden space-y-6 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
           <div className="flex flex-col gap-2">
-            <h2 className="text-2xl font-bold tracking-tight">Divisi Quality Control</h2>
+            <h2 className="text-2xl font-bold tracking-tight">
+              Divisi Quality Control
+            </h2>
             <p className="text-muted-foreground">
-              Pengujian kualitas produk, persetujuan dan penolakan tahapan pengerjaan (Fabrikasi, Machining, Mechanical, Finishing) secara paralel dan dinamis.
+              Update Progress Pengujian Hasil Produksi
             </p>
           </div>
 
-          <QCTable projects={JSON.parse(JSON.stringify(projects))} meta={meta} stats={stats} />
+          <QCTable
+            projects={JSON.parse(JSON.stringify(projects))}
+            poReceipts={JSON.parse(JSON.stringify(poReceipts))}
+            meta={meta}
+            stats={stats}
+          />
         </main>
       </div>
     </div>

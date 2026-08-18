@@ -1,16 +1,6 @@
-import {
-  getProjectsByDivision,
-  getDivisionStats,
-} from "@/app/actions/projects";
+import { getProjects } from "@/app/actions/projects";
+import { getPendingSPBSubstitutions } from "@/app/actions/spb";
 import { EngineeringTable } from "@/components/trackers/engineering-table";
-import {
-  PenTool,
-  Box,
-  AlertCircle,
-  Info,
-  LayoutDashboard,
-  CheckCircle2,
-} from "lucide-react";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Metadata } from "next";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -35,26 +25,21 @@ export default async function EngineeringTrackerPage({
   const end = (resolvedParams.end as string) || "";
   const sort = (resolvedParams.sort as string) || "desc";
 
-  const [projectsResult, statsResult] = await Promise.all([
-    getProjectsByDivision("ENGINEERING", {
-      page,
-      pageSize: limit,
-      search,
-      status,
-      startDate: start,
-      endDate: end,
-      sortOrder: sort as any,
-    }),
-    getDivisionStats("ENGINEERING"),
-  ]);
+  const projectsResult = await getProjects({
+    page,
+    pageSize: limit,
+    search,
+    status,
+    startDate: start,
+    endDate: end,
+    sortOrder: sort as any,
+    division: "ENGINEERING",
+  });
 
   const projects = projectsResult.success ? (projectsResult.data as any[]) : [];
   const meta = projectsResult.success
     ? projectsResult.meta
     : { totalPages: 1, totalCount: 0, currentPage: 1 };
-  const stats = statsResult.success
-    ? statsResult.data
-    : { totalActive: 0, inProgress: 0, review: 0, approved: 0 };
 
   return (
     <div className="flex w-full overflow-hidden bg-background h-screen">
@@ -72,63 +57,12 @@ export default async function EngineeringTrackerPage({
             </p>
           </div>
 
-          {/* Clean Stats Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-sidebar-accent/30 border border-border p-4 rounded-xl flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground font-semibold">
-                  Total Active
-                </p>
-                <h3 className="text-xl font-bold">{stats?.totalActive || 0}</h3>
-              </div>
-              <div className="p-2 bg-primary/10 rounded-lg text-primary">
-                <LayoutDashboard className="w-4 h-4" />
-              </div>
-            </div>
-
-            <div className="bg-sidebar-accent/30 border border-border p-4 rounded-xl flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground font-semibold">
-                  In Progress
-                </p>
-                <h3 className="text-xl font-bold ">{stats?.inProgress || 0}</h3>
-              </div>
-              <div className="p-2 bg-primary/10 rounded-lg text-primary">
-                <PenTool className="w-4 h-4" />
-              </div>
-            </div>
-
-            <div className="bg-sidebar-accent/30 border border-border p-4 rounded-xl flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground font-semibold">
-                  In Review
-                </p>
-                <h3 className="text-xl font-bold ">{stats?.review || 0}</h3>
-              </div>
-              <div className="p-2 bg-primary/10 rounded-lg text-primary">
-                <AlertCircle className="w-4 h-4" />
-              </div>
-            </div>
-
-            <div className="bg-sidebar-accent/30 border border-border p-4 rounded-xl flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground font-semibold">
-                  Approved
-                </p>
-                <h3 className="text-xl font-bold ">{stats?.approved || 0}</h3>
-              </div>
-              <div className="p-2 bg-green-500/10 rounded-lg text-green-600">
-                <CheckCircle2 className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
-
           {/* Table Section */}
           <div className="space-y-4 pt-2">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-sm">Working Pipeline</h3>
-            </div>
-            <EngineeringTable projects={JSON.parse(JSON.stringify(projects))} meta={meta} />
+            <EngineeringTable
+              projects={JSON.parse(JSON.stringify(projects))}
+              meta={meta}
+            />
           </div>
         </main>
       </div>

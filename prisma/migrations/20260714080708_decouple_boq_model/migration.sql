@@ -18,25 +18,25 @@
 ALTER TABLE "boq_items" DROP CONSTRAINT "boq_items_projectId_fkey";
 
 -- DropIndex
-DROP INDEX "boq_items_projectId_itemId_key";
+DROP INDEX IF EXISTS "boq_items_projectId_itemId_key";
 
 -- DropIndex
-DROP INDEX "projects_boqNumber_key";
+DROP INDEX IF EXISTS "projects_boqNumber_key";
 
 -- AlterTable
-ALTER TABLE "boq_items" DROP COLUMN "projectId",
+ALTER TABLE "boq_items" DROP COLUMN IF EXISTS "projectId",
 ADD COLUMN     "boqId" UUID NOT NULL;
 
 -- AlterTable
-ALTER TABLE "projects" DROP COLUMN "boqApprovedByPm",
-DROP COLUMN "boqApprovedByPmAt",
-DROP COLUMN "boqApprovedByPpic",
-DROP COLUMN "boqApprovedByPpicAt",
-DROP COLUMN "boqMakerName",
-DROP COLUMN "boqNumber",
-DROP COLUMN "boqRejectedAt",
-DROP COLUMN "boqRejectedReason",
-DROP COLUMN "boqStatus";
+ALTER TABLE "projects" DROP COLUMN IF EXISTS "boqApprovedByPm",
+DROP COLUMN IF EXISTS "boqApprovedByPmAt",
+DROP COLUMN IF EXISTS "boqApprovedByPpic",
+DROP COLUMN IF EXISTS "boqApprovedByPpicAt",
+DROP COLUMN IF EXISTS "boqMakerName",
+DROP COLUMN IF EXISTS "boqNumber",
+DROP COLUMN IF EXISTS "boqRejectedAt",
+DROP COLUMN IF EXISTS "boqRejectedReason",
+DROP COLUMN IF EXISTS "boqStatus";
 
 -- CreateTable
 CREATE TABLE "boqs" (
