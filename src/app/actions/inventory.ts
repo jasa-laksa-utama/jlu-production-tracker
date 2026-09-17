@@ -15,7 +15,11 @@ export async function getWarehouseItems() {
         name: "asc",
       },
     });
-    return JSON.parse(JSON.stringify(items));
+    const plainItems = items.map((item) => ({
+      ...item,
+      unitPrice: item.unitPrice ? Number(item.unitPrice) : null,
+    }));
+    return JSON.parse(JSON.stringify(plainItems));
   } catch (error) {
     console.error("Error fetching warehouse items:", error);
     return [];

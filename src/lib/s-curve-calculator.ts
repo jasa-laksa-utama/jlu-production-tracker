@@ -82,7 +82,11 @@ export function generateWeekHeaders(startDateStr: string, totalWeeks: number): S
     const monthName = `${INDONESIAN_MONTHS[weekStart.getMonth()]} ${weekStart.getFullYear()}`;
     
     // Count week index within this month
-    monthCounters[monthName] = (monthCounters[monthName] || 0) + 1;
+    if (w === 1 && weekStart.getDate() >= 25 && !monthCounters[monthName]) {
+      monthCounters[monthName] = 4;
+    } else {
+      monthCounters[monthName] = (monthCounters[monthName] || 0) + 1;
+    }
     const weekIdxInMonth = Math.min(monthCounters[monthName], 5);
     const weekInMonth = ROMAN_NUMERALS[weekIdxInMonth - 1] || `${weekIdxInMonth}`;
 

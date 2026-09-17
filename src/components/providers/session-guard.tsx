@@ -21,10 +21,16 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
       !hasRedirected.current
     ) {
       hasRedirected.current = true;
-      signOut({ redirect: false }).then(() => {
-        const callbackUrl = encodeURIComponent(pathname);
-        window.location.href = `/login?clear=true&callbackUrl=${callbackUrl}`;
-      });
+      signOut({ redirect: false })
+        .catch(() => {})
+        .finally(() => {
+          document.cookie = "authjs.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          document.cookie = "__Secure-authjs.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          document.cookie = "next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          document.cookie = "__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+          const callbackUrl = encodeURIComponent(pathname);
+          window.location.href = `/login?clear=true&callbackUrl=${callbackUrl}`;
+        });
     }
   }, [status, pathname]);
 

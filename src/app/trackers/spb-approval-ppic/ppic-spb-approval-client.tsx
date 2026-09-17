@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { formatJakartaDate } from "@/lib/date-utils";
@@ -31,6 +32,7 @@ import {
 } from "@/components/ui/accordion";
 import {
   Check,
+  CheckCheck,
   X,
   FileText,
   ChevronLeft,
@@ -56,6 +58,7 @@ import {
   rejectSPBGudang,
   approveVendorSelectionByPpic,
   rejectVendorSelectionByPpic,
+  batchApproveVendorSelectionByPpic,
 } from "@/app/actions/spb";
 import { approveBoQByPpic, rejectBoQ } from "@/app/actions/boq-approval";
 import { approveSPJByPpic, rejectSPJ } from "@/app/actions/spj";
@@ -70,6 +73,7 @@ import { SPBPDFDocument } from "@/components/trackers/spb-pdf-document";
 import { SPJPDFDocument } from "@/components/trackers/spj-pdf-document";
 import { BoQPDFDocument } from "@/components/trackers/boq-pdf-document";
 import { SPBSubstitutionCard } from "@/components/trackers/spb-substitution-card";
+import { PpicPackageApprovalTab } from "@/components/trackers/ppic-package-approval-tab";
 
 const PDFViewer = dynamic(
   () => import("@react-pdf/renderer").then((m) => m.PDFViewer),
@@ -95,6 +99,7 @@ interface PpicSpbApprovalClientProps {
   initialSpbGudang?: any[];
   initialVendorItems?: any[];
   masterItems?: any[];
+  initialPackages?: any[];
 }
 
 export function PpicSpbApprovalClient({
@@ -106,6 +111,7 @@ export function PpicSpbApprovalClient({
   initialSpbGudang = [],
   initialVendorItems = [],
   masterItems = [],
+  initialPackages = [],
 }: PpicSpbApprovalClientProps) {
   const [spbs, setSpbs] = useState<any[]>(initialSpbs);
   const [boqs, setBoqs] = useState<any[]>(initialBoqs);
@@ -115,7 +121,13 @@ export function PpicSpbApprovalClient({
     useState<any[]>(initialSubstitutions);
   const [spbGudangList, setSpbGudangList] = useState<any[]>(initialSpbGudang);
   const [vendorItems, setVendorItems] = useState<any[]>(initialVendorItems);
+  const [packagesList, setPackagesList] = useState<any[]>(initialPackages);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const pendingPackagesCount = useMemo(() => {
+    return packagesList.filter((p) => p.ppicStatus === "WAITING_APPROVAL")
+      .length;
+  }, [packagesList]);
 
   const masterItemMap = useMemo(() => {
     const byId: Record<string, string> = {};
@@ -187,7 +199,15 @@ export function PpicSpbApprovalClient({
     }
   };
 
-  const [activeTab, setActiveTab] = useState("spb");
+  const searchParams = useSearchParams();
+  const queryTab = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState(queryTab || "spb");
+
+  useEffect(() => {
+    if (queryTab) {
+      setActiveTab(queryTab);
+    }
+  }, [queryTab]);
 
   // Search & Pagination states
   const [searchQuery, setSearchQuery] = useState("");
@@ -237,6 +257,7 @@ export function PpicSpbApprovalClient({
     spbNumber: string;
   } | null>(null);
   const [vendorRejectReason, setVendorRejectReason] = useState("");
+  const [batchApprovingVendorGroup, setBatchApprovingVendorGroup] = useState<any | null>(null);
 
   // Rejection Dialog states for SPB, BoQ, SPJ, SPB Gudang
   const [rejectingSpbId, setRejectingSpbId] = useState<string | null>(null);
@@ -249,6 +270,33 @@ export function PpicSpbApprovalClient({
   const [spbGudangRejectReason, setSpbGudangRejectReason] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [isRejecting, setIsRejecting] = useState(false);
+
+  const handleBatchApproveVendorSubmit = async () => {
+    if (!batchApprovingVendorGroup) return;
+
+    setIsSubmitting(true);
+    const itemsToApprove = batchApprovingVendorGroup.items.map((it: any) => ({
+      id: it.id,
+      itemType: it.itemType || batchApprovingVendorGroup.itemType || "PROJECT",
+    }));
+    const count = itemsToApprove.length;
+    const spbNum = batchApprovingVendorGroup.spb?.spbNumber || "SPB";
+    const toastId = toast.loading(
+      `Menyetujui ${count} pilihan vendor untuk ${spbNum}...`,
+    );
+
+    const res = await batchApproveVendorSelectionByPpic(itemsToApprove);
+    setIsSubmitting(false);
+
+    if (res.success) {
+      toast.success(res.message, { id: toastId });
+      const approvedIds = new Set(itemsToApprove.map((it: any) => it.id));
+      setVendorItems((prev) => prev.filter((it) => !approvedIds.has(it.id)));
+      setBatchApprovingVendorGroup(null);
+    } else {
+      toast.error(res.error || "Gagal menyetujui semua vendor", { id: toastId });
+    }
+  };
 
   const handleApproveVendorPpicSubmit = async () => {
     if (!approvingVendorItem) return;
@@ -908,6 +956,17 @@ export function PpicSpbApprovalClient({
               {substitutions.length > 0 && (
                 <span className="text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md border border-primary/20">
                   {substitutions.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger
+              value="packages"
+              className="rounded-xl px-3 sm:px-4 py-2 text-xs font-bold transition-all data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-xs cursor-pointer flex items-center gap-1.5 sm:gap-2"
+            >
+              <span>Validasi Paket / Koli</span>
+              {pendingPackagesCount > 0 && (
+                <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/15 px-2 py-0.5 rounded-md border border-amber-500/25">
+                  {pendingPackagesCount}
                 </span>
               )}
             </TabsTrigger>
@@ -1960,8 +2019,8 @@ export function PpicSpbApprovalClient({
                                   <td className="p-2.5 text-center">
                                     <Badge className="text-[10px] font-bold border-none bg-primary/10 text-primary">
                                       {it.itemType === "NON_CONSUMABLE"
-                                        ? "🛠️ Alat / Equipment"
-                                        : "📦 Sekali Pakai"}
+                                        ? "Alat / Equipment"
+                                        : "Sekali Pakai"}
                                     </Badge>
                                   </td>
                                   <td className="p-2.5 text-center font-extrabold text-primary">
@@ -2194,96 +2253,122 @@ export function PpicSpbApprovalClient({
 
                 return (
                   <AccordionItem
-                    key={group.spb.id || idx}
-                    value={group.spb.id || `vendor-group-${idx}`}
+                    key={group.spb?.id || idx}
+                    value={group.spb?.id || `vendor-group-${idx}`}
                     className="border border-border/60 rounded-2xl bg-card overflow-hidden shadow-xs hover:border-primary/30 transition-all border-b-0"
                   >
-                    <AccordionTrigger className="p-3 sm:p-5 hover:bg-muted/10 hover:no-underline select-none">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between w-full pr-1.5 sm:pr-4 text-left gap-2 sm:gap-4">
-                        <div className="flex items-start sm:items-center gap-2.5 sm:gap-3">
-                          <span className="text-xs sm:text-sm font-bold text-muted-foreground shrink-0 min-w-4 sm:min-w-5 mt-0.5 sm:mt-0">
-                            {globalIndex}.
-                          </span>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                              <span className="text-xs font-bold text-primary bg-primary/10 px-2 sm:px-2.5 py-0.5 rounded border border-primary/20">
-                                {group.spb?.spbNumber || "SPB"}
-                              </span>
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-[10px] font-bold px-1.5 sm:px-2 py-0.5",
-                                  isGudang
-                                    ? "bg-purple-500/10 text-purple-700 border-purple-300"
-                                    : "bg-blue-500/10 text-blue-700 border-blue-300",
-                                )}
-                              >
-                                {isGudang ? "SPB Gudang" : "SPB Project"}
-                              </Badge>
-                              <Badge
-                                variant="outline"
-                                className="bg-amber-500/10 text-amber-700 border-amber-300 font-bold text-[10px] px-1.5 sm:px-2 py-0.5"
-                              >
-                                Menunggu ACC PPIC
-                              </Badge>
-                              <span className="text-muted-foreground/60">
-                                •
-                              </span>
-                              <h3 className="text-xs sm:text-sm font-bold text-foreground">
-                                {group.project?.projectName || "Proyek"}
-                              </h3>
-                            </div>
-                            <p className="text-[11px] sm:text-xs text-muted-foreground font-medium mt-1 leading-relaxed">
-                              {isGudang ? (
-                                <>
-                                  Diajukan oleh:{" "}
-                                  <strong className="font-semibold text-foreground">
-                                    {group.spb?.makerName || "Gudang Utama"}
-                                  </strong>{" "}
-                                  <span className="hidden sm:inline">•</span>{" "}
-                                  <br className="sm:hidden" />
-                                  Tanggal:{" "}
-                                  {formatJakartaDate(
-                                    group.spb?.createdAt,
-                                    "datetime",
+                    <div className="flex items-center justify-between pr-3 sm:pr-4 hover:bg-muted/10 transition-colors">
+                      <AccordionTrigger className="px-4 py-3.5 sm:px-5 sm:py-4 hover:no-underline select-none flex-1">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between w-full pr-2 text-left gap-2 sm:gap-4">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-bold text-muted-foreground shrink-0 w-4">
+                              {globalIndex}.
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "text-[10px] font-bold px-2 py-0.5 rounded-md",
+                                    isGudang
+                                      ? "bg-purple-500/10 text-purple-700 border-purple-300 dark:text-purple-300 dark:border-purple-800"
+                                      : "bg-blue-500/10 text-blue-700 border-blue-300 dark:text-blue-300 dark:border-blue-800",
                                   )}
-                                </>
-                              ) : (
-                                <>
-                                  Customer:{" "}
-                                  <strong className="font-semibold text-foreground">
-                                    {customerName}
-                                  </strong>
-                                </>
-                              )}
-                            </p>
+                                >
+                                  {isGudang ? "SPB Gudang" : "SPB Project"}
+                                </Badge>
+                                <span className="text-xs font-bold text-primary">
+                                  {group.spb?.spbNumber || "SPB"}
+                                </span>
+                                <span className="text-muted-foreground/50 hidden sm:inline">
+                                  •
+                                </span>
+                                <span className="text-xs sm:text-sm font-bold text-foreground">
+                                  {group.project?.projectName || "Proyek"}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                {isGudang ? (
+                                  <>
+                                    Diajukan oleh:{" "}
+                                    <strong className="font-semibold text-foreground">
+                                      {group.spb?.makerName || "Gudang Utama"}
+                                    </strong>{" "}
+                                    • Tanggal:{" "}
+                                    {formatJakartaDate(
+                                      group.spb?.createdAt,
+                                      "datetime",
+                                    )}
+                                  </>
+                                ) : (
+                                  <>
+                                    Customer:{" "}
+                                    <strong className="font-semibold text-foreground">
+                                      {customerName}
+                                    </strong>
+                                  </>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                            <span className="text-xs font-semibold text-muted-foreground bg-muted/30 px-2.5 py-0.5 rounded-full border border-border/50">
+                              {group.items.length} Barang
+                            </span>
                           </div>
                         </div>
+                      </AccordionTrigger>
 
-                        <span className="text-[11px] sm:text-xs font-semibold text-muted-foreground self-start sm:self-auto shrink-0 bg-muted/20 px-2 py-0.5 rounded-md border border-border/40">
-                          {group.items.length} Barang
-                        </span>
+                      <div className="shrink-0 pl-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setBatchApprovingVendorGroup(group);
+                          }}
+                          disabled={isSubmitting}
+                          className="h-7 px-2.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:text-emerald-700 dark:hover:text-emerald-300 rounded-lg shadow-none transition-colors"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5 mr-1 text-emerald-500" />
+                          <span className="hidden sm:inline">Approve All</span>
+                          <span className="sm:hidden">All</span>
+                        </Button>
                       </div>
-                    </AccordionTrigger>
+                    </div>
 
-                    <AccordionContent className="border-t border-border/40 bg-muted/5 p-3 sm:p-5 space-y-3 pb-4">
-                      <div className="overflow-x-auto rounded-lg border border-border/40 bg-background">
-                        <table className="w-full text-left text-xs min-w-160">
+                    <AccordionContent className="border-t border-border/40 bg-muted/5 p-3 sm:p-4 space-y-2 pb-4">
+                      <div className="flex items-center justify-between px-0.5 text-xs">
+                        <span className="text-muted-foreground text-[11px]">
+                          Daftar {group.items.length} pilihan vendor
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setBatchApprovingVendorGroup(group)}
+                          disabled={isSubmitting}
+                          className="h-6.5 px-2 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:text-emerald-700 dark:hover:text-emerald-300 rounded-md shadow-none transition-colors"
+                        >
+                          <CheckCheck className="w-3 h-3 mr-1 text-emerald-500" />
+                          Approve Semua ({group.items.length})
+                        </Button>
+                      </div>
+                      <div className="overflow-x-auto rounded-xl border border-border/60 bg-background shadow-2xs">
+                        <table className="w-full text-left text-xs min-w-140">
                           <thead className="bg-muted/30 text-muted-foreground font-semibold border-b border-border/40">
                             <tr>
-                              <th className="p-2.5 text-center w-10">No</th>
-                              <th className="p-2.5">Nama Material / Barang</th>
-                              <th className="p-2.5">Tipe / Merk</th>
-                              <th className="p-2.5 text-center">Qty</th>
-                              <th className="p-2.5">
-                                Vendor Pilihan (Purchasing)
-                              </th>
-                              <th className="p-2.5 text-right">Harga Satuan</th>
-                              <th className="p-2.5 text-right">
-                                Total Estimasi
-                              </th>
-                              <th className="p-2.5">Catatan</th>
-                              <th className="p-2.5 text-center w-44">
+                              <th className="p-3 text-center w-10">No</th>
+                              <th className="p-3">Material & Spesifikasi</th>
+                              <th className="p-3 text-center">Qty</th>
+                              <th className="p-3">Vendor Pilihan</th>
+                              <th className="p-3 text-right">Harga Satuan</th>
+                              <th className="p-3 text-right">Total Estimasi</th>
+                              <th className="p-3">Catatan</th>
+                              <th className="p-3 text-center w-36">
                                 Aksi PPIC
                               </th>
                             </tr>
@@ -2316,46 +2401,48 @@ export function PpicSpbApprovalClient({
                                 item.selectedCatalogPrice !== undefined
                                   ? Number(item.selectedCatalogPrice)
                                   : candidates[0]?.catalogPrice || 0;
+                              const totalPrice = catalogPrice * (item.qty || 0);
 
                               return (
                                 <tr
                                   key={item.id || itemIdx}
                                   className="hover:bg-muted/10 transition-colors"
                                 >
-                                  <td className="p-2.5 text-center font-medium text-muted-foreground">
+                                  <td className="p-3 text-center font-medium text-muted-foreground">
                                     {itemIdx + 1}
                                   </td>
-                                  <td className="p-2.5 font-bold text-foreground">
-                                    {item.name}
+                                  <td className="p-3">
+                                    <div className="font-bold text-foreground text-xs">
+                                      {item.name}
+                                    </div>
+                                    {item.typeMerk ? (
+                                      <div className="text-[11px] text-muted-foreground font-normal mt-0.5">
+                                        {item.typeMerk}
+                                      </div>
+                                    ) : null}
                                   </td>
-                                  <td className="p-2.5 text-muted-foreground font-medium">
-                                    {item.typeMerk || "-"}
-                                  </td>
-                                  <td className="p-2.5 text-center font-semibold text-foreground whitespace-nowrap">
+                                  <td className="p-3 text-center font-semibold text-foreground whitespace-nowrap">
                                     {item.qty} {item.unit || "pcs"}
                                   </td>
-                                  <td className="p-2.5">
-                                    <Badge
-                                      variant="outline"
-                                      className="bg-indigo-500/10 text-indigo-700 border-indigo-300 font-bold text-[10px] px-1.5 py-0"
-                                    >
+                                  <td className="p-3">
+                                    <span className="font-semibold text-primary text-xs">
                                       {candidateName}
-                                    </Badge>
+                                    </span>
                                   </td>
-                                  <td className="p-2.5 text-right font-medium text-foreground whitespace-nowrap">
+                                  <td className="p-3 text-right font-medium text-foreground whitespace-nowrap">
                                     {catalogPrice > 0
                                       ? formatRupiah(catalogPrice)
                                       : "-"}
                                   </td>
-                                  <td className="p-2.5 text-right font-bold text-primary whitespace-nowrap">
-                                    {catalogPrice > 0
-                                      ? formatRupiah(catalogPrice * item.qty)
+                                  <td className="p-3 text-right font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                    {totalPrice > 0
+                                      ? formatRupiah(totalPrice)
                                       : "-"}
                                   </td>
-                                  <td className="p-2.5 text-xs text-muted-foreground font-medium max-w-40 truncate">
+                                  <td className="p-3 text-xs text-muted-foreground max-w-48">
                                     {item.vendorSelectionNote || "-"}
                                   </td>
-                                  <td className="p-2.5 text-center">
+                                  <td className="p-3 text-center">
                                     <div className="flex items-center justify-center gap-1.5">
                                       <Button
                                         size="sm"
@@ -2412,6 +2499,14 @@ export function PpicSpbApprovalClient({
               })}
             </Accordion>
           )}
+        </TabsContent>
+
+        {/* TAB 7: VALIDASI PAKET / KOLI PENGIRIMAN */}
+        <TabsContent
+          value="packages"
+          className="space-y-4 m-0 border-0 p-0 outline-hidden"
+        >
+          <PpicPackageApprovalTab initialPackages={packagesList} />
         </TabsContent>
       </Tabs>
 
@@ -3637,6 +3732,75 @@ export function PpicSpbApprovalClient({
                 <Check className="w-3.5 h-3.5" />
               )}
               Setujui
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* BATCH APPROVAL DIALOG VENDOR PPIC */}
+      <Dialog
+        open={!!batchApprovingVendorGroup}
+        onOpenChange={(open) => !open && setBatchApprovingVendorGroup(null)}
+      >
+        <DialogContent className="w-[92vw] sm:max-w-md rounded-2xl p-4 sm:p-5 space-y-3">
+          <DialogHeader>
+            <DialogTitle className="text-sm sm:text-base font-bold text-foreground flex items-center gap-2">
+              <CheckCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              Setujui Semua Vendor (PPIC)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-0.5">
+              Setujui pilihan vendor untuk semua barang di dokumen ini sekaligus?
+            </DialogDescription>
+          </DialogHeader>
+
+          {batchApprovingVendorGroup && (
+            <div className="bg-muted/30 p-3 rounded-xl border border-border/50 text-xs space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">SPB:</span>
+                <span className="font-bold text-foreground">
+                  {batchApprovingVendorGroup.spb?.spbNumber || "SPB"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Proyek:</span>
+                <span className="font-semibold text-foreground truncate max-w-[200px]">
+                  {batchApprovingVendorGroup.project?.projectName || "Tanpa Proyek"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Total Barang:</span>
+                <Badge
+                  variant="outline"
+                  className="text-[11px] font-bold px-1.5 py-0 bg-emerald-500/10 text-emerald-600 border-emerald-300"
+                >
+                  {batchApprovingVendorGroup.items?.length || 0} Barang
+                </Badge>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-3 gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBatchApprovingVendorGroup(null)}
+              disabled={isSubmitting}
+              className="rounded-lg text-xs font-semibold"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleBatchApproveVendorSubmit}
+              disabled={isSubmitting}
+              className="rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5"
+            >
+              {isSubmitting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <CheckCheck className="w-3.5 h-3.5" />
+              )}
+              Setujui Semua ({batchApprovingVendorGroup?.items?.length || 0})
             </Button>
           </DialogFooter>
         </DialogContent>

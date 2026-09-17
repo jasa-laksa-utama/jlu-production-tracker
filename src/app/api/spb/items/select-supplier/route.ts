@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export async function POST(request: Request) {
   try {
@@ -162,7 +163,7 @@ export async function POST(request: Request) {
   } catch (error: any) {
     console.error("Error select-supplier API:", error);
     return NextResponse.json(
-      { error: error.message || "Terjadi kesalahan internal server." },
+      { error: sanitizeErrorMessage(error, "Terjadi kesalahan saat memilih supplier.") },
       { status: 500 }
     );
   }

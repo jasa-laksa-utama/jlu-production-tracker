@@ -13,9 +13,8 @@ const prismaClientSingleton = () => {
   const pool = new Pool({ connectionString });
   const adapter = new PrismaPg(pool);
   
-  const client = new PrismaClient({ adapter }) as any;
-  client.qCItemCheckpoint = true;
-  return client as PrismaClient;
+  const client = new PrismaClient({ adapter });
+  return client;
 };
 
 declare global {
@@ -24,10 +23,23 @@ declare global {
 
 // In development, ensure we always use the latest generated schema models
 if (process.env.NODE_ENV !== 'production' && globalThis.prismaGlobal) {
-  const hasQCStatus = (globalThis.prismaGlobal as any)._runtimeDataModel?.models?.PurchaseOrderItem?.fields?.some(
-    (f: any) => f.name === 'qcStatus'
+  const hasSubItems = (globalThis.prismaGlobal as any)._runtimeDataModel?.models?.StructureItem?.fields?.some(
+    (f: any) => f.name === 'subItems'
   );
-  if (!hasQCStatus) {
+  const hasMarkingCode = (globalThis.prismaGlobal as any)._runtimeDataModel?.models?.StructureItem?.fields?.some(
+    (f: any) => f.name === 'markingCode'
+  );
+  const hasOfficeBoQ = Boolean((globalThis.prismaGlobal as any).officeBoQ);
+  const hasOfficeBoQItemId = (globalThis.prismaGlobal as any)._runtimeDataModel?.models?.OfficeBoQItem?.fields?.some(
+    (f: any) => f.name === 'itemId'
+  );
+  const hasCustomerCity = (globalThis.prismaGlobal as any)._runtimeDataModel?.models?.Customer?.fields?.some(
+    (f: any) => f.name === 'city'
+  );
+  if (!hasSubItems || !hasMarkingCode || !hasOfficeBoQ || !hasOfficeBoQItemId || !hasCustomerCity) {
+    try {
+      (globalThis.prismaGlobal as any).$disconnect?.();
+    } catch {}
     globalThis.prismaGlobal = undefined;
   }
 }

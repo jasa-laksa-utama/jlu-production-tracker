@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import { requireAuth, requireRole } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export async function getUsers() {
   await requireAuth();
@@ -43,7 +44,7 @@ export async function createUser(data: any) {
     if (error.code === "P2002") {
       return { error: "Username atau email sudah terdaftar" };
     }
-    return { error: error.message || "Gagal membuat user" };
+    return { error: sanitizeErrorMessage(error, "Gagal membuat user baru.") };
   }
 }
 
@@ -74,7 +75,7 @@ export async function updateUser(id: string, data: any) {
     revalidatePath("/settings/users");
     return { success: true, user };
   } catch (error: any) {
-    return { error: error.message || "Gagal memperbarui user" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui data user.") };
   }
 }
 
@@ -87,7 +88,7 @@ export async function deleteUser(id: string) {
     revalidatePath("/settings/users");
     return { success: true };
   } catch (error: any) {
-    return { error: error.message || "Gagal menghapus user" };
+    return { error: sanitizeErrorMessage(error, "Gagal menghapus user.") };
   }
 }
 
@@ -101,7 +102,7 @@ export async function toggleUserStatus(id: string, isActive: boolean) {
     revalidatePath("/settings/users");
     return { success: true, user };
   } catch (error: any) {
-    return { error: error.message || "Gagal memperbarui status user" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui status user.") };
   }
 }
 

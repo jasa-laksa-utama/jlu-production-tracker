@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 /**
  * POST /api/warehouse/memos/confirm
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
   } catch (error: any) {
     console.error("[API POST /api/warehouse/memos/confirm] Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Gagal memproses konfirmasi gudang" },
+      { success: false, error: sanitizeErrorMessage(error, "Gagal memproses konfirmasi gudang") },
       { status: 500 }
     );
   }

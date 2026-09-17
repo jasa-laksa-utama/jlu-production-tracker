@@ -17,7 +17,7 @@ export default function Loading() {
           </div>
         </div>
 
-        <main className="flex-1 w-full p-6 space-y-6 max-w-7xl mx-auto overflow-y-auto">
+        <main className="flex-1 w-full px-4 sm:px-6 py-6 pb-2 space-y-6 max-w-full 2xl:max-w-[1920px] mx-auto overflow-y-auto">
           {/* Tabs Skeleton */}
           <div className="flex gap-1 bg-muted/30 p-1 rounded-lg w-fit border border-border">
             <Skeleton className="h-8 w-24 rounded-md" />

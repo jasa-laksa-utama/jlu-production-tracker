@@ -3,6 +3,8 @@
 import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/app/actions/notifications";
+import { getStoragePhotoUrl } from "@/app/actions/progress-photos";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 /**
  * Interface untuk data pembuatan NCR baru
@@ -68,9 +70,19 @@ export async function getProjectQCCheckpoints(projectId: string) {
       include: {
         structureItems: {
           orderBy: { orderIndex: "asc" },
+          include: {
+            subItems: {
+              orderBy: { orderIndex: "asc" },
+            },
+          },
         },
         mechanicalItems: {
           orderBy: { orderIndex: "asc" },
+          include: {
+            subItems: {
+              orderBy: { orderIndex: "asc" },
+            },
+          },
         },
         qcCheckpoints: {
           include: {
@@ -94,11 +106,39 @@ export async function getProjectQCCheckpoints(projectId: string) {
       },
     });
 
+    // Ambil bukti foto & catatan tahapan produksi untuk komponen di proyek ini
+    let stagePhotos: any[] = [];
+    try {
+      const rawStagePhotos = await prisma.progressPhoto.findMany({
+        where: {
+          projectId,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      stagePhotos = await Promise.all(
+        rawStagePhotos.map(async (p: any) => {
+          let validUrl = p.url;
+          if (!validUrl.startsWith("http") || validUrl.includes("supabase.co/storage/v1/object/sign/")) {
+            validUrl = await getStoragePhotoUrl(p.url);
+          }
+          return {
+            ...p,
+            url: validUrl,
+          };
+        })
+      );
+    } catch (photoErr) {
+      console.warn("[getProjectQCCheckpoints] Warning loading stagePhotos:", photoErr);
+      stagePhotos = [];
+    }
+
     const data = JSON.parse(
       JSON.stringify({
         project,
         units,
         ncrs,
+        stagePhotos,
       })
     );
 
@@ -108,7 +148,7 @@ export async function getProjectQCCheckpoints(projectId: string) {
     };
   } catch (error: any) {
     console.error("[getProjectQCCheckpoints] Error:", error);
-    return { success: false, error: error.message || "Gagal mengambil data QC checkpoints" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil data QC checkpoints.") };
   }
 }
 
@@ -213,13 +253,22 @@ export async function inspectQCItem(input: {
       },
     });
 
+    // Record production log for Masterplan audit trail
+    await prisma.productionLog.create({
+      data: {
+        projectId: input.projectId,
+        message: `QC Inspeksi [${input.itemType}] Tahap ${input.stage} "${iName || "Komponen"}" di "${uName || "Unit"}": Status ${input.status}${input.notes ? ` - ${input.notes}` : ""}`,
+        user: input.inspectedBy || "QC Inspector",
+      },
+    });
+
     revalidatePath("/trackers/quality-control");
     revalidatePath("/trackers/production");
 
     return { success: true, data: checkpoint };
   } catch (error: any) {
     console.error("[inspectQCItem] Error:", error);
-    return { success: false, error: error.message || "Gagal menyimpan inspeksi QC" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyimpan inspeksi QC.") };
   }
 }
 
@@ -307,6 +356,15 @@ export async function createNCR(input: CreateNCRInput) {
       },
     });
 
+    // Log to ProductionLog for Masterplan audit trail
+    await prisma.productionLog.create({
+      data: {
+        projectId: input.projectId,
+        message: `QC menerbitkan NCR [${ncrNumber}] untuk "${itemName}" (Tahap ${input.stage}): ${input.ncrDescription}`,
+        user: input.raisedBy || "QC Inspector",
+      },
+    });
+
     // 5. Send Real-Time In-App Notification to Produksi Division
     try {
       await createNotification({
@@ -326,7 +384,7 @@ export async function createNCR(input: CreateNCRInput) {
     return { success: true, data: JSON.parse(JSON.stringify(ncrRecord)) };
   } catch (error: any) {
     console.error("[createNCR] Error:", error);
-    return { success: false, error: error.message || "Gagal menerbitkan NCR" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menerbitkan NCR.") };
   }
 }
 
@@ -432,7 +490,7 @@ export async function submitNCRResolution(input: {
     return { success: true, data: updatedNCR };
   } catch (error: any) {
     console.error("[submitNCRResolution] Error:", error);
-    return { success: false, error: error.message || "Gagal memperbarui status perbaikan NCR" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui status perbaikan NCR.") };
   }
 }
 
@@ -490,6 +548,15 @@ export async function closeNCR(input: {
         },
       });
 
+      // Log to ProductionLog for Masterplan audit trail
+      await prisma.productionLog.create({
+        data: {
+          projectId: ncr.projectId,
+          message: `QC menutup NCR [${ncr.ncrNumber}] (Status: PASS)${input.closedNotes ? ` - ${input.closedNotes}` : ""}`,
+          user: input.closedBy || "QC Inspector",
+        },
+      });
+
       try {
         await createNotification({
           title: `🟢 NCR Ditutup PASS [${ncr.ncrNumber}]`,
@@ -527,6 +594,15 @@ export async function closeNCR(input: {
         },
       });
 
+      // Log to ProductionLog for Masterplan audit trail
+      await prisma.productionLog.create({
+        data: {
+          projectId: ncr.projectId,
+          message: `QC menolak perbaikan NCR [${ncr.ncrNumber}] (Status: RE-OPEN)${input.closedNotes ? ` - ${input.closedNotes}` : ""}`,
+          user: input.closedBy || "QC Inspector",
+        },
+      });
+
       try {
         await createNotification({
           title: `🔴 NCR Ditolak (Re-Open) [${ncr.ncrNumber}]`,
@@ -546,7 +622,7 @@ export async function closeNCR(input: {
     }
   } catch (error: any) {
     console.error("[closeNCR] Error:", error);
-    return { success: false, error: error.message || "Gagal memproses penutupan NCR" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memproses penutupan NCR.") };
   }
 }
 
@@ -788,7 +864,7 @@ export async function createDrawingRevisionRequest(input: CreateDRInput) {
     return { success: true, data: JSON.parse(JSON.stringify(drRecord)) };
   } catch (error: any) {
     console.error("[createDrawingRevisionRequest] Error:", error);
-    return { success: false, error: error.message || "Gagal mengajukan request revisi drawing" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengajukan request revisi drawing.") };
   }
 }
 
@@ -891,7 +967,7 @@ export async function resolveDrawingRevisionByEngineering(input: {
     return { success: true, data: JSON.parse(JSON.stringify(updatedDR)) };
   } catch (error: any) {
     console.error("[resolveDrawingRevisionByEngineering] Error:", error);
-    return { success: false, error: error.message || "Gagal menyimpan revisi drawing dari Engineering" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyimpan revisi drawing dari Engineering.") };
   }
 }
 
@@ -966,7 +1042,7 @@ export async function closeDrawingRevision(input: {
     return { success: true, data: JSON.parse(JSON.stringify(updatedDR)) };
   } catch (error: any) {
     console.error("[closeDrawingRevision] Error:", error);
-    return { success: false, error: error.message || "Gagal menutup request revisi drawing" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menutup request revisi drawing.") };
   }
 }
 
@@ -1026,7 +1102,242 @@ export async function getQCMasterplanSummary(projectId: string) {
     };
   } catch (error: any) {
     console.error("[getQCMasterplanSummary] Error:", error);
-    return { success: false, error: error.message || "Gagal menghitung ringkasan QC Masterplan" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghitung ringkasan QC Masterplan.") };
+  }
+}
+
+/**
+ * Mengambil data terkompilasi lengkap untuk pembuatan Laporan QC Report PDF
+ * Mendukung 2 level: Unit (Multiple / Single Units) dan Component (Multiple / Single Components)
+ */
+export async function getQCReportCompiledDataAction(
+  projectId: string,
+  unitIdsInput?: string[] | string,
+  componentIdsInput?: string[] | string,
+  componentType?: "STRUCTURE" | "MECHANICAL",
+) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: {
+        customer: true,
+        lead: {
+          select: {
+            leadNumber: true,
+            projectName: true,
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      return { success: false, error: "Project tidak ditemukan" };
+    }
+
+    // Normalize unitIds to array
+    let unitIds: string[] = [];
+    if (Array.isArray(unitIdsInput)) {
+      unitIds = unitIdsInput.filter((id) => id && id !== "ALL");
+    } else if (unitIdsInput && unitIdsInput !== "ALL") {
+      unitIds = [unitIdsInput];
+    }
+
+    // Normalize componentIds to array
+    let componentIds: string[] = [];
+    if (Array.isArray(componentIdsInput)) {
+      componentIds = componentIdsInput.filter((id) => id && id !== "ALL");
+    } else if (componentIdsInput && componentIdsInput !== "ALL") {
+      componentIds = [componentIdsInput];
+    }
+
+    // Fetch ALL units for selector options in frontend
+    const allUnitsRaw = await prisma.conveyorUnit.findMany({
+      where: { projectId },
+      orderBy: { orderIndex: "asc" },
+      include: {
+        structureItems: {
+          orderBy: { orderIndex: "asc" },
+        },
+        mechanicalItems: {
+          orderBy: { orderIndex: "asc" },
+        },
+      },
+    });
+
+    // Filter units based on scope
+    const unitWhere: any = { projectId };
+    if (unitIds.length > 0) {
+      unitWhere.id = { in: unitIds };
+    }
+
+    let units = await prisma.conveyorUnit.findMany({
+      where: unitWhere,
+      orderBy: { orderIndex: "asc" },
+      include: {
+        structureItems: {
+          orderBy: { orderIndex: "asc" },
+        },
+        mechanicalItems: {
+          orderBy: { orderIndex: "asc" },
+        },
+        qcCheckpoints: {
+          include: {
+            revisions: {
+              orderBy: { createdAt: "desc" },
+            },
+          },
+        },
+        qcRevisions: {
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+
+    // If components are filtered
+    let targetComponent: any = null;
+    if (componentIds.length > 0) {
+      units = units
+        .map((u) => {
+          const struct = u.structureItems.filter((i) =>
+            componentIds.includes(i.id),
+          );
+          const mech = u.mechanicalItems.filter((i) =>
+            componentIds.includes(i.id),
+          );
+
+          if (struct.length > 0 || mech.length > 0) {
+            if (!targetComponent) {
+              if (struct.length > 0) {
+                targetComponent = {
+                  ...struct[0],
+                  itemType: "STRUCTURE",
+                  unitName: u.name,
+                };
+              } else if (mech.length > 0) {
+                targetComponent = {
+                  ...mech[0],
+                  itemType: "MECHANICAL",
+                  unitName: u.name,
+                };
+              }
+            }
+            return {
+              ...u,
+              structureItems: struct,
+              mechanicalItems: mech,
+              qcCheckpoints: u.qcCheckpoints.filter((cp) =>
+                componentIds.includes(cp.itemId),
+              ),
+            };
+          }
+          return null;
+        })
+        .filter(Boolean) as any[];
+    }
+
+    // Fetch unified documentation photos (Both QC & Production) for this project
+    const photoWhere: any = {
+      projectId,
+    };
+
+    if (unitIds.length > 0) {
+      photoWhere.OR = [
+        { unitId: { in: unitIds } },
+        { unitId: null },
+      ];
+    }
+
+    let rawPhotos = await (prisma as any).progressPhoto.findMany({
+      where: photoWhere,
+      include: {
+        unit: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+
+    // If no unit-matched photos, fetch ALL photos in this project
+    if (rawPhotos.length === 0) {
+      rawPhotos = await (prisma as any).progressPhoto.findMany({
+        where: {
+          projectId,
+        },
+        include: {
+          unit: {
+            select: { id: true, name: true },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      });
+    }
+
+    // Resolve active signed URLs for every photo
+    const progressPhotos = await Promise.all(
+      rawPhotos.map(async (p: any) => {
+        let validUrl = p.url;
+        if (
+          !validUrl.startsWith("http") ||
+          validUrl.includes("supabase.co/storage/v1/object/sign/")
+        ) {
+          validUrl = await getStoragePhotoUrl(p.url);
+        }
+        const isQC = p.category === "QC_INSPECTION";
+        return {
+          ...p,
+          url: validUrl,
+          isQC,
+          source: isQC ? "QC" : "PRODUCTION",
+          sourceDepartment: isQC ? "QC" : "PRODUCTION",
+        };
+      }),
+    );
+
+    // Fetch NCRs
+    const ncrWhere: any = { projectId };
+    if (unitIds.length === 1) {
+      ncrWhere.unitId = unitIds[0];
+    } else if (unitIds.length > 1) {
+      ncrWhere.unitId = { in: unitIds };
+    }
+    if (componentIds.length > 0) {
+      ncrWhere.checkpoint = {
+        itemId: { in: componentIds },
+      };
+    }
+
+    const ncrs = await prisma.qCRevision.findMany({
+      where: ncrWhere,
+      orderBy: { createdAt: "desc" },
+      include: {
+        unit: { select: { id: true, name: true } },
+      },
+    });
+
+    // Generate auto default QC Report Number (Ringkas: QC-01/[PROJECT_NUMBER])
+    const prjRef =
+      project.projectNumber || project.id.substring(0, 8).toUpperCase();
+    const autoReportNumber = `QC-01/${prjRef}`;
+
+    return {
+      success: true,
+      data: JSON.parse(
+        JSON.stringify({
+          project,
+          units,
+          allUnitsList: allUnitsRaw,
+          targetComponent,
+          progressPhotos,
+          ncrs,
+          autoReportNumber,
+        })
+      ),
+    };
+  } catch (error: any) {
+    console.error("[getQCReportCompiledDataAction] Error:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil data laporan QC.") };
   }
 }
 

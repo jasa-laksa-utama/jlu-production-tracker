@@ -38,16 +38,12 @@ import {
   CheckCircle2,
   Package,
   Wrench,
-  Search,
-  Check,
   RefreshCw,
   Clock,
   Building2,
   User,
-  ArrowRight,
   ShieldCheck,
   Loader2,
-  Sparkles,
   ChevronDown,
   ChevronUp,
   AlertCircle,
@@ -66,9 +62,30 @@ import {
   GoodsMemoItemInput,
 } from "@/app/actions/goods-memo";
 import { getWarehouseItems, getUnits } from "@/app/actions/inventory";
-import { format } from "date-fns";
-import { id } from "date-fns/locale";
 import { cn } from "@/lib/utils";
+
+const getProcurementBadgeStyle = (color?: string) => {
+  switch (color) {
+    case "emerald":
+      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20";
+    case "blue":
+      return "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20";
+    case "purple":
+      return "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20";
+    case "yellow":
+    case "amber":
+      return "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20";
+    case "orange":
+      return "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20";
+    case "indigo":
+      return "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20";
+    case "red":
+    case "rose":
+      return "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20";
+    default:
+      return "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-500/20";
+  }
+};
 
 interface GoodsMemoDialogProps {
   open: boolean;
@@ -85,9 +102,7 @@ export function GoodsMemoDialog({
   onOpenChange,
   project,
 }: GoodsMemoDialogProps) {
-  const [activeTab, setActiveTab] = useState<"create" | "list" | "return">(
-    "create",
-  );
+  const [activeTab, setActiveTab] = useState<"create" | "list" | "return">("create");
   const [isPending, startTransition] = useTransition();
 
   // Master Data & Memo List
@@ -97,12 +112,8 @@ export function GoodsMemoDialog({
   const [approvedSpbItems, setApprovedSpbItems] = useState<any[]>([]);
   const [isLoadingMemos, setIsLoadingMemos] = useState(false);
   const [isLoadingSpbItems, setIsLoadingSpbItems] = useState(false);
-  const [expandedMemos, setExpandedMemos] = useState<Record<string, boolean>>(
-    {},
-  );
-  const [openComboboxIndex, setOpenComboboxIndex] = useState<number | null>(
-    null,
-  );
+  const [expandedMemos, setExpandedMemos] = useState<Record<string, boolean>>({});
+  const [openComboboxIndex, setOpenComboboxIndex] = useState<number | null>(null);
 
   const toggleMemoExpand = (memoId: string) => {
     setExpandedMemos((prev) => ({
@@ -116,7 +127,7 @@ export function GoodsMemoDialog({
   const [division, setDivision] = useState("PRODUKSI");
   const [notes, setNotes] = useState("");
 
-  // Two-Stage Queue Workflow States
+  // Item Draft & Queue Workflow States
   const [draftItem, setDraftItem] = useState<GoodsMemoItemInput>({
     itemName: "",
     itemType: "CONSUMABLE",
@@ -130,44 +141,8 @@ export function GoodsMemoDialog({
   const [rejectingMemo, setRejectingMemo] = useState<any | null>(null);
   const [rejectReasonInput, setRejectReasonInput] = useState("");
 
-  const handleApproveMemo = (memoId: string) => {
-    startTransition(async () => {
-      const res = await approveGoodsReleaseMemo(memoId);
-      if (res.success) {
-        toast.success("Memo Pengeluaran Barang telah DISETUJUI oleh Gudang!");
-        await loadData();
-      } else {
-        toast.error(res.error || "Gagal menyetujui memo");
-      }
-    });
-  };
-
-  const handleRejectSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!rejectingMemo) return;
-    if (!rejectReasonInput.trim()) {
-      toast.warning("Alasan penolakan wajib diisi");
-      return;
-    }
-
-    startTransition(async () => {
-      const res = await rejectGoodsReleaseMemo(
-        rejectingMemo.id,
-        rejectReasonInput.trim(),
-      );
-      if (res.success) {
-        toast.success(`Memo ${rejectingMemo.memoNumber} telah DITOLAK`);
-        setRejectingMemo(null);
-        setRejectReasonInput("");
-        await loadData();
-      } else {
-        toast.error(res.error || "Gagal menolak memo");
-      }
-    });
-  };
-  const [selectedMemoForReturn, setSelectedMemoForReturn] = useState<
-    any | null
-  >(null);
+  // Return Form State
+  const [selectedMemoForReturn, setSelectedMemoForReturn] = useState<any | null>(null);
   const [returnerName, setReturnerName] = useState("");
   const [returnNotes, setReturnNotes] = useState("");
   const [returnItemInputs, setReturnItemInputs] = useState<
@@ -177,6 +152,7 @@ export function GoodsMemoDialog({
         qty: number;
         condition: "SURPLUS" | "RETURNED_TOOL" | "DAMAGED";
         notes: string;
+        maxReturnable: number;
       }
     >
   >({});
@@ -211,15 +187,14 @@ export function GoodsMemoDialog({
   };
 
   // Helper: Get remaining Qty for an SPB item considering items already in queue
-  const getRemainingQtyForSpbItem = (
-    spbItem: any,
-    excludeQueueIndex?: number,
-  ) => {
+  const getRemainingQtyForSpbItem = (spbItem: any, excludeQueueIndex?: number) => {
     if (!spbItem) return 0;
     const inQueue = queuedItems
       .filter(
         (q, idx) =>
-          q.itemName === spbItem.itemName && idx !== excludeQueueIndex,
+          ((q.spbItemId && spbItem.id && q.spbItemId === spbItem.id) ||
+            q.itemName.trim().toLowerCase() === spbItem.itemName.trim().toLowerCase()) &&
+          idx !== excludeQueueIndex
       )
       .reduce((sum, q) => sum + (q.qtyRequested || 0), 0);
     return Math.max(0, spbItem.qtyRemainingToRequest - inQueue);
@@ -228,63 +203,72 @@ export function GoodsMemoDialog({
   // Helper: Add or Merge draftItem into queuedItems
   const handleAddToQueue = () => {
     if (!draftItem.itemName.trim()) {
-      toast.warning("Pilih barang dari SPB disetujui terlebih dahulu");
+      toast.warning("Pilih barang dari SPB terlebih dahulu");
       return;
     }
     if ((draftItem.qtyRequested || 0) <= 0) {
-      toast.warning("Jumlah Qty harus lebih besar dari 0");
+      toast.warning("Jumlah kuantitas harus lebih besar dari 0");
       return;
     }
 
     const selectedSpb = approvedSpbItems.find(
-      (s) => s.itemName === draftItem.itemName,
+      (s) =>
+        (draftItem.spbItemId && s.id === draftItem.spbItemId) ||
+        s.itemName.trim().toLowerCase() === draftItem.itemName.trim().toLowerCase()
     );
 
-    if (
-      selectedSpb &&
-      selectedSpb.source === "TRADING" &&
-      selectedSpb.isReadyToRequest === false
-    ) {
-      toast.warning(
-        `Barang "${draftItem.itemName}" masih berstatus Menunggu PO dan belum selesai diproses oleh Purchasing/Gudang.`,
+    if (selectedSpb && !selectedSpb.isReadyToRequest) {
+      toast.error(
+        `Barang "${draftItem.itemName}" belum dapat diajukan memo: ${selectedSpb.readinessReason || selectedSpb.procurementStatus}`
       );
       return;
     }
 
-    // Check if item with SAME itemName & SAME itemType already exists in queuedItems
-    const existingIndex = queuedItems.findIndex(
-      (q) =>
-        q.itemName.trim().toLowerCase() ===
-          draftItem.itemName.trim().toLowerCase() &&
-        q.itemType === draftItem.itemType,
-    );
-
     const effectiveUnit = selectedSpb
       ? (selectedSpb.unit || "PCS").toUpperCase()
       : draftItem.unit;
-    const finalDraftItem = { ...draftItem, unit: effectiveUnit };
+
+    let resolvedItemCode = selectedSpb?.itemCode || draftItem.itemCode;
+    let resolvedItemId = selectedSpb?.materialId || draftItem.itemId;
+    if (!resolvedItemCode) {
+      const matchWh = warehouseItems.find(
+        (w) => w.name && w.name.trim().toLowerCase() === draftItem.itemName.trim().toLowerCase()
+      );
+      if (matchWh) {
+        resolvedItemCode = matchWh.code;
+        resolvedItemId = matchWh.id;
+      }
+    }
+
+    const finalDraftItem = {
+      ...draftItem,
+      unit: effectiveUnit,
+      spbItemId: selectedSpb?.id || draftItem.spbItemId,
+      itemCode: resolvedItemCode,
+      itemId: resolvedItemId,
+    };
+
+    const existingIndex = queuedItems.findIndex(
+      (q) =>
+        q.itemName.trim().toLowerCase() === draftItem.itemName.trim().toLowerCase() &&
+        q.itemType === draftItem.itemType
+    );
 
     if (existingIndex !== -1) {
-      // MERGE INTO EXISTING QUEUE ITEM!
+      // Merge into existing item
       const existingItem = queuedItems[existingIndex];
-      const mergedQty =
-        (existingItem.qtyRequested || 0) + (finalDraftItem.qtyRequested || 0);
+      const mergedQty = (existingItem.qtyRequested || 0) + (finalDraftItem.qtyRequested || 0);
 
-      // Validate mergedQty against SPB quota (excluding the existing item's previous qty in getRemainingQtyForSpbItem)
       if (selectedSpb) {
-        const availableQuota = getRemainingQtyForSpbItem(
-          selectedSpb,
-          existingIndex,
-        );
+        const availableQuota = getRemainingQtyForSpbItem(selectedSpb, existingIndex);
         if (mergedQty > availableQuota) {
           toast.error(
-            `Tidak dapat menggabungkan: Total Qty (${mergedQty} ${effectiveUnit}) melebihi sisa kuota SPB (${availableQuota} ${effectiveUnit})`,
+            `Total kuantitas gabungan (${mergedQty} ${effectiveUnit}) melebihi sisa kuota SPB (${availableQuota} ${effectiveUnit})`
           );
           return;
         }
       }
 
-      // Merge notes if present
       let mergedNotes = existingItem.notes || "";
       if (finalDraftItem.notes && finalDraftItem.notes.trim()) {
         mergedNotes = mergedNotes
@@ -299,32 +283,31 @@ export function GoodsMemoDialog({
           qtyRequested: mergedQty,
           unit: effectiveUnit,
           notes: mergedNotes,
+          spbItemId: finalDraftItem.spbItemId || existingItem.spbItemId,
         };
         return updated;
       });
 
       toast.success(
-        `Barang '${finalDraftItem.itemName}' sudah ada di antrean. Kuantitas digabungkan menjadi ${mergedQty} ${effectiveUnit}!`,
+        `Barang '${finalDraftItem.itemName}' diperbarui dalam antrean (${mergedQty} ${effectiveUnit}).`
       );
     } else {
-      // NEW ITEM IN QUEUE
+      // New item
       if (selectedSpb) {
         const remainingQuota = getRemainingQtyForSpbItem(selectedSpb);
         if (finalDraftItem.qtyRequested > remainingQuota) {
           toast.error(
-            `Qty (${finalDraftItem.qtyRequested} ${effectiveUnit}) melebihi sisa kuota SPB (${remainingQuota} ${effectiveUnit})`,
+            `Jumlah (${finalDraftItem.qtyRequested} ${effectiveUnit}) melebihi sisa kuota SPB (${remainingQuota} ${effectiveUnit})`
           );
           return;
         }
       }
 
       setQueuedItems((prev) => [...prev, finalDraftItem]);
-      toast.success(
-        `'${finalDraftItem.itemName}' berhasil ditambahkan ke antrean memo!`,
-      );
+      toast.success(`'${finalDraftItem.itemName}' ditambahkan ke antrean memo.`);
     }
 
-    // Reset draftItem form
+    // Reset draft form
     setDraftItem({
       itemName: "",
       itemType: "CONSUMABLE",
@@ -332,32 +315,30 @@ export function GoodsMemoDialog({
       unit: "PCS",
       notes: "",
       typeMerk: undefined,
+      spbItemId: undefined,
+      itemId: undefined,
+      itemCode: undefined,
     });
   };
 
-  // Helper: Edit item in queue (loads item into draft form)
   const handleEditQueueItem = (index: number) => {
     const itemToEdit = queuedItems[index];
     setDraftItem({ ...itemToEdit });
     setQueuedItems((prev) => prev.filter((_, i) => i !== index));
-    toast.info(`Memuat '${itemToEdit.itemName}' ke form input untuk diedit.`);
   };
 
-  // Helper: Inline Qty Update directly in Queue Card
   const handleInlineUpdateQty = (index: number, newQty: number) => {
     if (newQty <= 0) {
-      toast.warning("Kuantitas Qty minimal 1");
+      toast.warning("Kuantitas minimal 1");
       return;
     }
     const targetItem = queuedItems[index];
-    const selectedSpb = approvedSpbItems.find(
-      (s) => s.itemName === targetItem.itemName,
-    );
+    const selectedSpb = approvedSpbItems.find((s) => s.itemName === targetItem.itemName);
     if (selectedSpb) {
       const availableQuota = getRemainingQtyForSpbItem(selectedSpb, index);
       if (newQty > availableQuota) {
         toast.error(
-          `Qty (${newQty} ${targetItem.unit}) melebihi sisa kuota SPB (${availableQuota} ${targetItem.unit})`,
+          `Kuantitas (${newQty} ${targetItem.unit}) melebihi sisa kuota SPB (${availableQuota} ${targetItem.unit})`
         );
         return;
       }
@@ -370,31 +351,26 @@ export function GoodsMemoDialog({
     });
   };
 
-  // Helper: Remove item from queuedItems
   const handleRemoveFromQueue = (index: number) => {
     setQueuedItems((prev) => prev.filter((_, i) => i !== index));
-    toast.info("Barang dihapus dari antrean memo");
   };
 
-  // Submit Create Memo with queuedItems
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (project?.id && approvedSpbItems.length === 0) {
       toast.warning(
-        "Tidak dapat membuat memo: Proyek ini belum memiliki Surat Permintaan Barang (SPB) yang disetujui.",
+        "Tidak dapat membuat memo: Proyek belum memiliki Surat Permintaan Barang (SPB) yang disetujui."
       );
       return;
     }
 
     if (!requesterName.trim()) {
-      toast.warning("Mohon isi nama pemohon/penanggung jawab");
+      toast.warning("Mohon isi nama pemohon");
       return;
     }
 
     if (queuedItems.length === 0) {
-      toast.warning(
-        "Antrean memo masih kosong! Silakan tambahkan barang ke antrean terlebih dahulu dengan tombol '+ Tambahkan Ke Antrean Memo'.",
-      );
+      toast.warning("Antrean memo masih kosong. Tambahkan barang terlebih dahulu.");
       return;
     }
 
@@ -408,10 +384,7 @@ export function GoodsMemoDialog({
       });
 
       if (res.success) {
-        toast.success(
-          `Request Memo ${res.data?.memoNumber} (${queuedItems.length} barang) berhasil dibuat & dikirim!`,
-        );
-        // Reset Form & Queue
+        toast.success(`Memo ${res.data?.memoNumber} (${queuedItems.length} barang) berhasil diajukan.`);
         setNotes("");
         setQueuedItems([]);
         setDraftItem({
@@ -429,7 +402,39 @@ export function GoodsMemoDialog({
     });
   };
 
-  // Prepare Return Form when selecting a memo
+  const handleApproveMemo = (memoId: string) => {
+    startTransition(async () => {
+      const res = await approveGoodsReleaseMemo(memoId);
+      if (res.success) {
+        toast.success("Memo Pengeluaran Barang telah disetujui.");
+        await loadData();
+      } else {
+        toast.error(res.error || "Gagal menyetujui memo");
+      }
+    });
+  };
+
+  const handleRejectSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectingMemo) return;
+    if (!rejectReasonInput.trim()) {
+      toast.warning("Alasan penolakan wajib diisi");
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await rejectGoodsReleaseMemo(rejectingMemo.id, rejectReasonInput.trim());
+      if (res.success) {
+        toast.success(`Memo ${rejectingMemo.memoNumber} telah ditolak.`);
+        setRejectingMemo(null);
+        setRejectReasonInput("");
+        await loadData();
+      } else {
+        toast.error(res.error || "Gagal menolak memo");
+      }
+    });
+  };
+
   const handleStartReturn = (memo: any) => {
     setSelectedMemoForReturn(memo);
     const initialInputs: Record<string, any> = {};
@@ -437,8 +442,7 @@ export function GoodsMemoDialog({
       const maxReturnable = Math.max(0, it.qtyIssued - it.qtyReturned);
       initialInputs[it.id] = {
         qty: 0,
-        condition:
-          it.itemType === "NON_CONSUMABLE" ? "RETURNED_TOOL" : "SURPLUS",
+        condition: it.itemType === "NON_CONSUMABLE" ? "RETURNED_TOOL" : "SURPLUS",
         notes: "",
         maxReturnable,
       };
@@ -447,7 +451,6 @@ export function GoodsMemoDialog({
     setActiveTab("return");
   };
 
-  // Submit Return Goods
   const handleReturnSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMemoForReturn) return;
@@ -475,9 +478,7 @@ export function GoodsMemoDialog({
     });
 
     if (returnItemsToSubmit.length === 0) {
-      toast.warning(
-        "Mohon isi kuantitas barang yang dikembalikan (minimal 1 barang)",
-      );
+      toast.warning("Mohon isi kuantitas barang yang dikembalikan (minimal 1)");
       return;
     }
 
@@ -490,9 +491,7 @@ export function GoodsMemoDialog({
       });
 
       if (res.success) {
-        toast.success(
-          `Pengembalian sisa/alat untuk Memo ${selectedMemoForReturn.memoNumber} berhasil dicatat!`,
-        );
+        toast.success(`Pengembalian barang untuk Memo ${selectedMemoForReturn.memoNumber} berhasil dicatat.`);
         setSelectedMemoForReturn(null);
         setReturnNotes("");
         await loadData();
@@ -506,68 +505,56 @@ export function GoodsMemoDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-225! max-h-[92vh] sm:max-h-[90vh] w-[96vw] sm:w-full flex flex-col p-0 overflow-hidden rounded-2xl sm:rounded-3xl border border-border/80 shadow-2xl bg-background">
-          {/* Senior & Mobile Friendly Header */}
-          <DialogHeader className="p-3.5 sm:p-6 pb-3 border-b border-border/40 bg-muted/15 shrink-0">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0 shadow-xs">
-                  <FileText className="w-5 h-5 sm:w-6 sm:h-6" />
-                </div>
-                <div>
-                  <DialogTitle className="text-base sm:text-xl font-bold text-foreground">
-                    Memo Pengeluaran Barang
-                  </DialogTitle>
-                  <DialogDescription className="text-[11px] sm:text-sm text-muted-foreground font-medium mt-0.5">
-                    <span className="hidden sm:inline">
-                      Request barang ke gudang & sistem inventory terpisah •{" "}
-                    </span>
-                    {project?.projectName && (
-                      <span className="text-primary font-semibold">
-                        Proyek: {project.projectName}
-                      </span>
-                    )}
-                  </DialogDescription>
-                </div>
+        <DialogContent className="h-[100dvh] sm:h-auto sm:max-h-[90vh] w-full sm:w-[95vw] sm:max-w-4xl flex flex-col p-0 overflow-hidden rounded-none sm:rounded-xl border-0 sm:border border-border bg-background shadow-2xl">
+          {/* Header */}
+          <DialogHeader className="px-2.5 py-2 sm:p-5 border-b border-border/60 bg-muted/20 shrink-0">
+            <div className="flex items-center gap-2 sm:gap-3 pr-8 sm:pr-0">
+              <div className="h-6 w-6 sm:h-9 sm:w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0 border border-primary/20">
+                <FileText className="w-3 h-3 sm:w-4 sm:h-4" />
+              </div>
+              <div className="min-w-0">
+                <DialogTitle className="text-xs sm:text-lg font-bold tracking-tight text-foreground truncate">
+                  Memo Pengeluaran Barang
+                </DialogTitle>
+                <DialogDescription className="text-[9px] sm:text-xs text-muted-foreground mt-0 truncate">
+                  {project?.projectName ? (
+                    <span>Proyek: <strong className="font-medium text-foreground">{project.projectName}</strong></span>
+                  ) : (
+                    <span>Permintaan pengeluaran stok gudang dan inventaris</span>
+                  )}
+                </DialogDescription>
               </div>
             </div>
           </DialogHeader>
 
-          {/* Tab Navigation */}
+          {/* Navigation Tabs */}
           <Tabs
             value={activeTab}
             onValueChange={(v) => setActiveTab(v as any)}
             className="w-full flex-1 flex flex-col overflow-hidden"
           >
-            <div className="px-3.5 sm:px-6 bg-muted/10 border-b border-border/30 py-2 shrink-0">
-              <TabsList className="grid grid-cols-3 bg-muted/30 p-1 rounded-xl sm:rounded-2xl h-10 sm:h-12 w-full">
+            <div className="px-2 sm:px-6 bg-muted/10 border-b border-border/40 py-1 sm:py-2 shrink-0">
+              <TabsList className="grid grid-cols-3 bg-muted/40 p-0.5 rounded-lg h-7 sm:h-10 w-full">
                 <TabsTrigger
                   value="create"
-                  className="rounded-lg sm:rounded-xl text-[11px] sm:text-sm font-semibold gap-1 sm:gap-2 px-1 py-1 cursor-pointer data-[state=active]:bg-background data-[state=active]:shadow-md"
+                  className="rounded-md text-[9px] sm:text-xs font-medium gap-1 sm:gap-1.5 px-1 sm:px-2 py-0.5 sm:py-1.5 h-6 sm:h-auto data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-xs"
                 >
-                  <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-primary" />
-                  <span className="hidden sm:inline">1. Buat Request Memo</span>
-                  <span className="sm:hidden">Buat Memo</span>
+                  <Plus className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-primary shrink-0" />
+                  <span className="truncate">Buat Memo</span>
                 </TabsTrigger>
                 <TabsTrigger
                   value="list"
-                  className="rounded-lg sm:rounded-xl text-[11px] sm:text-sm font-semibold gap-1 sm:gap-2 px-1 py-1 cursor-pointer data-[state=active]:bg-background data-[state=active]:shadow-md"
+                  className="rounded-md text-[9px] sm:text-xs font-medium gap-1 sm:gap-1.5 px-1 sm:px-2 py-0.5 sm:py-1.5 h-6 sm:h-auto data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-xs"
                 >
-                  <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-primary" />
-                  <span className="hidden sm:inline">
-                    2. Daftar Memo ({memos.length})
-                  </span>
-                  <span className="sm:hidden">Daftar ({memos.length})</span>
+                  <Clock className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-muted-foreground shrink-0" />
+                  <span className="truncate">Memo ({memos.length})</span>
                 </TabsTrigger>
                 <TabsTrigger
                   value="return"
-                  className="rounded-lg sm:rounded-xl text-[11px] sm:text-sm font-semibold gap-1 sm:gap-2 px-1 py-1 cursor-pointer data-[state=active]:bg-background data-[state=active]:shadow-md"
+                  className="rounded-md text-[9px] sm:text-xs font-medium gap-1 sm:gap-1.5 px-1 sm:px-2 py-0.5 sm:py-1.5 h-6 sm:h-auto data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-xs"
                 >
-                  <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-orange-600" />
-                  <span className="hidden sm:inline">
-                    3. Pengembalian Sisa / Alat
-                  </span>
-                  <span className="sm:hidden">Pengembalian</span>
+                  <RotateCcw className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-muted-foreground shrink-0" />
+                  <span className="truncate">Pengembalian</span>
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -575,876 +562,792 @@ export function GoodsMemoDialog({
             {/* TAB 1: CREATE MEMO */}
             <TabsContent
               value="create"
-              className="flex-1 overflow-y-auto p-3.5 sm:p-6 space-y-4 sm:space-y-6 m-0 outline-hidden"
+              className="flex-1 overflow-y-auto p-2 sm:p-6 space-y-2 sm:space-y-4 m-0 outline-hidden"
             >
-              {project?.id &&
-              !isLoadingSpbItems &&
-              approvedSpbItems.length === 0 ? (
-                <div className="p-6 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-amber-950 dark:text-amber-200 space-y-4">
-                  <div className="flex items-start gap-3.5">
-                    <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 shrink-0">
-                      <AlertCircle className="w-6 h-6" />
-                    </div>
-                    <div className="space-y-1">
-                      <h4 className="text-base font-bold text-amber-900 dark:text-amber-100">
-                        Belum Ada Barang SPB Siap Dikirim
-                      </h4>
-                      <p className="text-xs sm:text-sm font-medium leading-relaxed opacity-90">
-                        Pengeluaran barang hanya dapat dilakukan untuk barang
-                        SPB yang telah disetujui dan telah **selesai diproses**
-                        (untuk barang Trading, barang harus sudah diterima /
-                        selesai dibeli oleh tim Purchasing).
+              {project?.id && !isLoadingSpbItems && approvedSpbItems.length === 0 ? (
+                <div className="p-3 sm:p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200 space-y-1 sm:space-y-2">
+                  <div className="flex items-start gap-2 sm:gap-3">
+                    <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-semibold">Belum Ada Dokumen SPB Disetujui</h4>
+                      <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
+                        Proyek ini belum memiliki Surat Permintaan Barang (SPB) yang disetujui. Pengeluaran barang
+                        hanya dapat diajukan berdasarkan item SPB yang telah diproses.
                       </p>
                     </div>
                   </div>
-                  <div className="bg-background/80 p-3.5 rounded-xl border border-amber-500/20 text-xs font-semibold text-amber-900 dark:text-amber-100 flex items-center justify-between">
-                    <span>
-                      Jika barang Trading pada SPB masih berstatus
-                      &quot;Menunggu PO&quot; atau &quot;PO Dibuat&quot;, mohon
-                      selesaikan proses penerimaan barang di modul Purchasing
-                      terlebih dahulu.
-                    </span>
+                </div>
+              ) : project?.id && !isLoadingSpbItems && approvedSpbItems.every((it) => !it.isReadyToRequest) ? (
+                <div className="p-3 sm:p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200 space-y-3 sm:space-y-4">
+                  <div className="flex items-start gap-2 sm:gap-3">
+                    <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-semibold">Barang SPB Belum Siap Dikeluarkan</h4>
+                      <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
+                        Seluruh item SPB proyek masih dalam proses verifikasi persetujuan atau pemrosesan pengadaan.
+                        Memo belum dapat diajukan sampai barang disetujui untuk dikeluarkan.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-background rounded-lg border border-border/80 overflow-hidden">
+                    <div className="p-2 sm:p-2.5 bg-muted/30 border-b border-border text-[11px] sm:text-xs font-semibold text-foreground flex items-center justify-between">
+                      <span>Status Barang SPB ({approvedSpbItems.length} Item)</span>
+                      <span className="text-[10px] sm:text-[11px] text-muted-foreground font-normal">Kondisi Pengadaan & Gudang</span>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto divide-y divide-border text-[11px] sm:text-xs">
+                      {approvedSpbItems.map((spbItem, idx) => (
+                        <div key={spbItem.id || idx} className="p-2.5 sm:p-3 flex items-center justify-between gap-2 sm:gap-3">
+                          <div className="space-y-0.5 sm:space-y-1 min-w-0">
+                            <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap">
+                              <span className="font-semibold text-foreground truncate">{spbItem.itemName}</span>
+                              {spbItem.itemCode && (
+                                <span className="text-[9px] sm:text-[10px] font-mono font-medium text-muted-foreground bg-muted px-1.5 py-0.2 rounded border border-border/60">
+                                  {spbItem.itemCode}
+                                </span>
+                              )}
+                              <Badge
+                                variant="outline"
+                                className={cn("text-[9px] sm:text-[10px] font-medium px-1.5 py-0 border", getProcurementBadgeStyle(spbItem.procurementBadgeColor))}
+                              >
+                                {spbItem.procurementStatus}
+                              </Badge>
+                              <Badge variant="outline" className="text-[9px] sm:text-[10px] text-muted-foreground">
+                                {spbItem.source === "TRADING" ? "Trading" : "Gudang"}
+                              </Badge>
+                            </div>
+                            <p className="text-[10px] sm:text-[11px] text-muted-foreground">
+                              No. SPB: {spbItem.spbNumber} • Kuota: {spbItem.totalApprovedQty} {spbItem.unit}
+                            </p>
+                            {spbItem.readinessReason && (
+                              <p className="text-[10px] sm:text-[11px] text-amber-800 dark:text-amber-300">
+                                {spbItem.readinessReason}
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-[11px] sm:text-xs font-medium text-muted-foreground">
+                              Sisa: {spbItem.qtyRemainingToRequest} {spbItem.unit}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : (
-                <form onSubmit={handleCreateSubmit} className="space-y-6">
-                  {/* Senior Friendly User & Division Details */}
-                  <div className="grid grid-cols-2 sm:grid-cols-2 gap-2.5 sm:gap-4 bg-muted/10 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-border/40">
-                    <div className="space-y-1">
-                      <Label className="text-[11px] sm:text-sm font-semibold text-foreground flex items-center gap-1">
-                        <User className="w-3.5 h-3.5 text-primary shrink-0" />{" "}
-                        <span className="truncate">Pemohon *</span>
+                <form id="create-memo-form" onSubmit={handleCreateSubmit} className="space-y-2 sm:space-y-4">
+                  {/* Requester & Division */}
+                  <div className="grid grid-cols-2 gap-1.5 sm:gap-3 p-1.5 sm:p-3 bg-muted/20 rounded-lg border border-border/60">
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] sm:text-xs font-medium text-foreground flex items-center gap-1">
+                        <User className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-muted-foreground" />
+                        <span>Nama Pemohon *</span>
                       </Label>
                       <Input
-                        placeholder="Contoh: Pak Supri"
+                        placeholder="Nama penanggung jawab"
                         value={requesterName}
                         onChange={(e) => setRequesterName(e.target.value)}
-                        className="h-9 sm:h-11 rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold bg-background border-border/60"
+                        className="h-7 sm:h-9 rounded-md text-[10px] sm:text-xs bg-background px-2"
                         required
                       />
                     </div>
 
-                    <div className="space-y-1">
-                      <Label className="text-[11px] sm:text-sm font-semibold text-foreground flex items-center gap-1">
-                        <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />{" "}
-                        <span className="truncate">Divisi *</span>
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] sm:text-xs font-medium text-foreground flex items-center gap-1">
+                        <Building2 className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-muted-foreground" />
+                        <span>Divisi *</span>
                       </Label>
                       <Input
                         placeholder="Contoh: PRODUKSI"
                         value={division}
                         onChange={(e) => setDivision(e.target.value)}
-                        className="h-9 sm:h-11 rounded-lg sm:rounded-xl text-xs sm:text-sm font-semibold bg-background border-border/60"
+                        className="h-7 sm:h-9 rounded-md text-[10px] sm:text-xs bg-background px-2"
                         required
                       />
                     </div>
                   </div>
-                  {/* SECTION 1: DAFTAR ANTREAN BARANG DALAM MEMO (QUEUED ITEMS) */}
-                  <div className="space-y-2.5 sm:space-y-3 pt-1 sm:pt-2">
-                    <div className="flex items-center justify-between border-b border-border/40 pb-2">
-                      <h4 className="text-xs sm:text-sm font-bold text-foreground flex items-center gap-1.5 sm:gap-2">
-                        <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600" />
+
+                  {/* Input Barang Permintaan Panel */}
+                  <div className="p-2 sm:p-3.5 rounded-lg border border-border bg-card space-y-1.5 sm:space-y-3">
+                    <div className="flex items-center justify-between border-b border-border/60 pb-1 sm:pb-2">
+                      <h4 className="text-[10px] sm:text-xs font-semibold text-foreground flex items-center gap-1 sm:gap-1.5">
+                        <Package className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-primary" />
+                        Pilih Barang dari SPB
+                      </h4>
+                      <span className="text-[9px] sm:text-[11px] text-muted-foreground hidden xs:inline">
+                        Tambahkan item ke antrean memo
+                      </span>
+                    </div>
+
+                    {/* Item Type Segmented Toggle */}
+                    <div className="grid grid-cols-2 gap-1 sm:gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDraftItem((prev) => ({ ...prev, itemType: "CONSUMABLE" }))}
+                        className={cn(
+                          "py-1 px-2 sm:p-2.5 rounded-md sm:rounded-lg border text-left transition-colors cursor-pointer flex items-center gap-1.5 sm:gap-2",
+                          draftItem.itemType === "CONSUMABLE"
+                            ? "border-emerald-600 bg-emerald-500/10 text-foreground font-semibold"
+                            : "border-border bg-muted/10 hover:bg-muted/30 text-muted-foreground"
+                        )}
+                      >
+                        <Package className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-600 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-[10px] sm:text-xs font-medium leading-tight truncate">Bahan / Sekali Pakai</div>
+                          <div className="text-[9px] sm:text-[10px] text-muted-foreground hidden sm:block">Cat, kawat las, pelat, baut</div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDraftItem((prev) => ({ ...prev, itemType: "NON_CONSUMABLE" }))}
+                        className={cn(
+                          "py-1 px-2 sm:p-2.5 rounded-md sm:rounded-lg border text-left transition-colors cursor-pointer flex items-center gap-1.5 sm:gap-2",
+                          draftItem.itemType === "NON_CONSUMABLE"
+                            ? "border-orange-600 bg-orange-500/10 text-foreground font-semibold"
+                            : "border-border bg-muted/10 hover:bg-muted/30 text-muted-foreground"
+                        )}
+                      >
+                        <Wrench className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-orange-600 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-[10px] sm:text-xs font-medium leading-tight truncate">Alat / Pinjaman</div>
+                          <div className="text-[9px] sm:text-[10px] text-muted-foreground hidden sm:block">Gerinda, mesin las, equipment</div>
+                        </div>
+                      </button>
+                    </div>
+
+                    {/* Combobox Barang SPB */}
+                    <div className="space-y-0.5">
+                      <Label className="text-[10px] sm:text-xs font-medium text-foreground">
+                        Nama Barang (SPB) *
+                      </Label>
+                      {approvedSpbItems.length > 0 ? (
+                        <Popover
+                          open={openComboboxIndex === 999}
+                          onOpenChange={(open) => setOpenComboboxIndex(open ? 999 : null)}
+                        >
+                          <PopoverTrigger
+                            role="combobox"
+                            aria-expanded={openComboboxIndex === 999}
+                            className="w-full h-7 sm:h-9 flex items-center justify-between text-[10px] sm:text-xs bg-background border border-border px-2 sm:px-3 rounded-md cursor-pointer hover:bg-accent/40 transition-colors"
+                          >
+                            {draftItem.itemName ? (
+                              <span className="truncate font-medium text-foreground flex items-center gap-1 sm:gap-1.5">
+                                <span>{draftItem.itemName}</span>
+                                {draftItem.itemCode && (
+                                  <span className="text-[9px] sm:text-[10px] font-mono font-medium text-muted-foreground bg-muted px-1.5 py-0.2 rounded border border-border/50">
+                                    {draftItem.itemCode}
+                                  </span>
+                                )}
+                                {draftItem.typeMerk && (
+                                  <span className="text-muted-foreground text-[9px] sm:text-[11px]">({draftItem.typeMerk})</span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground font-normal truncate">
+                                Pilih barang SPB ({approvedSpbItems.length} item tersedia)
+                              </span>
+                            )}
+                            <ChevronsUpDown className="ml-1.5 h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0 opacity-50" />
+                          </PopoverTrigger>
+                          <PopoverContent
+                            className="w-[92vw] sm:w-[500px] p-0 rounded-lg shadow-md border border-border bg-popover"
+                            align="start"
+                          >
+                            <Command className="rounded-lg border-0">
+                              <CommandInput placeholder="Cari nama barang, kode, atau nomor SPB..." className="h-8 sm:h-9 text-[11px] sm:text-xs" />
+                              <CommandList className="max-h-64 overflow-y-auto">
+                                <CommandEmpty className="py-3 text-[11px] text-muted-foreground text-center">
+                                  Barang tidak ditemukan.
+                                </CommandEmpty>
+                                <CommandGroup heading={`Barang SPB Disetujui (${approvedSpbItems.length})`}>
+                                  {approvedSpbItems.map((spbItem, spbIdx) => {
+                                    const remainingQuota = getRemainingQtyForSpbItem(spbItem);
+                                    const isDisabledItem = !spbItem.isReadyToRequest || remainingQuota <= 0;
+
+                                    return (
+                                      <CommandItem
+                                        key={spbItem.id}
+                                        value={`${spbIdx + 1} ${spbItem.itemName} ${spbItem.itemCode || ""} ${spbItem.spbNumber} ${spbItem.source} ${spbItem.procurementStatus}`}
+                                        disabled={isDisabledItem}
+                                        onSelect={() => {
+                                          if (isDisabledItem) return;
+                                          setDraftItem((prev) => ({
+                                            ...prev,
+                                            spbItemId: spbItem.id,
+                                            itemName: spbItem.itemName,
+                                            typeMerk: spbItem.typeMerk || undefined,
+                                            unit: (spbItem.unit || "PCS").toUpperCase(),
+                                            itemId: spbItem.materialId || prev.itemId,
+                                            itemCode: spbItem.itemCode || prev.itemCode,
+                                          }));
+                                          setOpenComboboxIndex(null);
+                                        }}
+                                        className={cn(
+                                          "p-2 sm:p-2.5 border-b border-border/40 last:border-b-0 flex flex-col items-start gap-0.5 sm:gap-1 cursor-pointer",
+                                          isDisabledItem
+                                            ? "opacity-50 cursor-not-allowed bg-muted/20"
+                                            : "hover:bg-accent/50"
+                                        )}
+                                      >
+                                        <div className="flex items-center justify-between w-full gap-1.5">
+                                          <div className="flex items-center gap-1 sm:gap-1.5 truncate">
+                                            <span className="font-semibold text-[11px] sm:text-xs text-foreground truncate">
+                                              {spbItem.itemName}
+                                            </span>
+                                            {spbItem.itemCode && (
+                                              <span className="text-[9px] sm:text-[10px] font-mono font-medium text-muted-foreground bg-muted/80 px-1 py-0.2 rounded border border-border/50 shrink-0">
+                                                {spbItem.itemCode}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <Badge
+                                              variant="outline"
+                                              className={cn("text-[9px] sm:text-[10px] font-medium px-1 sm:px-1.5 py-0 border", getProcurementBadgeStyle(spbItem.procurementBadgeColor))}
+                                            >
+                                              {spbItem.procurementStatus}
+                                            </Badge>
+                                            <Badge variant="outline" className="text-[9px] sm:text-[10px] text-muted-foreground">
+                                              {spbItem.source === "TRADING" ? "Trading" : "Gudang"}
+                                            </Badge>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] text-muted-foreground">
+                                          <span>No. SPB: {spbItem.spbNumber}</span>
+                                          <span>
+                                            Sisa: <strong className="text-foreground">{remainingQuota} {spbItem.unit}</strong>
+                                          </span>
+                                        </div>
+
+                                        {spbItem.readinessReason && !spbItem.isReadyToRequest && (
+                                          <p className="text-[10px] sm:text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
+                                            {spbItem.readinessReason}
+                                          </p>
+                                        )}
+                                      </CommandItem>
+                                    );
+                                  })}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      ) : (
+                        <Input
+                          placeholder="Nama barang"
+                          value={draftItem.itemName}
+                          onChange={(e) => setDraftItem((prev) => ({ ...prev, itemName: e.target.value }))}
+                          className="h-7 sm:h-9 text-[10px] sm:text-xs px-2"
+                        />
+                      )}
+                    </div>
+
+                    {/* Selected Item Summary Strip */}
+                    {(() => {
+                      const selectedSpb = approvedSpbItems.find(
+                        (s) =>
+                          (draftItem.spbItemId && s.id === draftItem.spbItemId) ||
+                          s.itemName.trim().toLowerCase() === draftItem.itemName.trim().toLowerCase()
+                      );
+                      if (!selectedSpb) return null;
+                      const remainingQuota = getRemainingQtyForSpbItem(selectedSpb);
+
+                      return (
+                        <div className="p-1.5 sm:p-2.5 rounded-md bg-muted/30 border border-border/80 text-[10px] sm:text-xs space-y-0.5 sm:space-y-1.5">
+                          <div className="flex items-center justify-between gap-1 sm:gap-2 flex-wrap">
+                            <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
+                              <span className="font-medium text-foreground flex items-center gap-1">
+                                <ShieldCheck className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-primary" />
+                                Kuotasi SPB ({selectedSpb.spbNumber})
+                              </span>
+                              {selectedSpb.itemCode && (
+                                <span className="text-[8px] sm:text-[10px] font-mono font-medium text-muted-foreground bg-background px-1 py-0.2 rounded border border-border">
+                                  {selectedSpb.itemCode}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <Badge
+                                variant="outline"
+                                className={cn("text-[8px] sm:text-[10px] font-medium border px-1 py-0", getProcurementBadgeStyle(selectedSpb.procurementBadgeColor))}
+                              >
+                                {selectedSpb.procurementStatus}
+                              </Badge>
+                              <span className="text-muted-foreground text-[9px] sm:text-[11px]">
+                                Total: <strong className="text-foreground">{selectedSpb.totalApprovedQty} {selectedSpb.unit}</strong> • 
+                                Diminta: <strong className="text-foreground">{selectedSpb.qtyAlreadyRequested} {selectedSpb.unit}</strong> • 
+                                Sisa: <strong className={remainingQuota > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+                                  {remainingQuota} {selectedSpb.unit}
+                                </strong>
+                              </span>
+                            </div>
+                          </div>
+                          {!selectedSpb.isReadyToRequest && selectedSpb.readinessReason && (
+                            <p className="text-[9px] sm:text-[11px] text-amber-800 dark:text-amber-300">
+                              {selectedSpb.readinessReason}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Qty, Unit, Note, and Add Button */}
+                    <div className="grid grid-cols-12 gap-1.5 sm:gap-2.5 items-end">
+                      <div className="col-span-6 sm:col-span-3 space-y-0.5">
+                        <Label className="text-[10px] sm:text-xs font-medium text-foreground">Kuantitas *</Label>
+                        <Input
+                          type="number"
+                          min={0.1}
+                          step="any"
+                          value={draftItem.qtyRequested}
+                          onChange={(e) => setDraftItem((prev) => ({ ...prev, qtyRequested: Number(e.target.value) }))}
+                          className="h-7 sm:h-9 text-[10px] sm:text-xs px-2"
+                        />
+                      </div>
+
+                      <div className="col-span-6 sm:col-span-3 space-y-0.5">
+                        <Label className="text-[10px] sm:text-xs font-medium text-foreground">Satuan *</Label>
+                        <select
+                          value={draftItem.unit}
+                          disabled={!!approvedSpbItems.find((s) => s.itemName === draftItem.itemName)}
+                          onChange={(e) => setDraftItem((prev) => ({ ...prev, unit: e.target.value.toUpperCase() }))}
+                          className="w-full h-7 sm:h-9 rounded-md text-[10px] sm:text-xs border border-border bg-background px-2"
+                        >
+                          {availableUnits.length > 0 ? (
+                            availableUnits.map((u: any) => (
+                              <option key={u.id} value={u.name.toUpperCase()}>
+                                {u.name.toUpperCase()}
+                              </option>
+                            ))
+                          ) : (
+                            <>
+                              <option value="PCS">PCS</option>
+                              <option value="SET">SET</option>
+                              <option value="UNIT">UNIT</option>
+                              <option value="METER">METER</option>
+                              <option value="KG">KG</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+
+                      <div className="col-span-8 sm:col-span-4 space-y-0.5">
+                        <Label className="text-[10px] sm:text-xs font-medium text-foreground">Catatan Barang (Opsional)</Label>
+                        <Input
+                          placeholder="Peruntukan / area kerja"
+                          value={draftItem.notes || ""}
+                          onChange={(e) => setDraftItem((prev) => ({ ...prev, notes: e.target.value }))}
+                          className="h-7 sm:h-9 text-[10px] sm:text-xs px-2"
+                        />
+                      </div>
+
+                      <div className="col-span-4 sm:col-span-2">
+                        {(() => {
+                          const selectedSpb = approvedSpbItems.find((s) => s.itemName === draftItem.itemName);
+                          const remainingQuota = selectedSpb ? getRemainingQtyForSpbItem(selectedSpb) : 999999;
+                          const isOverQuota = selectedSpb ? (draftItem.qtyRequested || 0) > remainingQuota : false;
+                          const isAddDisabled = !draftItem.itemName.trim() || (draftItem.qtyRequested || 0) <= 0 || isOverQuota;
+
+                          return (
+                            <Button
+                              type="button"
+                              onClick={handleAddToQueue}
+                              disabled={isAddDisabled}
+                              variant="secondary"
+                              className="w-full h-7 sm:h-9 text-[10px] sm:text-xs font-medium gap-1 cursor-pointer px-2"
+                            >
+                              <Plus className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> Tambah
+                            </Button>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Queued Items List */}
+                  <div className="space-y-1.5 sm:space-y-3">
+                    <div className="flex items-center justify-between border-b border-border/60 pb-1 sm:pb-2">
+                      <h4 className="text-[10px] sm:text-xs font-semibold text-foreground">
                         Daftar Antrean Memo ({queuedItems.length} Item)
                       </h4>
                       {queuedItems.length > 0 && (
-                        <span className="text-[10px] sm:text-xs font-bold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                          Siap Dikirim
+                        <span className="text-[9px] sm:text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                          Siap diajukan
                         </span>
                       )}
                     </div>
 
                     {queuedItems.length === 0 ? (
-                      <div className="p-3.5 sm:p-5 text-center rounded-xl sm:rounded-2xl border-2 border-dashed border-border/60 bg-muted/10 space-y-1">
-                        <Package className="w-6 h-6 sm:w-7 sm:h-7 text-muted-foreground mx-auto opacity-50" />
-                        <p className="text-xs font-semibold text-muted-foreground">
-                          Belum ada barang di dalam antrean memo ini.
-                        </p>
-                        <p className="text-[10px] sm:text-[11px] text-muted-foreground/80">
-                          Gunakan form{" "}
-                          <strong className="text-foreground font-semibold">
-                            &quot;Input Barang Permintaan&quot;
-                          </strong>{" "}
-                          di bawah untuk menambahkan barang ke antrean.
+                      <div className="py-2.5 px-3 text-center rounded-lg border border-dashed border-border bg-muted/10">
+                        <p className="text-[10px] sm:text-xs text-muted-foreground">
+                          Antrean masih kosong. Pilih barang di atas dan klik &quot;Tambah&quot;.
                         </p>
                       </div>
                     ) : (
-                      <div className="space-y-2 sm:space-y-2.5">
-                        {queuedItems.map((qItem, qIdx) => (
-                          <div
-                            key={qIdx}
-                            className="p-2.5 sm:p-3.5 rounded-xl border border-border/70 bg-card flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3 shadow-2xs hover:border-primary/30 transition-all"
-                          >
-                            <div className="flex items-center gap-2.5 overflow-hidden w-full sm:w-auto">
-                              <span className="font-extrabold text-[10px] sm:text-xs text-primary bg-primary/15 px-1.5 py-0.5 rounded-md border border-primary/20 shrink-0">
-                                #{qIdx + 1}
-                              </span>
-                              <div className="space-y-0.5 overflow-hidden flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-bold text-xs sm:text-sm text-foreground truncate">
-                                    {qItem.itemName}
-                                  </span>
-                                  <Badge
-                                    variant="outline"
-                                    className={cn(
-                                      "text-[9px] font-bold px-1.5 py-0.2 shrink-0 rounded",
-                                      qItem.itemType === "CONSUMABLE"
-                                        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                                        : "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/30",
+                      <>
+                        {/* Mobile Card View (< sm) */}
+                        <div className="block sm:hidden space-y-1.5">
+                          {queuedItems.map((qItem, qIdx) => (
+                            <div
+                              key={qIdx}
+                              className="p-2 rounded-lg border border-border bg-card space-y-1.5 shadow-2xs"
+                            >
+                              <div className="flex items-start justify-between gap-1">
+                                <div className="space-y-0.5 min-w-0">
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    <span className="font-semibold text-[10px] text-foreground truncate">
+                                      {qItem.itemName}
+                                    </span>
+                                    {qItem.itemCode && (
+                                      <span className="text-[8px] font-mono font-medium text-muted-foreground bg-muted/70 px-1 py-0.2 rounded border border-border/50">
+                                        {qItem.itemCode}
+                                      </span>
                                     )}
-                                  >
-                                    {qItem.itemType === "CONSUMABLE"
-                                      ? "Bahan"
-                                      : "Alat"}
-                                  </Badge>
+                                  </div>
+                                  {qItem.typeMerk && (
+                                    <div className="text-[9px] text-muted-foreground">Tipe: {qItem.typeMerk}</div>
+                                  )}
                                 </div>
-                                {qItem.typeMerk && (
-                                  <p className="text-[10px] sm:text-[11px] font-semibold text-primary/90 truncate">
-                                    Tipe/Merk: {qItem.typeMerk}
-                                  </p>
-                                )}
-                                {qItem.notes && (
-                                  <p className="text-[10px] sm:text-[11px] text-muted-foreground truncate">
-                                    Catatan: {qItem.notes}
-                                  </p>
-                                )}
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "text-[8px] font-medium px-1 py-0 border shrink-0",
+                                    qItem.itemType === "CONSUMABLE"
+                                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+                                      : "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20"
+                                  )}
+                                >
+                                  {qItem.itemType === "CONSUMABLE" ? "Bahan" : "Alat"}
+                                </Badge>
+                              </div>
+
+                              {qItem.notes && (
+                                <p className="text-[9px] text-muted-foreground bg-muted/20 px-1.5 py-0.5 rounded">
+                                  {qItem.notes}
+                                </p>
+                              )}
+
+                              <div className="flex items-center justify-between gap-1 pt-1 border-t border-border/50">
+                                {/* Touch-friendly Stepper */}
+                                <div className="inline-flex items-center gap-0.5 border border-border rounded px-1 py-0.5 bg-background h-6">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleInlineUpdateQty(qIdx, qItem.qtyRequested - 1)}
+                                    className="w-5 h-5 rounded hover:bg-muted text-[10px] font-bold flex items-center justify-center cursor-pointer text-foreground"
+                                    title="Kurangi"
+                                  >
+                                    -
+                                  </button>
+                                  <Input
+                                    type="number"
+                                    min={0.1}
+                                    step="any"
+                                    value={qItem.qtyRequested}
+                                    onChange={(e) => handleInlineUpdateQty(qIdx, Number(e.target.value))}
+                                    className="w-8 h-5 text-center text-[10px] p-0 border-0 shadow-none font-bold text-foreground"
+                                  />
+                                  <span className="text-[8px] text-muted-foreground uppercase px-0.5 font-medium">
+                                    {qItem.unit}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleInlineUpdateQty(qIdx, qItem.qtyRequested + 1)}
+                                    className="w-5 h-5 rounded hover:bg-muted text-[10px] font-bold flex items-center justify-center cursor-pointer text-foreground"
+                                    title="Tambah"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleEditQueueItem(qIdx)}
+                                    className="h-6 px-1.5 text-[9px] text-muted-foreground hover:text-foreground gap-0.5 cursor-pointer"
+                                  >
+                                    <Edit3 className="w-2.5 h-2.5" />
+                                    <span>Edit</span>
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleRemoveFromQueue(qIdx)}
+                                    className="h-6 px-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 border-rose-200 dark:border-rose-900/40 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-2.5 h-2.5" />
+                                  </Button>
+                                </div>
                               </div>
                             </div>
+                          ))}
+                        </div>
 
-                            <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-border/30">
-                              {/* Inline Qty Adjustment */}
-                              <div className="flex items-center gap-1 bg-primary/10 border border-primary/20 p-0.5 sm:p-1 rounded-lg sm:rounded-xl">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleInlineUpdateQty(
-                                      qIdx,
-                                      qItem.qtyRequested - 1,
-                                    )
-                                  }
-                                  className="w-5 h-5 sm:w-6 sm:h-6 rounded-md sm:rounded-lg bg-background hover:bg-muted text-foreground font-bold text-xs flex items-center justify-center cursor-pointer shadow-2xs"
-                                  title="Kurangi Qty"
-                                >
-                                  -
-                                </button>
-                                <Input
-                                  type="number"
-                                  min={0.1}
-                                  step="any"
-                                  value={qItem.qtyRequested}
-                                  onChange={(e) =>
-                                    handleInlineUpdateQty(
-                                      qIdx,
-                                      Number(e.target.value),
-                                    )
-                                  }
-                                  className="w-12 sm:w-14 h-6 sm:h-7 text-center font-extrabold text-xs bg-background border-border/60 p-0 rounded-md sm:rounded-lg text-primary shadow-none"
-                                />
-                                <span className="text-[10px] font-bold text-primary uppercase pr-1">
-                                  {qItem.unit}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleInlineUpdateQty(
-                                      qIdx,
-                                      qItem.qtyRequested + 1,
-                                    )
-                                  }
-                                  className="w-5 h-5 sm:w-6 sm:h-6 rounded-md sm:rounded-lg bg-background hover:bg-muted text-foreground font-bold text-xs flex items-center justify-center cursor-pointer shadow-2xs"
-                                  title="Tambah Qty"
-                                >
-                                  +
-                                </button>
-                              </div>
-
-                              <div className="flex items-center gap-1">
-                                {/* Edit Button */}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleEditQueueItem(qIdx)}
-                                  title="Edit barang ini di form"
-                                  className="h-7 w-7 sm:h-8 sm:w-8 p-0 text-primary hover:bg-primary/10 rounded-lg cursor-pointer flex items-center justify-center"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                                </Button>
-
-                                {/* Hapus Button */}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRemoveFromQueue(qIdx)}
-                                  title="Hapus dari antrean"
-                                  className="h-7 w-7 sm:h-8 sm:w-8 p-0 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg cursor-pointer flex items-center justify-center"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                        {/* Desktop Table View (>= sm) */}
+                        <div className="hidden sm:block rounded-lg border border-border overflow-hidden bg-card">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-muted/40 text-muted-foreground border-b border-border">
+                              <tr>
+                                <th className="p-2.5 text-center w-10">No</th>
+                                <th className="p-2.5">Nama Barang</th>
+                                <th className="p-2.5 text-center">Jenis</th>
+                                <th className="p-2.5 text-center w-36">Kuantitas</th>
+                                <th className="p-2.5">Catatan</th>
+                                <th className="p-2.5 text-center w-16">Aksi</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border/60">
+                              {queuedItems.map((qItem, qIdx) => (
+                                <tr key={qIdx} className="hover:bg-muted/10 transition-colors">
+                                  <td className="p-2.5 text-center text-muted-foreground font-medium">
+                                    {qIdx + 1}
+                                  </td>
+                                  <td className="p-2.5">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-semibold text-foreground">{qItem.itemName}</span>
+                                      {qItem.itemCode && (
+                                        <span className="text-[10px] font-mono font-medium text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded border border-border/40">
+                                          {qItem.itemCode}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {qItem.typeMerk && (
+                                      <div className="text-[11px] text-muted-foreground">Tipe: {qItem.typeMerk}</div>
+                                    )}
+                                  </td>
+                                  <td className="p-2.5 text-center">
+                                    <Badge
+                                      variant="outline"
+                                      className={cn(
+                                        "text-[10px] font-medium px-1.5 py-0 border",
+                                        qItem.itemType === "CONSUMABLE"
+                                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+                                          : "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20"
+                                      )}
+                                    >
+                                      {qItem.itemType === "CONSUMABLE" ? "Bahan" : "Alat"}
+                                    </Badge>
+                                  </td>
+                                  <td className="p-2.5 text-center">
+                                    <div className="inline-flex items-center gap-1 border border-border rounded-md px-1 py-0.5 bg-background">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleInlineUpdateQty(qIdx, qItem.qtyRequested - 1)}
+                                        className="w-5 h-5 rounded hover:bg-muted text-xs font-semibold flex items-center justify-center cursor-pointer"
+                                        title="Kurangi"
+                                      >
+                                        -
+                                      </button>
+                                      <Input
+                                        type="number"
+                                        min={0.1}
+                                        step="any"
+                                        value={qItem.qtyRequested}
+                                        onChange={(e) => handleInlineUpdateQty(qIdx, Number(e.target.value))}
+                                        className="w-12 h-6 text-center text-xs p-0 border-0 shadow-none font-semibold text-foreground"
+                                      />
+                                      <span className="text-[10px] text-muted-foreground uppercase pr-1 font-medium">
+                                        {qItem.unit}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleInlineUpdateQty(qIdx, qItem.qtyRequested + 1)}
+                                        className="w-5 h-5 rounded hover:bg-muted text-xs font-semibold flex items-center justify-center cursor-pointer"
+                                        title="Tambah"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </td>
+                                  <td className="p-2.5 text-muted-foreground text-[11px] truncate max-w-40">
+                                    {qItem.notes || "-"}
+                                  </td>
+                                  <td className="p-2.5 text-center">
+                                    <div className="flex items-center justify-center gap-1">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleEditQueueItem(qIdx)}
+                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
+                                        title="Edit"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleRemoveFromQueue(qIdx)}
+                                        className="h-7 w-7 p-0 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 cursor-pointer"
+                                        title="Hapus"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
                     )}
                   </div>
 
-                  {/* SECTION 2: FORM INPUT BARANG PERMINTAAN */}
-                  <div className="p-3.5 sm:p-5 rounded-xl sm:rounded-2xl border-2 border-primary/20 bg-card space-y-3 sm:space-y-4 shadow-2xs">
-                    <div className="flex items-center justify-between border-b border-border/30 pb-2 sm:pb-3">
-                      <h4 className="text-xs sm:text-sm font-bold text-foreground flex items-center gap-1.5 sm:gap-2">
-                        <Package className="w-4 h-4 text-primary" />
-                        Input Barang Permintaan
-                      </h4>
-                      <span className="text-[10px] sm:text-[11px] font-semibold text-primary bg-primary/10 border border-primary/20 px-2 py-0.5 rounded-full">
-                        Form Tambah Barang
-                      </span>
-                    </div>
-
-                    {/* Item Type Selector Card */}
-                    <div className="grid grid-cols-2 gap-2 sm:gap-3 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDraftItem((prev) => ({
-                            ...prev,
-                            itemType: "CONSUMABLE",
-                          }))
-                        }
-                        className={cn(
-                          "p-2.5 sm:p-3 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-2.5",
-                          draftItem.itemType === "CONSUMABLE"
-                            ? "border-emerald-600 bg-emerald-500/10 text-emerald-950 dark:text-emerald-200 font-extrabold shadow-xs"
-                            : "border-border/60 bg-muted/10 hover:bg-muted/30 text-muted-foreground font-semibold",
-                        )}
-                      >
-                        <Package className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-emerald-600" />
-                        <div>
-                          <div className="text-[11px] sm:text-xs font-bold leading-tight">
-                            Sekali Pakai (Bahan)
-                          </div>
-                          <div className="text-[10px] font-medium opacity-80 hidden sm:block">
-                            Cat, kawat las, baut, sisa bisa dikembalikan
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDraftItem((prev) => ({
-                            ...prev,
-                            itemType: "NON_CONSUMABLE",
-                          }))
-                        }
-                        className={cn(
-                          "p-2.5 sm:p-3 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col sm:flex-row items-start sm:items-center gap-1 sm:gap-2.5",
-                          draftItem.itemType === "NON_CONSUMABLE"
-                            ? "border-orange-600 bg-orange-500/10 text-orange-950 dark:text-orange-200 font-extrabold shadow-xs"
-                            : "border-border/60 bg-muted/10 hover:bg-muted/30 text-muted-foreground font-semibold",
-                        )}
-                      >
-                        <Wrench className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-orange-600" />
-                        <div>
-                          <div className="text-[11px] sm:text-xs font-bold leading-tight">
-                            Bukan Sekali Pakai (Alat)
-                          </div>
-                          <div className="text-[10px] font-medium opacity-80 hidden sm:block">
-                            Gerinda, mesin las, wajib dikembalikan
-                          </div>
-                        </div>
-                      </button>
-                    </div>
-
-                    {/* Info Validasi Qty SPB di Atas Field Nama Barang */}
-                    {(() => {
-                      const selectedSpb = approvedSpbItems.find(
-                        (s) => s.itemName === draftItem.itemName,
-                      );
-                      if (!selectedSpb) return null;
-                      const remainingQuota =
-                        getRemainingQtyForSpbItem(selectedSpb);
-
-                      return (
-                        <div className="flex items-center justify-between gap-1.5 p-2 sm:p-2.5 rounded-lg sm:rounded-xl bg-muted/30 border border-border/50 text-[10px] sm:text-[11px] font-semibold flex-wrap">
-                          <span className="text-muted-foreground font-medium flex items-center gap-1 truncate">
-                            <ShieldCheck className="w-3.5 h-3.5 text-primary shrink-0" />{" "}
-                            Info Kuota SPB ({selectedSpb.spbNumber}):
-                          </span>
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <span className="bg-background px-1.5 py-0.5 rounded border border-border/60 text-foreground">
-                              Total:{" "}
-                              <strong>
-                                {selectedSpb.totalApprovedQty}{" "}
-                                {selectedSpb.unit}
-                              </strong>
-                            </span>
-                            <span className="bg-orange-500/10 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded border border-orange-500/20">
-                              Diminta:{" "}
-                              <strong>
-                                {selectedSpb.qtyAlreadyRequested}{" "}
-                                {selectedSpb.unit}
-                              </strong>
-                            </span>
-                            <span
-                              className={cn(
-                                "px-1.5 py-0.5 rounded font-bold border",
-                                remainingQuota > 0
-                                  ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                                  : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30",
-                              )}
-                            >
-                              Sisa:{" "}
-                              <strong>
-                                {remainingQuota} {selectedSpb.unit}
-                              </strong>
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Inputs: Nama Barang, Qty, Satuan */}
-                    <div className="grid grid-cols-12 gap-2.5 sm:gap-3 pt-0.5">
-                      <div className="col-span-12 sm:col-span-7 space-y-1">
-                        <Label className="text-xs font-semibold text-foreground">
-                          Nama Barang / Material (Dari SPB) *
-                        </Label>
-                        {approvedSpbItems.length > 0 ? (
-                          <Popover
-                            open={openComboboxIndex === 999}
-                            onOpenChange={(open) =>
-                              setOpenComboboxIndex(open ? 999 : null)
-                            }
-                          >
-                            <PopoverTrigger
-                              role="combobox"
-                              aria-expanded={openComboboxIndex === 999}
-                              className="w-full min-h-9 sm:min-h-11 h-auto flex items-center justify-between text-xs font-semibold bg-background border border-border/80 px-2.5 py-1 cursor-pointer hover:bg-accent/40 rounded-lg sm:rounded-xl transition-all shadow-none outline-hidden"
-                            >
-                              {draftItem.itemName ? (
-                                <div className="flex flex-col text-left overflow-hidden py-0.5 leading-tight">
-                                  <span className="truncate font-bold text-foreground">
-                                    {draftItem.itemName}
-                                  </span>
-                                  {draftItem.typeMerk && (
-                                    <span className="text-[10px] font-semibold text-muted-foreground truncate">
-                                      Tipe/Merk: {draftItem.typeMerk}
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground font-normal truncate">
-                                  -- Pilih Barang dari SPB Disetujui (
-                                  {approvedSpbItems.length} Item) --
-                                </span>
-                              )}
-                              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50 text-muted-foreground" />
-                            </PopoverTrigger>
-                            <PopoverContent
-                              className="w-[92vw] sm:w-120 p-0 rounded-xl shadow-xl border border-border/80 overflow-hidden bg-popover"
-                              align="start"
-                            >
-                              <Command className="rounded-xl border-0">
-                                <CommandInput
-                                  placeholder="Cari nama barang / SPB..."
-                                  className="h-9 text-xs font-medium"
-                                />
-                                <CommandList className="max-h-72 overflow-y-auto">
-                                  <CommandEmpty className="py-4 text-xs text-muted-foreground text-center font-medium">
-                                    Barang tidak ditemukan.
-                                  </CommandEmpty>
-                                  <CommandGroup
-                                    heading={`Daftar SPB Disetujui (${approvedSpbItems.length} Item)`}
-                                  >
-                                    {approvedSpbItems.map((spbItem, spbIdx) => {
-                                      const isSelected =
-                                        draftItem.itemName === spbItem.itemName;
-                                      const remainingQuota =
-                                        getRemainingQtyForSpbItem(spbItem);
-                                      const isExhausted = remainingQuota <= 0;
-                                      const isNotReady =
-                                        spbItem.source === "TRADING" &&
-                                        spbItem.isReadyToRequest === false;
-                                      const isDisabledItem =
-                                        isExhausted || isNotReady;
-
-                                      return (
-                                        <CommandItem
-                                          key={spbItem.id}
-                                          value={`${spbIdx + 1} ${spbItem.itemName} ${spbItem.spbNumber} ${spbItem.source}`}
-                                          disabled={isDisabledItem}
-                                          onSelect={() => {
-                                            if (isDisabledItem) return;
-                                            setDraftItem((prev) => ({
-                                              ...prev,
-                                              itemName: spbItem.itemName,
-                                              typeMerk:
-                                                spbItem.typeMerk || undefined,
-                                              unit: (
-                                                spbItem.unit || "PCS"
-                                              ).toUpperCase(),
-                                              itemId:
-                                                spbItem.materialId ||
-                                                prev.itemId,
-                                              itemCode:
-                                                spbItem.itemCode ||
-                                                prev.itemCode,
-                                            }));
-                                            setOpenComboboxIndex(null);
-                                          }}
-                                          className={cn(
-                                            "p-2.5 border-b border-border/20 last:border-b-0 flex flex-col items-start gap-1 transition-all",
-                                            isDisabledItem
-                                              ? "opacity-50 pointer-events-none bg-muted/40 cursor-not-allowed select-none"
-                                              : "cursor-pointer hover:bg-accent/60",
-                                            isSelected
-                                              ? "bg-primary/10 hover:bg-primary/15"
-                                              : "",
-                                          )}
-                                        >
-                                          <div className="flex items-center justify-between w-full gap-2">
-                                            <div className="flex items-center gap-1.5 overflow-hidden">
-                                              <span className="font-semibold text-[10px] text-primary bg-primary/15 px-1.5 py-0.2 rounded border border-primary/20 shrink-0">
-                                                {spbIdx + 1}
-                                              </span>
-                                              <span className="font-bold text-xs text-foreground truncate">
-                                                {spbItem.itemName}
-                                              </span>
-                                            </div>
-                                            <div className="flex items-center gap-1 shrink-0">
-                                              {isNotReady ? (
-                                                <Badge
-                                                  variant="outline"
-                                                  className="text-[9px] font-extrabold px-1.5 py-0.2 bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/30 rounded"
-                                                >
-                                                  MENUNGGU PO
-                                                </Badge>
-                                              ) : isExhausted ? (
-                                                <Badge
-                                                  variant="outline"
-                                                  className="text-[9px] font-extrabold px-1.5 py-0.2 bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30 rounded"
-                                                >
-                                                  HABIS (SPB FULL)
-                                                </Badge>
-                                              ) : null}
-                                              <Badge
-                                                variant="outline"
-                                                className={cn(
-                                                  "text-[9px] font-bold px-1.5 py-0 shrink-0 rounded",
-                                                  spbItem.source ===
-                                                    "WAREHOUSE" ||
-                                                    spbItem.source === "GUDANG"
-                                                    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                                                    : "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30",
-                                                )}
-                                              >
-                                                {spbItem.source ===
-                                                  "WAREHOUSE" ||
-                                                spbItem.source === "GUDANG"
-                                                  ? "Gudang"
-                                                  : "Trading"}
-                                              </Badge>
-                                            </div>
-                                          </div>
-
-                                          <div className="flex items-center justify-between w-full text-[10px] text-muted-foreground gap-2 pt-0.5">
-                                            <div className="flex flex-col">
-                                              <span className="truncate max-w-42.5 sm:max-w-52.5">
-                                                No. SPB:{" "}
-                                                <strong className="text-foreground font-semibold">
-                                                  {spbItem.spbNumber}
-                                                </strong>
-                                              </span>
-                                              {spbItem.typeMerk && (
-                                                <span className="truncate max-w-42.5 sm:max-w-52.5">
-                                                  Tipe/Merk:{" "}
-                                                  <strong className="text-foreground font-semibold">
-                                                    {spbItem.typeMerk}
-                                                  </strong>
-                                                </span>
-                                              )}
-                                            </div>
-
-                                            <div className="flex items-center gap-1 shrink-0">
-                                              <span className="bg-muted px-1.5 py-0.2 rounded text-foreground font-medium">
-                                                SPB:{" "}
-                                                <strong>
-                                                  {spbItem.totalApprovedQty}
-                                                </strong>
-                                              </span>
-                                              <span className="bg-orange-500/10 text-orange-700 dark:text-orange-300 px-1.5 py-0.2 rounded font-medium border border-orange-500/20">
-                                                Diminta:{" "}
-                                                <strong>
-                                                  {spbItem.qtyAlreadyRequested}
-                                                </strong>
-                                              </span>
-                                              <span
-                                                className={cn(
-                                                  "px-1.5 py-0.2 rounded font-bold border",
-                                                  remainingQuota > 0
-                                                    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                                                    : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30",
-                                                )}
-                                              >
-                                                Sisa:{" "}
-                                                <strong>
-                                                  {remainingQuota}{" "}
-                                                  {spbItem.unit}
-                                                </strong>
-                                              </span>
-                                            </div>
-                                          </div>
-                                        </CommandItem>
-                                      );
-                                    })}
-                                  </CommandGroup>
-                                </CommandList>
-                              </Command>
-                            </PopoverContent>
-                          </Popover>
-                        ) : (
-                          <Input
-                            placeholder="e.g. Kawat Las LB-52 3.2mm / Mesin Gerinda 4 inch"
-                            value={draftItem.itemName}
-                            onChange={(e) =>
-                              setDraftItem((prev) => ({
-                                ...prev,
-                                itemName: e.target.value,
-                              }))
-                            }
-                            className="h-9 sm:h-11 rounded-lg sm:rounded-xl text-xs font-medium bg-background border-border/80"
-                          />
-                        )}
-                      </div>
-
-                      {/* Side-by-Side Qty and Satuan Inputs on Mobile */}
-                      <div className="col-span-12 sm:col-span-5 grid grid-cols-12 gap-2">
-                        {/* Qty Input */}
-                        <div className="col-span-7 space-y-1">
-                          <Label className="text-xs font-semibold text-foreground">
-                            Jumlah (Qty) *
-                          </Label>
-                          {(() => {
-                            const selectedSpb = approvedSpbItems.find(
-                              (s) => s.itemName === draftItem.itemName,
-                            );
-                            const remainingQuota = selectedSpb
-                              ? getRemainingQtyForSpbItem(selectedSpb)
-                              : 999999;
-                            const isOverQty = selectedSpb
-                              ? (draftItem.qtyRequested || 0) > remainingQuota
-                              : false;
-
-                            return (
-                              <>
-                                <Input
-                                  type="number"
-                                  min={0.1}
-                                  step="any"
-                                  value={draftItem.qtyRequested}
-                                  onChange={(e) =>
-                                    setDraftItem((prev) => ({
-                                      ...prev,
-                                      qtyRequested: Number(e.target.value),
-                                    }))
-                                  }
-                                  className={cn(
-                                    "h-9 sm:h-11 rounded-lg sm:rounded-xl text-xs font-semibold bg-background border-border/80 text-foreground",
-                                    isOverQty
-                                      ? "border-red-500 text-red-600 focus-visible:ring-red-500"
-                                      : "",
-                                  )}
-                                />
-                                {isOverQty && (
-                                  <span className="text-[10px] font-bold text-red-600 dark:text-red-400 block pt-0.5">
-                                    ⚠ Melebihi sisa SPB ({remainingQuota}{" "}
-                                    {selectedSpb?.unit})
-                                  </span>
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-
-                        {/* Satuan Select */}
-                        <div className="col-span-5 space-y-1">
-                          {(() => {
-                            const selectedSpb = approvedSpbItems.find(
-                              (s) => s.itemName === draftItem.itemName,
-                            );
-                            const rawUnit = selectedSpb
-                              ? (selectedSpb.unit || "PCS").trim()
-                              : (draftItem.unit || "PCS").trim();
-
-                            const matchedOption = availableUnits.find(
-                              (u: any) =>
-                                u.name.trim().toUpperCase() ===
-                                rawUnit.toUpperCase(),
-                            );
-                            const selectValue = matchedOption
-                              ? matchedOption.name
-                              : rawUnit.toUpperCase();
-
-                            return (
-                              <>
-                                <Label className="text-xs font-semibold text-foreground flex items-center justify-between">
-                                  <span>Satuan *</span>
-                                </Label>
-                                <select
-                                  value={selectValue}
-                                  disabled={!!selectedSpb}
-                                  onChange={(e) =>
-                                    setDraftItem((prev) => ({
-                                      ...prev,
-                                      unit: e.target.value.toUpperCase(),
-                                    }))
-                                  }
-                                  className={cn(
-                                    "w-full h-9 sm:h-11 rounded-lg sm:rounded-xl text-xs font-semibold border border-border/80 px-1.5 sm:px-2 uppercase transition-all",
-                                    selectedSpb
-                                      ? "bg-muted/60 text-foreground font-bold cursor-not-allowed border-emerald-500/40 opacity-90"
-                                      : "bg-background cursor-pointer",
-                                  )}
-                                >
-                                  {!matchedOption && (
-                                    <option value={rawUnit.toUpperCase()}>
-                                      {rawUnit.toUpperCase()}
-                                    </option>
-                                  )}
-                                  {availableUnits.length > 0 ? (
-                                    availableUnits.map((u: any) => (
-                                      <option key={u.id} value={u.name}>
-                                        {u.name.toUpperCase()}
-                                      </option>
-                                    ))
-                                  ) : (
-                                    <>
-                                      <option value="PCS">PCS</option>
-                                      <option value="SET">SET</option>
-                                      <option value="UNIT">UNIT</option>
-                                      <option value="BOX">BOX</option>
-                                      <option value="METER">METER</option>
-                                      <option value="KG">KG</option>
-                                      <option value="KALENG">KALENG</option>
-                                      <option value="BATANG">BATANG</option>
-                                      <option value="LEMBAR">LEMBAR</option>
-                                    </>
-                                  )}
-                                </select>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Catatan Field */}
-                    <div className="space-y-1">
-                      <Input
-                        placeholder="Catatan khusus untuk barang ini (opsional, contoh: untuk fabrikasi frame utama)"
-                        value={draftItem.notes || ""}
-                        onChange={(e) =>
-                          setDraftItem((prev) => ({
-                            ...prev,
-                            notes: e.target.value,
-                          }))
-                        }
-                        className="h-9 rounded-lg text-xs bg-muted/10 border-border/40 font-medium text-foreground"
-                      />
-                    </div>
-
-                    {/* Tombol Tambahkan Ke Antrean Memo */}
-                    {(() => {
-                      const selectedSpb = approvedSpbItems.find(
-                        (s) => s.itemName === draftItem.itemName,
-                      );
-                      const remainingQuota = selectedSpb
-                        ? getRemainingQtyForSpbItem(selectedSpb)
-                        : 999999;
-                      const isOverQty = selectedSpb
-                        ? (draftItem.qtyRequested || 0) > remainingQuota
-                        : false;
-                      const isDisabled =
-                        !draftItem.itemName.trim() ||
-                        (draftItem.qtyRequested || 0) <= 0 ||
-                        isOverQty;
-
-                      return (
-                        <div className="pt-1">
-                          <Button
-                            type="button"
-                            onClick={handleAddToQueue}
-                            disabled={isDisabled}
-                            className="w-full h-9 sm:h-11 rounded-lg sm:rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground font-bold text-xs sm:text-sm cursor-pointer shadow-md flex items-center justify-center gap-1.5"
-                          >
-                            <Plus className="w-4 h-4" />+ Tambahkan Ke Antrean
-                            Memo
-                          </Button>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {/* SECTION 3: TOMBOL FINAL KIRIM REQUEST MEMO */}
-                  <div className="pt-1 sm:pt-2">
-                    <Button
-                      type="submit"
-                      disabled={isPending || queuedItems.length === 0}
-                      className="w-full h-10 sm:h-12 rounded-xl sm:rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-base cursor-pointer shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
-                    >
-                      {isPending ? (
-                        <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
-                      ) : (
-                        <Send className="w-4 h-4 sm:w-5 sm:h-5" />
-                      )}
-                      Kirim Request Memo ({queuedItems.length} Barang Dalam
-                      Antrean)
-                    </Button>
+                  {/* Catatan Keseluruhan Memo */}
+                  <div className="space-y-0.5 pt-0">
+                    <Label className="text-[10px] sm:text-xs font-medium text-foreground">Catatan Tambahan Memo (Opsional)</Label>
+                    <Input
+                      placeholder="Keterangan keperluan memo untuk gudang dan PPIC"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      className="h-7 sm:h-9 text-[10px] sm:text-xs px-2"
+                    />
                   </div>
                 </form>
               )}
             </TabsContent>
 
-            {/* TAB 2: MEMO LIST & INVENTORY SYNC */}
+            {/* TAB 2: MEMO LIST */}
             <TabsContent
               value="list"
-              className="flex-1 overflow-y-auto p-3.5 sm:p-6 space-y-4 m-0 outline-hidden"
+              className="flex-1 overflow-y-auto p-2.5 sm:p-6 space-y-3 sm:space-y-4 m-0 outline-hidden"
             >
-              <div className="flex items-center justify-between pb-2 border-b border-border/30">
-                <div>
-                  <h4 className="text-sm font-semibold text-foreground">
-                    Daftar Memo Pengeluaran Barang
-                  </h4>
-                </div>
+              <div className="flex items-center justify-between pb-1.5 sm:pb-2 border-b border-border/40">
+                <h4 className="text-[11px] sm:text-xs font-semibold text-foreground">
+                  Riwayat Memo Pengeluaran Barang ({memos.length})
+                </h4>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={loadData}
-                  className="h-9 text-xs font-semibold rounded-xl gap-1.5 cursor-pointer"
+                  className="h-7 sm:h-8 text-[10px] sm:text-xs font-medium gap-1 sm:gap-1.5 px-2 sm:px-3 cursor-pointer"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Refresh Data
+                  <RefreshCw className="w-3 h-3" /> Refresh
                 </Button>
               </div>
 
               {isLoadingMemos ? (
-                <div className="h-48 flex items-center justify-center text-muted-foreground gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                  <span className="text-xs font-semibold">
-                    Memuat data memo...
-                  </span>
+                <div className="h-40 flex items-center justify-center text-muted-foreground gap-2 text-xs">
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  <span>Memuat data memo...</span>
                 </div>
               ) : memos.length === 0 ? (
-                <div className="h-56 flex flex-col items-center justify-center text-muted-foreground text-center bg-muted/10 rounded-2xl border border-dashed border-border/60 p-6 space-y-2">
-                  <FileText className="w-10 h-10 opacity-30 text-primary" />
-                  <h5 className="text-sm font-semibold text-foreground">
-                    Belum Ada Request Memo
-                  </h5>
-                  <p className="text-xs text-muted-foreground max-w-sm">
-                    Klik tab <strong>"1. Buat Request Memo"</strong> untuk
-                    mengajukan barang ke gudang.
+                <div className="h-48 flex flex-col items-center justify-center text-center bg-muted/10 rounded-lg border border-dashed border-border p-6 space-y-1.5">
+                  <FileText className="w-8 h-8 opacity-40 text-muted-foreground" />
+                  <h5 className="text-xs font-semibold text-foreground">Belum Ada Request Memo</h5>
+                  <p className="text-[11px] text-muted-foreground">
+                    Gunakan tab &quot;Buat Memo&quot; untuk mengajukan pengeluaran barang.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-3">
                   {memos.map((memo, memoIdx) => {
                     const isExpanded = expandedMemos[memo.id] ?? memoIdx === 0;
+
                     return (
                       <div
                         key={memo.id}
-                        className="rounded-2xl border border-border/60 bg-card overflow-hidden transition-all shadow-xs hover:border-primary/30"
+                        className="rounded-lg border border-border bg-card overflow-hidden transition-colors"
                       >
-                        {/* Accordion Header */}
+                        {/* Header Bar */}
                         <div
                           onClick={() => toggleMemoExpand(memo.id)}
-                          className="p-4 sm:p-4.5 cursor-pointer hover:bg-muted/10 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 select-none"
+                          className="p-2.5 sm:p-3.5 cursor-pointer hover:bg-muted/15 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2.5"
                         >
-                          <div className="flex items-center gap-3">
-                            <div className="w-6 h-6 rounded-xl bg-primary/10 text-primary font-semibold text-xs flex items-center justify-center shrink-0 border border-primary/20">
+                          <div className="flex items-center gap-2 sm:gap-2.5">
+                            <span className="w-4 h-4 sm:w-5 sm:h-5 rounded bg-muted flex items-center justify-center text-[9px] sm:text-[10px] font-semibold text-muted-foreground shrink-0">
                               {memoIdx + 1}
-                            </div>
+                            </span>
                             <div className="space-y-0.5">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-bold text-sm text-primary">
+                              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                <span className="font-semibold text-[11px] sm:text-xs text-foreground">
                                   {memo.memoNumber}
                                 </span>
-                                <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-none font-bold text-[10px]">
-                                  ✓ Terkirim
-                                </Badge>
-                                <Badge
-                                  variant="outline"
-                                  className="text-[10px] font-bold"
-                                >
+                                <Badge variant="outline" className="text-[9px] sm:text-[10px] font-medium px-1.5 py-0">
                                   {memo.items?.length || 0} Barang
                                 </Badge>
                               </div>
-                              <div className="text-xs text-foreground font-medium flex items-center gap-2 flex-wrap">
-                                <span>
-                                  Pemohon:{" "}
-                                  <strong className="font-semibold">
-                                    {memo.requesterName}
-                                  </strong>{" "}
-                                  ({memo.division})
-                                </span>
+                              <div className="text-[10px] sm:text-[11px] text-muted-foreground flex items-center gap-1.5">
+                                <span>{memo.requesterName} ({memo.division})</span>
                                 <span>•</span>
-                                <span>
-                                  {formatJakartaDate(memo.createdAt, "datetime")}
-                                </span>
+                                <span>{formatJakartaDate(memo.createdAt, "datetime")}</span>
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center flex-wrap">
-                            {/* Status Badges: 1. PPIC Approval Status */}
-                            {memo.status === "PENDING" ||
-                            memo.status === "REQUESTED" ? (
-                              <Badge className="bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/30 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
-                                <span>Menunggu Approval PPIC</span>
+                          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-wrap">
+                            {/* Status PPIC */}
+                            {memo.status === "PENDING" || memo.status === "REQUESTED" ? (
+                              <Badge className="bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20 text-[9px] sm:text-[10px] font-medium px-1.5 py-0.5">
+                                Menunggu PPIC
                               </Badge>
-                            ) : memo.status === "APPROVED" ||
-                              memo.status === "ISSUED" ? (
-                              <Badge className="bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Disetujui PPIC</span>
+                            ) : memo.status === "APPROVED" || memo.status === "ISSUED" ? (
+                              <Badge className="bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20 text-[9px] sm:text-[10px] font-medium px-1.5 py-0.5">
+                                Disetujui PPIC
                               </Badge>
                             ) : memo.status === "REJECTED" ? (
-                              <Badge className="bg-red-500/10 text-red-800 dark:text-red-300 border border-red-500/30 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                <XCircle className="w-3.5 h-3.5 text-red-600" />
-                                <span>Ditolak PPIC</span>
-                              </Badge>
-                            ) : memo.status === "PARTIALLY_RETURNED" ? (
-                              <Badge className="bg-amber-100 text-amber-800 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
-                                <span>Sebagian Dikembalikan</span>
+                              <Badge className="bg-rose-500/10 text-rose-800 dark:text-rose-300 border border-rose-500/20 text-[9px] sm:text-[10px] font-medium px-1.5 py-0.5">
+                                Ditolak PPIC
                               </Badge>
                             ) : (
-                              <Badge className="bg-emerald-100 text-emerald-800 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                <Check className="w-3.5 h-3.5" />
-                                <span>Selesai / Dikembalikan</span>
+                              <Badge className="bg-muted text-muted-foreground border text-[9px] sm:text-[10px] font-medium px-1.5 py-0.5">
+                                {memo.status}
                               </Badge>
                             )}
 
-                            {/* Status Badges: 2. Warehouse Execution Status */}
+                            {/* Status Gudang */}
                             {memo.status === "APPROVED" && (
                               memo.warehouseStatus === "ISSUED" ? (
-                                <Badge className="bg-blue-500/10 text-blue-800 dark:text-blue-300 border border-blue-500/30 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
-                                  <span>Dikeluarkan Gudang</span>
+                                <Badge className="bg-blue-500/10 text-blue-800 dark:text-blue-300 border border-blue-500/20 text-[9px] sm:text-[10px] font-medium px-1.5 py-0.5">
+                                  Dikeluarkan Gudang
                                 </Badge>
                               ) : (
-                                <Badge className="bg-sky-500/10 text-sky-800 dark:text-sky-300 border border-sky-500/30 font-extrabold px-3 py-1 text-xs rounded-full flex items-center gap-1">
-                                  <Clock className="w-3.5 h-3.5 text-sky-600 animate-pulse" />
-                                  <span>Menunggu ACC Gudang</span>
+                                <Badge className="bg-sky-500/10 text-sky-800 dark:text-sky-300 border border-sky-500/20 text-[9px] sm:text-[10px] font-medium px-1.5 py-0.5">
+                                  Menunggu Gudang
                                 </Badge>
                               )
                             )}
 
+                            {/* Quick Action: Approve / Reject for PENDING */}
+                            {(memo.status === "PENDING" || memo.status === "REQUESTED") && (
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleApproveMemo(memo.id);
+                                  }}
+                                  className="h-6 sm:h-7 px-1.5 sm:px-2 text-[10px] sm:text-[11px] font-medium text-emerald-700 border-emerald-500/30 hover:bg-emerald-50 cursor-pointer"
+                                >
+                                  Setujui
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRejectingMemo(memo);
+                                  }}
+                                  className="h-6 sm:h-7 px-1.5 sm:px-2 text-[10px] sm:text-[11px] font-medium text-rose-700 border-rose-500/30 hover:bg-rose-50 cursor-pointer"
+                                >
+                                  Tolak
+                                </Button>
+                              </div>
+                            )}
 
-
-                            {/* Input Pengembalian button for APPROVED or PARTIALLY_RETURNED */}
-                            {(memo.status === "APPROVED" ||
-                              memo.status === "ISSUED" ||
-                              memo.status === "PARTIALLY_RETURNED") && (
+                            {/* Return action button */}
+                            {(memo.status === "APPROVED" || memo.status === "ISSUED" || memo.status === "PARTIALLY_RETURNED") && (
                               <Button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1452,165 +1355,216 @@ export function GoodsMemoDialog({
                                 }}
                                 variant="outline"
                                 size="sm"
-                                className="h-8 px-3 text-xs font-bold rounded-xl border-orange-500/30 text-orange-600 hover:bg-orange-50 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                                className="h-6 sm:h-7 px-2 text-[10px] sm:text-[11px] font-medium gap-1 text-orange-600 border-orange-500/30 hover:bg-orange-50 cursor-pointer"
                               >
-                                <RotateCcw className="w-3.5 h-3.5" /> Input
-                                Pengembalian
+                                <RotateCcw className="w-3 h-3" /> Kembalikan
                               </Button>
                             )}
 
-                            <div className="w-7 h-7 rounded-lg bg-muted/30 flex items-center justify-center text-muted-foreground ml-1">
-                              {isExpanded ? (
-                                <ChevronUp className="w-4 h-4" />
-                              ) : (
-                                <ChevronDown className="w-4 h-4" />
-                              )}
+                            <div className="w-5 h-5 rounded flex items-center justify-center text-muted-foreground ml-0.5">
+                              {isExpanded ? <ChevronUp className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> : <ChevronDown className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
                             </div>
                           </div>
                         </div>
 
-                        {/* Accordion Content: Memo Items Table */}
+                        {/* Expanded Items Table */}
                         {isExpanded && (
-                          <div className="p-4 sm:p-5 pt-0 border-t border-border/30 bg-muted/5 space-y-3">
-                            {memo.status === "REJECTED" && (
-                              <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-700 dark:text-red-300 font-medium flex items-start gap-2.5 mt-3">
-                                <AlertCircle className="w-4.5 h-4.5 shrink-0 text-red-600 mt-0.5" />
-                                <div className="space-y-0.5">
-                                  <strong className="font-extrabold text-sm block">
-                                    Memo Ditolak oleh Tim Gudang
-                                  </strong>
-                                  {memo.rejectedReason ? (
-                                    <p>
-                                      Alasan:{" "}
-                                      <span className="font-semibold italic">
-                                        {memo.rejectedReason}
-                                      </span>
-                                    </p>
-                                  ) : (
-                                    <p>Catatan penolakan tidak tersedia.</p>
-                                  )}
-                                </div>
+                          <div className="p-3.5 pt-0 border-t border-border/60 bg-muted/5 space-y-3">
+                            {memo.status === "REJECTED" && memo.rejectedReason && (
+                              <div className="p-2.5 rounded bg-rose-500/10 border border-rose-500/20 text-xs text-rose-700 dark:text-rose-300">
+                                <strong>Alasan Penolakan:</strong> {memo.rejectedReason}
                               </div>
                             )}
 
-                            <div className="flex items-center justify-between pt-3">
-                              <span className="text-xs font-semibold text-foreground">
-                                Daftar Barang Yang Diminta
-                                <span className="ml-1 text-xs font-semibold text-primary">
-                                  ({memo.items?.length || 0} Item)
-                                </span>
-                              </span>
+                            {/* Dedicated Mobile View (< sm): Compact Item Cards */}
+                            <div className="block sm:hidden space-y-2 mt-2">
+                              {memo.items.map((it: any, itemIdx: number) => {
+                                const remaining = Math.max(0, it.qtyIssued - it.qtyReturned);
+                                const isWarehouseIssued =
+                                  memo.warehouseStatus === "ISSUED" || (it.qtyIssued && it.qtyIssued > 0);
+
+                                return (
+                                  <div
+                                    key={it.id || itemIdx}
+                                    className="p-2.5 rounded-lg border border-border/70 bg-card space-y-2 shadow-2xs"
+                                  >
+                                    <div className="flex items-start justify-between gap-1.5">
+                                      <div className="space-y-0.5 min-w-0">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="font-semibold text-[11px] text-foreground">
+                                            {it.itemName}
+                                          </span>
+                                          {(it.itemCode || it.item?.code) && (
+                                            <span className="text-[9px] font-mono font-medium text-muted-foreground bg-muted/60 px-1.5 py-0.2 rounded border border-border/40">
+                                              {it.itemCode || it.item?.code}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {it.notes && (
+                                          <p className="text-[10px] text-muted-foreground italic">
+                                            {it.notes}
+                                          </p>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <Badge
+                                          variant="outline"
+                                          className={cn(
+                                            "text-[9px] font-medium px-1.5 py-0 border",
+                                            it.itemType === "NON_CONSUMABLE"
+                                              ? "bg-orange-500/10 text-orange-700 border-orange-500/20"
+                                              : "bg-emerald-500/10 text-emerald-700 border-emerald-500/20"
+                                          )}
+                                        >
+                                          {it.itemType === "NON_CONSUMABLE" ? "Alat" : "Bahan"}
+                                        </Badge>
+                                        <Badge
+                                          variant="outline"
+                                          className={cn(
+                                            "text-[9px] font-medium px-1.5 py-0 border",
+                                            isWarehouseIssued
+                                              ? "bg-blue-500/10 text-blue-700 border-blue-500/20"
+                                              : "bg-amber-500/10 text-amber-700 border-amber-500/20"
+                                          )}
+                                        >
+                                          {isWarehouseIssued ? "Dikeluarkan" : "Belum Keluar"}
+                                        </Badge>
+                                      </div>
+                                    </div>
+
+                                    {/* 3-Col Metric Strip */}
+                                    <div className="grid grid-cols-3 gap-1 p-1.5 rounded bg-muted/30 border border-border/50 text-center">
+                                      <div>
+                                        <div className="text-[9px] text-muted-foreground uppercase font-medium">Diminta</div>
+                                        <div className="text-[11px] font-bold text-foreground">{it.qtyRequested} {it.unit}</div>
+                                      </div>
+                                      <div>
+                                        <div className="text-[9px] text-muted-foreground uppercase font-medium">Kembali</div>
+                                        <div className="text-[11px] font-bold text-orange-600">{it.qtyReturned} {it.unit}</div>
+                                      </div>
+                                      <div>
+                                        <div className="text-[9px] text-muted-foreground uppercase font-medium">Sisa Digunakan</div>
+                                        <div className="text-[11px] font-bold text-emerald-600">{remaining} {it.unit}</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
 
-                            <div className="overflow-x-auto rounded-xl border border-border/40 bg-card">
+                            {/* Desktop Table View (>= sm) */}
+                            <div className="hidden sm:block overflow-x-auto rounded border border-border/60 bg-card mt-2">
                               <table className="w-full text-left text-xs">
-                                <thead className="bg-muted/40 text-muted-foreground font-extrabold border-b border-border/40">
+                                <thead className="bg-muted/30 text-muted-foreground border-b border-border/60">
                                   <tr>
-                                    <th className="p-3 text-center w-12">No</th>
-                                    <th className="p-3">Nama Barang</th>
-                                    <th className="p-3 text-center">
-                                      Tipe Barang
-                                    </th>
-                                    <th className="p-3 text-center">Diminta</th>
-                                    <th className="p-3 text-center">
-                                      Dikembalikan
-                                    </th>
-                                    <th className="p-3 text-center">
-                                      Sisa Digunakan
-                                    </th>
+                                    <th className="p-2 text-center w-8">No</th>
+                                    <th className="p-2">Nama Barang</th>
+                                    <th className="p-2 text-center">Jenis</th>
+                                    <th className="p-2 text-center">Status Gudang</th>
+                                    <th className="p-2 text-center">Diminta</th>
+                                    <th className="p-2 text-center">Dikembalikan</th>
+                                    <th className="p-2 text-center">Sisa Digunakan</th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-border/20">
-                                  {memo.items.map(
-                                    (it: any, itemIdx: number) => {
-                                      const remaining = Math.max(
-                                        0,
-                                        it.qtyIssued - it.qtyReturned,
-                                      );
-                                      return (
-                                        <tr
-                                          key={it.id}
-                                          className="hover:bg-muted/10 transition-colors"
-                                        >
-                                          <td className="p-3 text-center font-extrabold text-muted-foreground bg-muted/10">
-                                            {itemIdx + 1}
-                                          </td>
-                                          <td className="p-3 font-bold text-foreground">
-                                            {it.itemName}
-                                            {it.itemCode && (
-                                              <span className="text-muted-foreground font-normal ml-1">
-                                                ({it.itemCode})
+                                <tbody className="divide-y divide-border/40">
+                                  {memo.items.map((it: any, itemIdx: number) => {
+                                    const remaining = Math.max(0, it.qtyIssued - it.qtyReturned);
+                                    const isWarehouseIssued =
+                                      memo.warehouseStatus === "ISSUED" || (it.qtyIssued && it.qtyIssued > 0);
+
+                                    return (
+                                      <tr key={it.id} className="hover:bg-muted/10 transition-colors">
+                                        <td className="p-2 text-center text-muted-foreground">{itemIdx + 1}</td>
+                                        <td className="p-2">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span className="font-medium text-foreground">{it.itemName}</span>
+                                            {(it.itemCode || it.item?.code) && (
+                                              <span className="text-[10px] font-mono font-medium text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded border border-border/40">
+                                                {it.itemCode || it.item?.code}
                                               </span>
                                             )}
-                                            {it.notes && (
-                                              <p className="text-[11px] font-normal text-muted-foreground italic mt-0.5">
-                                                Catatan: {it.notes}
-                                              </p>
+                                          </div>
+                                          {it.notes && (
+                                            <p className="text-[10px] text-muted-foreground">{it.notes}</p>
+                                          )}
+                                        </td>
+                                        <td className="p-2 text-center">
+                                          <Badge
+                                            variant="outline"
+                                            className={cn(
+                                              "text-[10px] font-medium border",
+                                              it.itemType === "NON_CONSUMABLE"
+                                                ? "bg-orange-500/10 text-orange-700 border-orange-500/20"
+                                                : "bg-emerald-500/10 text-emerald-700 border-emerald-500/20"
                                             )}
-                                          </td>
-                                          <td className="p-3 text-center">
-                                            {it.itemType ===
-                                            "NON_CONSUMABLE" ? (
-                                              <Badge className="bg-orange-100 text-orange-800 border-none font-bold text-[10px]">
-                                                🛠️ Alat / Equipment
-                                              </Badge>
-                                            ) : (
-                                              <Badge className="bg-emerald-100 text-emerald-800 border-none font-bold text-[10px]">
-                                                📦 Sekali Pakai
-                                              </Badge>
-                                            )}
-                                          </td>
-                                          <td className="p-3 text-center font-extrabold text-foreground">
-                                            {it.qtyRequested} {it.unit}
-                                          </td>
-                                          <td className="p-3 text-center font-extrabold text-orange-600">
-                                            {it.qtyReturned} {it.unit}
-                                          </td>
-                                          <td className="p-3 text-center font-extrabold text-emerald-600">
-                                            {remaining} {it.unit}
-                                          </td>
-                                        </tr>
-                                      );
-                                    },
-                                  )}
+                                          >
+                                            {it.itemType === "NON_CONSUMABLE" ? "Alat" : "Bahan"}
+                                          </Badge>
+                                        </td>
+                                        <td className="p-2 text-center">
+                                          {isWarehouseIssued ? (
+                                            <span className="text-[11px] text-blue-700 dark:text-blue-300 font-medium">
+                                              Dikeluarkan
+                                            </span>
+                                          ) : (
+                                            <span className="text-[11px] text-amber-700 dark:text-amber-300 font-medium">
+                                              Belum Keluar
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="p-2 text-center font-semibold text-foreground">
+                                          {it.qtyRequested} {it.unit}
+                                        </td>
+                                        <td className="p-2 text-center text-orange-600 font-semibold">
+                                          {it.qtyReturned} {it.unit}
+                                        </td>
+                                        <td className="p-2 text-center text-emerald-600 font-semibold">
+                                          {remaining} {it.unit}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
 
-                            {/* Riwayat Request Pengembalian Barang & Status ACC Gudang */}
+                            {/* Returns History */}
                             {memo.returns && memo.returns.length > 0 && (
-                              <div className="pt-3 space-y-2">
-                                <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                              <div className="pt-2 space-y-1.5">
+                                <span className="text-xs font-medium text-foreground flex items-center gap-1.5">
                                   <RotateCcw className="w-3.5 h-3.5 text-orange-600" />
-                                  Riwayat Request Pengembalian ke Gudang ({memo.returns.length})
+                                  Riwayat Pengembalian ({memo.returns.length})
                                 </span>
-                                <div className="space-y-2">
+                                <div className="space-y-1.5">
                                   {memo.returns.map((ret: any) => (
-                                    <div key={ret.id} className="p-3 rounded-xl bg-background border border-border/60 text-xs space-y-1.5">
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-extrabold text-foreground">{ret.returnNumber}</span>
-                                          <span className="text-muted-foreground">• Oleh {ret.returnedBy}</span>
-                                        </div>
-                                        {ret.warehouseStatus === "APPROVED" ? (
-                                          <Badge className="bg-emerald-500/10 text-emerald-700 border-emerald-300 font-extrabold text-[10px]">
-                                            ✅ Di-ACC Gudang ({ret.warehouseApprovedBy || "Gudang"})
-                                          </Badge>
-                                        ) : ret.warehouseStatus === "REJECTED" ? (
-                                          <Badge className="bg-red-500/10 text-red-700 border-red-300 font-extrabold text-[10px]">
-                                            ❌ Ditolak Gudang
-                                          </Badge>
-                                        ) : (
-                                          <Badge className="bg-amber-500/10 text-amber-800 border-amber-300 font-extrabold text-[10px]">
-                                            ⏳ Menunggu ACC Gudang
-                                          </Badge>
+                                    <div
+                                      key={ret.id}
+                                      className="p-2.5 rounded bg-background border border-border text-xs flex items-center justify-between"
+                                    >
+                                      <div>
+                                        <span className="font-semibold text-foreground">{ret.returnNumber}</span>
+                                        <span className="text-muted-foreground ml-2">Diserahkan oleh {ret.returnedBy}</span>
+                                        {ret.notes && (
+                                          <p className="text-[11px] text-muted-foreground mt-0.5">{ret.notes}</p>
                                         )}
                                       </div>
-                                      {ret.notes && (
-                                        <p className="text-[11px] text-muted-foreground italic">
-                                          Catatan: {ret.notes}
-                                        </p>
-                                      )}
+                                      <Badge
+                                        variant="outline"
+                                        className={cn(
+                                          "text-[10px] font-medium border",
+                                          ret.warehouseStatus === "APPROVED"
+                                            ? "bg-emerald-500/10 text-emerald-700 border-emerald-500/20"
+                                            : ret.warehouseStatus === "REJECTED"
+                                              ? "bg-rose-500/10 text-rose-700 border-rose-500/20"
+                                              : "bg-amber-500/10 text-amber-800 border-amber-500/20"
+                                        )}
+                                      >
+                                        {ret.warehouseStatus === "APPROVED"
+                                          ? "Diterima Gudang"
+                                          : ret.warehouseStatus === "REJECTED"
+                                            ? "Ditolak Gudang"
+                                            : "Menunggu Gudang"}
+                                      </Badge>
                                     </div>
                                   ))}
                                 </div>
@@ -1625,103 +1579,79 @@ export function GoodsMemoDialog({
               )}
             </TabsContent>
 
-            {/* TAB 3: RETURN SURPLUS / TOOL FORM */}
+            {/* TAB 3: RETURN FORM */}
             <TabsContent
               value="return"
-              className="flex-1 overflow-y-auto p-3.5 sm:p-6 space-y-4 sm:space-y-6 m-0 outline-hidden"
+              className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 m-0 outline-hidden"
             >
               {!selectedMemoForReturn ? (
-                <div className="h-56 flex flex-col items-center justify-center text-muted-foreground text-center bg-muted/10 rounded-2xl border border-dashed border-border/60 p-6 space-y-3">
-                  <RotateCcw className="w-10 h-10 opacity-30 text-orange-600" />
-                  <h5 className="text-sm font-bold text-foreground">
-                    Pilih Memo Yang Akan Dikembalikan
-                  </h5>
-                  <p className="text-xs text-muted-foreground max-w-md">
-                    Silakan buka tab <strong>"2. Daftar Memo"</strong> lalu klik
-                    tombol <strong>"Input Pengembalian"</strong> pada memo yang
-                    bersangkutan.
+                <div className="h-48 flex flex-col items-center justify-center text-center bg-muted/10 rounded-lg border border-dashed border-border p-6 space-y-1.5">
+                  <RotateCcw className="w-8 h-8 opacity-40 text-orange-600" />
+                  <h5 className="text-xs font-semibold text-foreground">Pilih Memo yang Akan Dikembalikan</h5>
+                  <p className="text-[11px] text-muted-foreground">
+                    Buka tab &quot;Daftar Memo&quot; lalu klik tombol &quot;Kembalikan&quot; pada memo yang diinginkan.
                   </p>
                 </div>
               ) : (
-                <form onSubmit={handleReturnSubmit} className="space-y-6">
-                  <div className="p-4 rounded-2xl bg-orange-500/10 border border-orange-500/30 text-xs space-y-1">
-                    <div className="font-black text-sm text-orange-950 dark:text-orange-300 flex items-center gap-2">
-                      <RotateCcw className="w-4 h-4 text-orange-600" />
-                      Form Pengembalian Barang{" "}
-                      {selectedMemoForReturn.memoNumber}
+                <form id="return-memo-form" onSubmit={handleReturnSubmit} className="space-y-4">
+                  <div className="p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-xs space-y-0.5">
+                    <div className="font-semibold text-orange-950 dark:text-orange-200">
+                      Form Pengembalian Barang: {selectedMemoForReturn.memoNumber}
                     </div>
-                    <p className="text-foreground">
-                      Pemohon Awal:{" "}
-                      <strong>{selectedMemoForReturn.requesterName}</strong> (
-                      {selectedMemoForReturn.division})
+                    <p className="text-muted-foreground">
+                      Pemohon Awal: {selectedMemoForReturn.requesterName} ({selectedMemoForReturn.division})
                     </p>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-xs sm:text-sm font-semibold text-foreground flex items-center gap-1.5">
-                      <User className="w-4 h-4 text-primary" /> Nama Pengembali
-                      / Penyerah *
-                    </Label>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] sm:text-xs font-medium text-foreground">Nama Penyerah / Pengembali *</Label>
                     <Input
-                      placeholder="Contoh: Pak Supri (Mengembalikan sisa cat & mesin las)"
+                      placeholder="Nama personel yang mengembalikan barang"
                       value={returnerName}
                       onChange={(e) => setReturnerName(e.target.value)}
-                      className="h-11 rounded-xl text-sm font-medium bg-background border-border/80"
+                      className="h-8 sm:h-9 text-[11px] sm:text-xs"
                       required
                     />
                   </div>
 
-                  {/* Items Return List */}
-                  <div className="space-y-4">
-                    <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                      <RotateCcw className="w-4 h-4 text-primary" />
-                      Input Barang yang Dikembalikan Ke Gudang
+                  <div className="space-y-2 sm:space-y-3">
+                    <h4 className="text-[11px] sm:text-xs font-semibold text-foreground">
+                      Daftar Barang yang Dikembalikan
                     </h4>
 
                     {selectedMemoForReturn.items.map((it: any) => {
                       const inputState = returnItemInputs[it.id] || {
                         qty: 0,
-                        condition:
-                          it.itemType === "NON_CONSUMABLE"
-                            ? "RETURNED_TOOL"
-                            : "SURPLUS",
+                        condition: it.itemType === "NON_CONSUMABLE" ? "RETURNED_TOOL" : "SURPLUS",
                         notes: "",
-                        maxReturnable: Math.max(
-                          0,
-                          it.qtyIssued - it.qtyReturned,
-                        ),
+                        maxReturnable: Math.max(0, it.qtyIssued - it.qtyReturned),
                       };
-                      const maxReturnable = Math.max(
-                        0,
-                        it.qtyIssued - it.qtyReturned,
-                      );
+                      const maxReturnable = Math.max(0, it.qtyIssued - it.qtyReturned);
 
                       return (
-                        <div
-                          key={it.id}
-                          className="p-4 rounded-2xl border-2 border-border/60 bg-card space-y-3 shadow-2xs"
-                        >
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/30 pb-2">
+                        <div key={it.id} className="p-2.5 sm:p-3 rounded-lg border border-border bg-card space-y-2 sm:space-y-2.5">
+                          <div className="flex items-center justify-between gap-1.5 border-b border-border/40 pb-1.5">
                             <div>
-                              <span className="font-bold text-sm text-foreground">
-                                {it.itemName}
-                              </span>
-                              <div className="text-xs text-muted-foreground font-semibold">
-                                Dikeluarkan: {it.qtyIssued} {it.unit} • Sudah
-                                Dikembalikan: {it.qtyReturned} {it.unit}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-semibold text-[11px] sm:text-xs text-foreground">{it.itemName}</span>
+                                {(it.itemCode || it.item?.code) && (
+                                  <span className="text-[9px] sm:text-[10px] font-mono font-medium text-muted-foreground bg-muted/60 px-1.5 py-0.2 rounded border border-border/40">
+                                    {it.itemCode || it.item?.code}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] sm:text-[11px] text-muted-foreground">
+                                Dikeluarkan: {it.qtyIssued} {it.unit} • Sudah Kembali: {it.qtyReturned} {it.unit}
                               </div>
                             </div>
-
-                            <Badge className="bg-primary/10 text-primary border-primary/20 font-black text-xs px-3 py-1">
-                              Maksimal Dikembalikan: {maxReturnable} {it.unit}
-                            </Badge>
+                            <span className="text-[10px] sm:text-[11px] font-medium text-primary shrink-0">
+                              Maks: {maxReturnable} {it.unit}
+                            </span>
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1">
-                            <div className="sm:col-span-6 space-y-1">
-                              <Label className="text-xs font-semibold text-foreground">
-                                Jumlah Dikembalikan *
-                              </Label>
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-2.5">
+                            <div className="sm:col-span-4 space-y-1">
+                              <Label className="text-[11px] sm:text-xs font-medium text-foreground">Jumlah Dikembalikan *</Label>
                               <Input
                                 type="number"
                                 min={0}
@@ -1733,21 +1663,16 @@ export function GoodsMemoDialog({
                                     ...returnItemInputs,
                                     [it.id]: {
                                       ...inputState,
-                                      qty: Math.min(
-                                        maxReturnable,
-                                        Number(e.target.value),
-                                      ),
+                                      qty: Math.min(maxReturnable, Number(e.target.value)),
                                     },
                                   })
                                 }
-                                className="h-11 rounded-xl text-sm font-semibold text-foreground bg-background border-border/80"
+                                className="h-8 sm:h-9 text-[11px] sm:text-xs"
                               />
                             </div>
 
-                            <div className="sm:col-span-6 space-y-1">
-                              <Label className="text-xs font-semibold text-foreground">
-                                Kondisi / Alasan *
-                              </Label>
+                            <div className="sm:col-span-4 space-y-1">
+                              <Label className="text-[11px] sm:text-xs font-medium text-foreground">Kondisi *</Label>
                               <select
                                 value={inputState.condition}
                                 onChange={(e) =>
@@ -1759,26 +1684,18 @@ export function GoodsMemoDialog({
                                     },
                                   })
                                 }
-                                className="w-full h-11 rounded-xl text-xs font-semibold bg-background border border-border/80 px-2 cursor-pointer"
+                                className="w-full h-8 sm:h-9 rounded-md text-[11px] sm:text-xs border border-border bg-background px-2 cursor-pointer"
                               >
-                                <option value="SURPLUS">
-                                  🟢 Sisa Bahan (Sisa Lebih)
-                                </option>
-                                <option value="RETURNED_TOOL">
-                                  🛠️ Alat Selesai Dipakai
-                                </option>
-                                <option value="DAMAGED">
-                                  🔴 Barang Rusak / Perlu Repair
-                                </option>
+                                <option value="SURPLUS">Sisa Bahan (Surplus)</option>
+                                <option value="RETURNED_TOOL">Alat Selesai Dipakai</option>
+                                <option value="DAMAGED">Barang Rusak / Perlu Servis</option>
                               </select>
                             </div>
 
-                            <div className="sm:col-span-12 space-y-1">
-                              <Label className="text-xs font-semibold text-foreground">
-                                Catatan Barang
-                              </Label>
+                            <div className="sm:col-span-4 space-y-1">
+                              <Label className="text-[11px] sm:text-xs font-medium text-foreground">Catatan Barang</Label>
                               <Input
-                                placeholder="e.g. Sisa 2 kg kawat las"
+                                placeholder="Keterangan kondisi"
                                 value={inputState.notes}
                                 onChange={(e) =>
                                   setReturnItemInputs({
@@ -1789,7 +1706,7 @@ export function GoodsMemoDialog({
                                     },
                                   })
                                 }
-                                className="h-11 rounded-xl text-xs font-medium bg-background border-border/80"
+                                className="h-8 sm:h-9 text-[11px] sm:text-xs"
                               />
                             </div>
                           </div>
@@ -1798,86 +1715,183 @@ export function GoodsMemoDialog({
                     })}
                   </div>
 
-                  <div className="flex gap-3 pt-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setSelectedMemoForReturn(null)}
-                      className="h-12 rounded-xl font-semibold px-6 cursor-pointer"
-                    >
-                      Batal
-                    </Button>
-                    <Button
-                      type="submit"
-                      disabled={isPending}
-                      className="flex-1 h-12 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-semibold text-sm sm:text-base cursor-pointer shadow-lg shadow-orange-600/20 flex items-center justify-center gap-2"
-                    >
-                      {isPending ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                      ) : (
-                        <RotateCcw className="w-5 h-5" />
-                      )}
-                      Submit Pengembalian
-                    </Button>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] sm:text-xs font-medium text-foreground">Catatan Umum (Opsional)</Label>
+                    <Input
+                      placeholder="Keterangan serah terima pengembalian"
+                      value={returnNotes}
+                      onChange={(e) => setReturnNotes(e.target.value)}
+                      className="h-8 sm:h-9 text-[11px] sm:text-xs"
+                    />
                   </div>
                 </form>
               )}
             </TabsContent>
           </Tabs>
+
+          {/* Sticky Dialog Footer Actions */}
+          <DialogFooter className="p-2 sm:p-4 border-t border-border/70 bg-background/95 backdrop-blur-xs flex flex-row items-center justify-between gap-1.5 sm:gap-3 shrink-0">
+            {activeTab === "create" && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onOpenChange(false)}
+                  className="h-8 sm:h-9 text-[11px] sm:text-xs font-medium px-3 sm:px-3.5 cursor-pointer"
+                >
+                  Tutup
+                </Button>
+
+                {project?.id && !isLoadingSpbItems && approvedSpbItems.length === 0 ? (
+                  <Button
+                    type="button"
+                    disabled
+                    variant="secondary"
+                    className="h-8 sm:h-9 text-[11px] sm:text-xs font-medium opacity-60"
+                  >
+                    SPB Belum Ada
+                  </Button>
+                ) : project?.id && !isLoadingSpbItems && approvedSpbItems.every((it) => !it.isReadyToRequest) ? (
+                  <Button
+                    type="button"
+                    disabled
+                    variant="secondary"
+                    className="h-8 sm:h-9 text-[11px] sm:text-xs font-medium opacity-60"
+                  >
+                    Barang Belum Siap
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    form="create-memo-form"
+                    disabled={isPending || queuedItems.length === 0}
+                    className="flex-1 sm:flex-initial h-8 sm:h-9 text-[11px] sm:text-sm font-semibold gap-1.5 sm:gap-2 px-3 sm:px-4 cursor-pointer"
+                  >
+                    {isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      Kirim Request Memo {queuedItems.length > 0 ? `(${queuedItems.length})` : ""}
+                    </span>
+                  </Button>
+                )}
+              </>
+            )}
+
+            {activeTab === "list" && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onOpenChange(false)}
+                  className="h-8 sm:h-9 text-[11px] sm:text-xs font-medium px-3 sm:px-3.5 cursor-pointer"
+                >
+                  Tutup
+                </Button>
+
+                <Button
+                  type="button"
+                  onClick={() => setActiveTab("create")}
+                  className="flex-1 sm:flex-initial h-8 sm:h-9 text-[11px] sm:text-sm font-semibold gap-1.5 px-3 sm:px-4 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Buat Memo Baru</span>
+                </Button>
+              </>
+            )}
+
+            {activeTab === "return" && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (selectedMemoForReturn) {
+                      setSelectedMemoForReturn(null);
+                      setActiveTab("list");
+                    } else {
+                      onOpenChange(false);
+                    }
+                  }}
+                  className="h-8 sm:h-9 text-[11px] sm:text-xs font-medium px-3 sm:px-3.5 cursor-pointer"
+                >
+                  {selectedMemoForReturn ? "Batal" : "Tutup"}
+                </Button>
+
+                {selectedMemoForReturn ? (
+                  <Button
+                    type="submit"
+                    form="return-memo-form"
+                    disabled={isPending}
+                    className="flex-1 sm:flex-initial h-8 sm:h-9 text-[11px] sm:text-sm font-semibold gap-1.5 px-3 sm:px-4 bg-orange-600 hover:bg-orange-700 text-white cursor-pointer"
+                  >
+                    {isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    )}
+                    <span>Submit Pengembalian</span>
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    onClick={() => setActiveTab("list")}
+                    className="flex-1 sm:flex-initial h-8 sm:h-9 text-[11px] sm:text-sm font-medium gap-1.5 px-3 sm:px-4 cursor-pointer"
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Pilih Dari Riwayat</span>
+                  </Button>
+                )}
+              </>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Dialog Penolakan Memo Gudang */}
-      <Dialog
-        open={!!rejectingMemo}
-        onOpenChange={(open) => !open && setRejectingMemo(null)}
-      >
-        <DialogContent className="sm:max-w-md p-6 bg-background rounded-2xl border shadow-xl flex flex-col gap-4">
+      {/* Dialog Penolakan Memo PPIC */}
+      <Dialog open={!!rejectingMemo} onOpenChange={(open) => !open && setRejectingMemo(null)}>
+        <DialogContent className="sm:max-w-md p-5 bg-background rounded-lg border shadow-lg flex flex-col gap-3">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold text-red-600 flex items-center gap-2">
-              <XCircle className="w-5 h-5" /> Tolak Request Memo Pengeluaran
-              Barang
+            <DialogTitle className="text-sm font-semibold text-rose-600 flex items-center gap-1.5">
+              <XCircle className="w-4 h-4" /> Tolak Memo Pengeluaran Barang
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground">
-              Masukkan alasan penolakan memo{" "}
-              <strong className="text-foreground">
-                {rejectingMemo?.memoNumber}
-              </strong>
-              .
+              Masukkan alasan penolakan untuk memo <strong className="text-foreground">{rejectingMemo?.memoNumber}</strong>.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleRejectSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-foreground">
-                Alasan Penolakan *
-              </Label>
+          <form onSubmit={handleRejectSubmit} className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-medium text-foreground">Alasan Penolakan *</Label>
               <Textarea
-                placeholder="Contoh: Stok kawat las LB-52 di gudang sedang habis / belum di-restock"
+                placeholder="Jelaskan alasan penolakan memo ini"
                 value={rejectReasonInput}
                 onChange={(e) => setRejectReasonInput(e.target.value)}
-                className="rounded-xl text-xs border-border/80 min-h-20"
+                className="rounded-md text-xs min-h-20"
                 required
               />
             </div>
-            <DialogFooter className="flex items-center gap-2 pt-2">
+            <DialogFooter className="flex items-center gap-2 pt-1">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => setRejectingMemo(null)}
-                className="h-10 text-xs font-semibold rounded-xl cursor-pointer"
+                className="h-8 text-xs cursor-pointer"
               >
                 Batal
               </Button>
               <Button
                 type="submit"
+                size="sm"
                 disabled={isPending}
-                className="h-10 text-xs font-bold rounded-xl bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                className="h-8 text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
               >
-                {isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  "Tolak Memo"
-                )}
+                {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Tolak Memo"}
               </Button>
             </DialogFooter>
           </form>

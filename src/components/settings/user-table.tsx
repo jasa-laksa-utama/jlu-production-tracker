@@ -98,7 +98,7 @@ export function UserTable({ users, roles }: { users: any[]; roles: any[] }) {
           isActive: true,
         });
       } else {
-        toast.error(result.error);
+        toast.error(result.error || "Gagal membuat pengguna baru");
       }
     });
   };
@@ -118,7 +118,7 @@ export function UserTable({ users, roles }: { users: any[]; roles: any[] }) {
         toast.success("User berhasil diperbarui");
         setIsEditOpen(false);
       } else {
-        toast.error(result.error);
+        toast.error(result.error || "Gagal memperbarui pengguna");
       }
     });
   };
@@ -130,7 +130,7 @@ export function UserTable({ users, roles }: { users: any[]; roles: any[] }) {
         toast.success("User berhasil dihapus");
         setIsDeleteOpen(false);
       } else {
-        toast.error(result.error);
+        toast.error(result.error || "Gagal menghapus pengguna");
       }
     });
   };
@@ -144,7 +144,7 @@ export function UserTable({ users, roles }: { users: any[]; roles: any[] }) {
         );
         setIsStatusDialogOpen(false);
       } else {
-        toast.error(result.error);
+        toast.error(result.error || "Gagal mengubah status pengguna");
       }
     });
   };

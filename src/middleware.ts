@@ -4,6 +4,17 @@ import { NextResponse } from "next/server";
 
 const { auth } = NextAuth(authConfig);
 
+function clearSessionCookies(res: NextResponse) {
+  res.cookies.delete("authjs.session-token");
+  res.cookies.delete("__Secure-authjs.session-token");
+  res.cookies.delete("next-auth.session-token");
+  res.cookies.delete("__Secure-next-auth.session-token");
+  res.cookies.delete("authjs.callback-url");
+  res.cookies.delete("authjs.csrf-token");
+  res.cookies.delete("next-auth.callback-url");
+  res.cookies.delete("next-auth.csrf-token");
+}
+
 export default auth((req) => {
   const user = req.auth?.user;
   const isLoggedIn = !!(
@@ -15,38 +26,42 @@ export default auth((req) => {
 
   const isApiAuthRoute = pathname.startsWith("/api/auth");
   const isWarehouseApiRoute = pathname.startsWith("/api/warehouse");
-  const isPublicRoute =
-    pathname === "/login" ||
-    isWarehouseApiRoute ||
+  const isShippingApiRoute = pathname.startsWith("/api/shipping");
+  const isLoginPage = pathname === "/login";
+  const isStaticAsset =
     pathname.startsWith("/_next") ||
-    pathname.includes(".") ||
     pathname.endsWith(".ico") ||
     pathname.endsWith(".png") ||
     pathname.endsWith(".jpg") ||
-    pathname.endsWith(".svg");
+    pathname.endsWith(".jpeg") ||
+    pathname.endsWith(".svg") ||
+    pathname.endsWith(".webp") ||
+    pathname.endsWith(".css") ||
+    pathname.endsWith(".js");
 
-  if (isApiAuthRoute || isPublicRoute) {
-    if (pathname === "/login") {
-      const isForceClear =
-        searchParams.has("logout") ||
-        searchParams.has("clear") ||
-        searchParams.has("error");
+  if (isApiAuthRoute || isWarehouseApiRoute || isShippingApiRoute || isStaticAsset) {
+    return NextResponse.next();
+  }
 
-      if (isForceClear || !isLoggedIn) {
-        const response = NextResponse.next();
-        response.cookies.delete("next-auth.session-token");
-        response.cookies.delete("__Secure-next-auth.session-token");
-        response.cookies.delete("authjs.session-token");
-        return response;
-      }
+  if (isLoginPage) {
+    const isForceClear =
+      searchParams.has("logout") ||
+      searchParams.has("clear") ||
+      searchParams.has("error");
 
-      if (isLoggedIn) {
-        return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
-      }
+    if (isForceClear || !isLoggedIn) {
+      const response = NextResponse.next();
+      clearSessionCookies(response);
+      return response;
+    }
+
+    if (isLoggedIn) {
+      return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
     }
     return NextResponse.next();
   }
 
+  // Jika belum login atau sesi tidak valid, langsung arahkan ke /login
   if (!isLoggedIn) {
     let callbackUrl = pathname;
     if (req.nextUrl.search) {
@@ -57,9 +72,7 @@ export default auth((req) => {
     loginUrl.searchParams.set("clear", "true");
 
     const response = NextResponse.redirect(loginUrl);
-    response.cookies.delete("next-auth.session-token");
-    response.cookies.delete("__Secure-next-auth.session-token");
-    response.cookies.delete("authjs.session-token");
+    clearSessionCookies(response);
     return response;
   }
 
@@ -68,6 +81,7 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.png$|.*\\.jpg$|.*\\.jpeg$|.*\\.gif$|.*\\.svg$|.*\\.webp$).*)"
+    "/((?!api/auth|_next/static|_next/image|favicon.ico|.*\\.png$|.*\\.jpg$|.*\\.jpeg$|.*\\.gif$|.*\\.svg$|.*\\.webp$).*)",
   ],
 };
+

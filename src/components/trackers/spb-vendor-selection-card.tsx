@@ -310,7 +310,7 @@ export function SPBVendorSelectionCard({
               placeholder="Contoh: Spesifikasi teknis paling sesuai standar JIS, harga bersaing, garansi 1 tahun..."
               value={recommendationNote}
               onChange={(e) => setRecommendationNote(e.target.value)}
-              className="w-full text-xs p-2.5 rounded-xl bg-background border border-border/80 focus:border-primary focus:outline-none min-h-[70px] resize-none"
+              className="w-full text-xs p-2.5 rounded-xl bg-background border border-border/80 focus:border-primary focus:outline-none min-h-20 resize-none"
             />
             <p className="text-[10px] text-muted-foreground">
               Catatan ini akan dapat dibaca oleh {role === "ENGINEERING" ? "PM & Direksi" : "Direksi"} saat meninjau penetapan vendor.

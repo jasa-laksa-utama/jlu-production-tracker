@@ -1,6 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 
 export const authConfig = {
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
   providers: [],
   callbacks: {
     authorized({ auth, request: { nextUrl } }) {
@@ -10,34 +11,30 @@ export const authConfig = {
         typeof user === "object" &&
         Boolean(user.id || (user as any).username || (user.email && user.email.includes("@")))
       );
-      const isApiAuthRoute = nextUrl.pathname.startsWith('/api/auth');
-      const isPublicRoute = nextUrl.pathname === '/login';
+      const isApiAuthRoute = nextUrl.pathname.startsWith("/api/auth");
+      const isWarehouseApiRoute = nextUrl.pathname.startsWith("/api/warehouse");
+      const isPublicRoute = nextUrl.pathname === "/login";
 
-      if (isApiAuthRoute) return true;
+      if (isApiAuthRoute || isWarehouseApiRoute) return true;
 
       if (isPublicRoute) {
         const isForceClear =
-          nextUrl.searchParams.has('logout') ||
-          nextUrl.searchParams.has('clear') ||
-          nextUrl.searchParams.has('error');
+          nextUrl.searchParams.has("logout") ||
+          nextUrl.searchParams.has("clear") ||
+          nextUrl.searchParams.has("error");
 
         if (isForceClear || !isLoggedIn) {
           return true;
         }
 
         if (isLoggedIn) {
-          return Response.redirect(new URL('/dashboard', nextUrl));
+          return Response.redirect(new URL("/dashboard", nextUrl));
         }
         return true;
       }
 
-      if (!isLoggedIn) {
-        const loginUrl = new URL('/login', nextUrl);
-        loginUrl.searchParams.set('clear', 'true');
-        return Response.redirect(loginUrl);
-      }
-
-      return true;
+      // Wajib login untuk seluruh rute selain public / auth
+      return isLoggedIn;
     },
     async jwt({ token, user }) {
       if (user) {

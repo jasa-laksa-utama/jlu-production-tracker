@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 interface ConfirmReturnBody {
   returnNumber: string;
@@ -153,7 +154,7 @@ export async function POST(request: Request) {
   } catch (error: any) {
     console.error("[API POST /api/warehouse/returns/confirm] Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to process return confirmation" },
+      { success: false, error: sanitizeErrorMessage(error, "Gagal memproses konfirmasi retur") },
       { status: 500 }
     );
   }

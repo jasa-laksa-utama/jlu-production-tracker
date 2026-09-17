@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 /**
  * GET /api/warehouse/returns
@@ -90,7 +91,7 @@ export async function GET(request: Request) {
   } catch (error: any) {
     console.error("[API GET /api/warehouse/returns] Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to fetch return requests" },
+      { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil data pengembalian gudang") },
       { status: 500 }
     );
   }

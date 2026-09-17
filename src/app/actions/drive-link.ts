@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export async function updateGlobalDriveLink(
   id: string,
@@ -114,7 +115,7 @@ export async function updateGlobalDriveLink(
     return { success: true };
   } catch (error: any) {
     console.error("Error updating drive link:", error);
-    return { error: error.message || "Failed to update drive link" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui link Google Drive.") };
   }
 }
 

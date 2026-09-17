@@ -293,7 +293,7 @@ export function SPBSmartImportDialog({
 
         setRows(parsedList);
       } catch (err: any) {
-        toast.error(`Gagal membaca Excel: ${err.message}`);
+        toast.error("Gagal membaca berkas Excel. Pastikan format file dan kolom sesuai template.");
       } finally {
         setIsParsing(false);
         e.target.value = "";

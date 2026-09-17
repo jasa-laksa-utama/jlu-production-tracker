@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 /**
  * GET /api/warehouse/memos
@@ -73,7 +74,7 @@ export async function GET(request: Request) {
   } catch (error: any) {
     console.error("[API GET /api/warehouse/memos] Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to fetch goods release memos" },
+      { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil data memo pengeluaran barang") },
       { status: 500 }
     );
   }

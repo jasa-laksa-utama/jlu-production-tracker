@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "verify:auth": "tsx scripts/verify-auth-integrity.ts",
+    "build": "tsx scripts/verify-auth-integrity.ts && next build",
     "start": "next start",
     "lint": "eslint"
   },

@@ -35,9 +35,10 @@ export default async function PpicTrackerPage({
   }
 
   const projects = projectsResult.success ? (projectsResult.data as any[]) : [];
-  const meta = projectsResult.success
-    ? projectsResult.meta
-    : { totalPages: 1, totalCount: 0, currentPage: 1 };
+  const meta =
+    projectsResult.success && projectsResult.meta
+      ? projectsResult.meta
+      : { totalPages: 1, totalCount: 0, currentPage: 1 };
 
   return (
     <div className="flex w-full overflow-hidden bg-background h-screen">
@@ -45,7 +46,7 @@ export default async function PpicTrackerPage({
       <div className="flex flex-col flex-1 w-full bg-background md:rounded-tl-xl md:border-l md:border-t border-border overflow-hidden md:m-2 md:ml-0 shadow-sm relative">
         <DashboardHeader />
 
-        <main className="flex-1 w-full p-6 pb-8 overflow-y-auto overflow-x-hidden space-y-6 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
+        <main className="flex-1 w-full px-4 sm:px-6 py-6 pb-8 overflow-y-auto overflow-x-hidden space-y-6 max-w-full 2xl:max-w-[1920px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
           <div className="flex flex-col gap-2">
             <h2 className="text-2xl font-bold tracking-tight">PPIC</h2>
             <p className="text-muted-foreground">

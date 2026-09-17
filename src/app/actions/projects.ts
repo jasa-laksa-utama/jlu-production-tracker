@@ -8,6 +8,7 @@ import { generateTrackingNumber } from "@/lib/generate-number";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 
 /**
@@ -19,6 +20,7 @@ export async function convertToProject(
   leadId: string,
   expectedDate?: Date | null,
   customProjectNumber?: string | null,
+  estimatedTonnage?: number | null,
 ) {
   try {
     await requireAuth();
@@ -49,6 +51,11 @@ export async function convertToProject(
       projectNumber = await generateTrackingNumber("PROJECT", lead.projectType || "PO_PROJECT");
     }
 
+    const tonVal =
+      estimatedTonnage !== undefined && estimatedTonnage !== null
+        ? Math.max(0, Number(estimatedTonnage) || 0)
+        : lead.estimatedTonnage || 0;
+
     // Create the Project and its first history record in a transaction
     const result = await prisma.$transaction(async (tx) => {
       // Check if project already exists
@@ -58,10 +65,13 @@ export async function convertToProject(
       if (existingProject)
         throw new Error("Project already exists for this lead");
 
-      // Ensure lead status is set to DEAL
+      // Ensure lead status is set to DEAL and update estimatedTonnage
       await tx.lead.update({
         where: { id: lead.id },
-        data: { status: "DEAL" },
+        data: { 
+          status: "DEAL",
+          estimatedTonnage: tonVal,
+        },
       });
 
       const project = await tx.project.create({
@@ -78,6 +88,7 @@ export async function convertToProject(
           status: "IN_PROGRESS",
           engStatus: "IN_PROGRESS",
           dealAt: new Date(),
+          estimatedTonnage: tonVal,
         },
       });
 
@@ -100,6 +111,14 @@ export async function convertToProject(
 
       return project;
     });
+
+    // Auto-sync Engineering Masterplan Progress
+    try {
+      const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+      await syncEngineeringMasterplanProgress(result.id);
+    } catch (syncErr) {
+      console.error("Error auto-syncing engineering masterplan on convertToProject:", syncErr);
+    }
 
     // Convert Decimal to string for serialization
     const serializedResult = {
@@ -129,7 +148,7 @@ export async function convertToProject(
 
     return { success: true, data: serializedResult };
   } catch (error: any) {
-    return { error: error.message || "Failed to convert lead to project" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengubah lead menjadi proyek.") };
   }
 }
 
@@ -263,7 +282,7 @@ export async function updateProjectDivisionStatus(
 
     return { success: true, data: serializedResult };
   } catch (error: any) {
-    return { error: error.message || "Failed to update project status" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui status proyek.") };
   }
 }
 
@@ -280,6 +299,9 @@ export async function getProjects(
     division?: string;
     startDate?: string;
     endDate?: string;
+    start?: string;
+    end?: string;
+    tab?: string;
     sortOrder?: "asc" | "desc";
   },
   maybeParams?: {
@@ -290,6 +312,9 @@ export async function getProjects(
     division?: string;
     startDate?: string;
     endDate?: string;
+    start?: string;
+    end?: string;
+    tab?: string;
     sortOrder?: "asc" | "desc";
   },
 ) {
@@ -322,33 +347,15 @@ export async function getProjects(
 
     const AND: Prisma.ProjectWhereInput[] = [];
 
-    // Always show all active non-cancelled, non-deleted deal projects across all pages
-    AND.push({
-      status: { notIn: ["CANCELLED", "DELETED"] },
-    });
-
-    // If user explicitly filters by status in the UI, filter against the division's status field
-    if (status && status !== "ALL") {
-      const upperDiv = (division || "").toUpperCase();
-      if (upperDiv === "PRODUKSI" || upperDiv === "PRODUCTION") {
-        AND.push({ prodStatus: status });
-      } else if (upperDiv === "ENGINEERING" || upperDiv === "ENG") {
-        AND.push({ engStatus: status });
-      } else if (upperDiv === "PPIC") {
-        AND.push({ ppicStatus: status });
-      } else if (upperDiv === "QUALITY_CONTROL" || upperDiv === "QC") {
-        AND.push({ qcStatus: status });
-      } else {
-        AND.push({
-          OR: [
-            { status: status },
-            { engStatus: status },
-            { ppicStatus: status },
-            { prodStatus: status },
-            { qcStatus: status },
-          ],
-        });
-      }
+    const tab = params.tab || "active";
+    if (tab === "archived") {
+      AND.push({
+        status: { in: ["CLOSED", "COMPLETED"] },
+      });
+    } else {
+      AND.push({
+        status: { notIn: ["CLOSED", "COMPLETED", "CANCELLED", "DELETED"] },
+      });
     }
 
     if (search) {
@@ -362,12 +369,15 @@ export async function getProjects(
       });
     }
 
-    if (startDate) {
-      AND.push({ createdAt: { gte: new Date(startDate) } });
+    const sDate = params.start || params.startDate;
+    const eDate = params.end || params.endDate;
+
+    if (sDate) {
+      AND.push({ createdAt: { gte: new Date(sDate) } });
     }
 
-    if (endDate) {
-      AND.push({ createdAt: { lte: new Date(endDate) } });
+    if (eDate) {
+      AND.push({ createdAt: { lte: new Date(eDate) } });
     }
 
     const where: Prisma.ProjectWhereInput = { AND };
@@ -415,7 +425,10 @@ export async function getProjects(
                 orderBy: { orderIndex: "asc" },
                 include: {
                   subProgresses: { orderBy: { createdAt: "asc" } },
-                },
+                  unitProgresses: true,
+                  weeklyProgresses: { orderBy: { weekNumber: "asc" } },
+                  weeklyTargets: { orderBy: { weekNumber: "asc" } },
+                } as any,
               },
               weeklyPlans: { orderBy: { weekNumber: "asc" } },
               divisionLeaders: true,
@@ -424,8 +437,15 @@ export async function getProjects(
           conveyorUnits: {
             orderBy: { orderIndex: "asc" },
             include: {
-              structureItems: { orderBy: { orderIndex: "asc" } },
-              mechanicalItems: { orderBy: { orderIndex: "asc" } },
+              structureItems: {
+                orderBy: { orderIndex: "asc" },
+                include: { subItems: { orderBy: { orderIndex: "asc" } } },
+              },
+              mechanicalItems: {
+                orderBy: { orderIndex: "asc" },
+                include: { subItems: { orderBy: { orderIndex: "asc" } } },
+              },
+              progresses: true,
               qcCheckpoints: {
                 include: {
                   revisions: {
@@ -484,6 +504,27 @@ export async function getProjects(
             },
           },
           handovers: true,
+          shipments: {
+            include: {
+              packages: {
+                include: {
+                  project_components: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+          },
+          shipmentPackages: {
+            include: {
+              project_components: true,
+              shipment: true,
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+          },
           boqs: {
             include: {
               boqItems: {
@@ -501,14 +542,14 @@ export async function getProjects(
               spb: true,
             },
           },
-        },
+        } as any,
         orderBy: { createdAt: sortOrder },
       }),
       prisma.project.count({ where }),
     ]);
 
     // Convert Decimals to strings and calculate total unique documents
-    const serializedProjects = projects.map((project) => {
+    const serializedProjects = projects.map((project: any) => {
       const allDocs = [
         ...((project.documents as any[]) || []),
         ...((project.lead as any)?.documents || []),
@@ -522,12 +563,38 @@ export async function getProjects(
       const allDocIds = new Set(filteredDocs.map((d: any) => d.id));
       const hasRevisedDocs = filteredDocs.some((doc: any) => doc.version > 1);
 
-      const approvedSpbCount = project.spb.filter((s: any) => {
-        if (s.items.length === 0) return false;
+      const approvedSpbCount = (project.spb || []).filter((s: any) => {
+        if (!s.items || s.items.length === 0) return false;
         return s.items.every((it: any) => 
           it.status === "FULFILLED" || it.status === "RECEIVED"
         );
       }).length;
+
+      // Calculate global masterplan completion percentage
+      let overallProgress = 0;
+      if (project.status === "CLOSED" || project.status === "COMPLETED") {
+        overallProgress = 100;
+      } else {
+        const phases = project.masterplan?.phases || [];
+        if (phases.length > 0) {
+          const totalWeight = phases.reduce(
+            (sum: number, p: any) => sum + Number(p.weightPercent || 0),
+            0
+          );
+          if (totalWeight > 0) {
+            const rawProgress = phases.reduce((sum: number, p: any) => {
+              const act = Number(p.actualProgress || 0);
+              const w = Number(p.weightPercent || 0);
+              return sum + (act * w) / 100;
+            }, 0);
+            overallProgress = totalWeight === 100 ? rawProgress : (rawProgress / totalWeight) * 100;
+          } else {
+            const sumAct = phases.reduce((sum: number, p: any) => sum + Number(p.actualProgress || 0), 0);
+            overallProgress = sumAct / phases.length;
+          }
+        }
+      }
+      overallProgress = Math.min(100, Math.max(0, Math.round(overallProgress * 10) / 10));
 
       return {
         ...project,
@@ -544,6 +611,7 @@ export async function getProjects(
         hasRevisedDocs,
         spbCount: project._count?.spb || 0,
         approvedSpbCount,
+        overallProgress,
       };
     });
 
@@ -557,7 +625,8 @@ export async function getProjects(
       },
     };
   } catch (error: any) {
-    return { error: error.message || "Failed to fetch projects" };
+    console.error("getProjects error:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil daftar proyek.") };
   }
 }
 
@@ -753,7 +822,7 @@ export async function getDivisionStats(division: string) {
       data: { totalActive, inProgress, review, approved },
     };
   } catch (error: any) {
-    return { error: error.message || "Failed to fetch division stats" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengambil statistik divisi.") };
   }
 }
 
@@ -792,7 +861,7 @@ export async function revertProjectToLead(projectId: string) {
 
     return { success: true };
   } catch (error: any) {
-    return { error: error.message || "Failed to revert project to lead" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengembalikan proyek menjadi lead.") };
   }
 }
 /**
@@ -803,6 +872,8 @@ export async function getProjectsMasterOverview(
     page?: number;
     pageSize?: number;
     search?: string;
+    searchBy?: "all" | "project" | "clientName" | "clientCompany";
+    sortBy?: "deadline" | "createdAt" | "projectName";
     sortOrder?: "asc" | "desc";
     tab?: string;
     division?: string;
@@ -830,7 +901,9 @@ export async function getProjectsMasterOverview(
       page = 1,
       pageSize = 10,
       search = "",
-      sortOrder = "desc",
+      searchBy = "all",
+      sortBy = "deadline",
+      sortOrder = "asc",
       tab = "active",
       division = "ALL",
       start = "",
@@ -840,16 +913,33 @@ export async function getProjectsMasterOverview(
 
     const andConditions: Prisma.ProjectWhereInput[] = [];
 
-    // Search query
+    // Search query with optional category filtering
     if (search) {
-      andConditions.push({
-        OR: [
-          { projectName: { contains: search, mode: "insensitive" } },
-          { projectNumber: { contains: search, mode: "insensitive" } },
-          { customer: { name: { contains: search, mode: "insensitive" } } },
-          { customer: { company: { contains: search, mode: "insensitive" } } },
-        ],
-      });
+      if (searchBy === "clientName") {
+        andConditions.push({
+          customer: { name: { contains: search, mode: "insensitive" } },
+        });
+      } else if (searchBy === "clientCompany") {
+        andConditions.push({
+          customer: { company: { contains: search, mode: "insensitive" } },
+        });
+      } else if (searchBy === "project") {
+        andConditions.push({
+          OR: [
+            { projectName: { contains: search, mode: "insensitive" } },
+            { projectNumber: { contains: search, mode: "insensitive" } },
+          ],
+        });
+      } else {
+        andConditions.push({
+          OR: [
+            { projectName: { contains: search, mode: "insensitive" } },
+            { projectNumber: { contains: search, mode: "insensitive" } },
+            { customer: { name: { contains: search, mode: "insensitive" } } },
+            { customer: { company: { contains: search, mode: "insensitive" } } },
+          ],
+        });
+      }
     }
 
     // Tab condition: active vs archived (done)
@@ -894,6 +984,19 @@ export async function getProjectsMasterOverview(
       ? { AND: andConditions }
       : {};
 
+    // Dynamic order: secara default urutkan berdasarkan tenggat waktu terdekat (deadline asc)
+    let orderBy: Prisma.ProjectOrderByWithRelationInput | Prisma.ProjectOrderByWithRelationInput[];
+    if (sortBy === "deadline") {
+      orderBy = [
+        { expectedDate: { sort: sortOrder, nulls: "last" } },
+        { createdAt: "desc" },
+      ];
+    } else if (sortBy === "projectName") {
+      orderBy = { projectName: sortOrder };
+    } else {
+      orderBy = { createdAt: sortOrder };
+    }
+
     const [projects, totalCount] = await Promise.all([
       prisma.project.findMany({
         where,
@@ -903,10 +1006,17 @@ export async function getProjectsMasterOverview(
           history: {
             orderBy: { entryDate: "desc" },
           },
+          masterplan: {
+            include: {
+              phases: {
+                orderBy: { orderIndex: "asc" },
+              },
+            },
+          },
         },
         skip,
         take: pageSize,
-        orderBy: { updatedAt: sortOrder },
+        orderBy,
       }),
       prisma.project.count({ where }),
     ]);
@@ -917,6 +1027,32 @@ export async function getProjectsMasterOverview(
         ? differenceInDays(new Date(), project.createdAt)
         : 0;
 
+      // Calculate global masterplan completion percentage
+      let overallProgress = 0;
+      if (project.status === "CLOSED" || project.status === "COMPLETED") {
+        overallProgress = 100;
+      } else {
+        const phases = project.masterplan?.phases || [];
+        if (phases.length > 0) {
+          const totalWeight = phases.reduce(
+            (sum: number, p: any) => sum + Number(p.weightPercent || 0),
+            0
+          );
+          if (totalWeight > 0) {
+            const rawProgress = phases.reduce((sum: number, p: any) => {
+              const act = Number(p.actualProgress || 0);
+              const w = Number(p.weightPercent || 0);
+              return sum + (act * w) / 100;
+            }, 0);
+            overallProgress = totalWeight === 100 ? rawProgress : (rawProgress / totalWeight) * 100;
+          } else {
+            const sumAct = phases.reduce((sum: number, p: any) => sum + Number(p.actualProgress || 0), 0);
+            overallProgress = sumAct / phases.length;
+          }
+        }
+      }
+      overallProgress = Math.min(100, Math.max(0, Math.round(overallProgress * 10) / 10));
+
       return {
         ...project,
         value: project.value ? project.value.toString() : null,
@@ -926,7 +1062,19 @@ export async function getProjectsMasterOverview(
               value: project.lead.value ? project.lead.value.toString() : null,
             }
           : null,
+        masterplan: project.masterplan
+          ? {
+              ...project.masterplan,
+              phases: (project.masterplan.phases || []).map((ph: any) => ({
+                ...ph,
+                weightPercent: Number(ph.weightPercent || 0),
+                actualProgress: Number(ph.actualProgress || 0),
+                planProgress: Number(ph.planProgress || 0),
+              })),
+            }
+          : null,
         runningDays,
+        overallProgress,
       };
     });
 
@@ -941,7 +1089,7 @@ export async function getProjectsMasterOverview(
     };
   } catch (error: any) {
     console.error("Master Dashboard Fetch Error:", error);
-    return { error: error.message || "Failed to fetch master overview" };
+    return { error: sanitizeErrorMessage(error, "Gagal memuat ringkasan master dashboard.") };
   }
 }
 
@@ -1054,7 +1202,7 @@ export async function handoverToInventory(projectId: string) {
     return { success: true, data: serializedResult };
   } catch (error: any) {
     console.error("Error handing over to inventory:", error);
-    return { success: false, error: error?.message || "Failed to handover to inventory" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal serah terima ke inventory.") };
   }
 }
 
@@ -1229,7 +1377,7 @@ export async function syncProjectInventoryStatus(projectId: string) {
     return { success: true, updated: false, reason: "Items are not fully ready yet" };
   } catch (err: any) {
     console.error("Error syncing project inventory status:", err);
-    return { success: false, error: err.message || "Failed to sync inventory status" };
+    return { success: false, error: sanitizeErrorMessage(err, "Gagal menyinkronkan status inventory.") };
   }
 }
 
@@ -1305,7 +1453,7 @@ export async function requestDrawingRevision(projectId: string, notes: string) {
     return { success: true, data: result };
   } catch (err: any) {
     console.error("Error requesting drawing revision:", err);
-    return { success: false, error: err.message || "Gagal mengajukan revisi drawing" };
+    return { success: false, error: sanitizeErrorMessage(err, "Gagal mengajukan revisi drawing.") };
   }
 }
 
@@ -1381,7 +1529,7 @@ export async function completeDrawingRevision(projectId: string, notes: string) 
     return { success: true, data: result };
   } catch (err: any) {
     console.error("Error completing drawing revision:", err);
-    return { success: false, error: err.message || "Gagal menyelesaikan revisi drawing" };
+    return { success: false, error: sanitizeErrorMessage(err, "Gagal menyelesaikan revisi drawing.") };
   }
 }
 
@@ -1668,7 +1816,7 @@ export async function getDashboardMetrics(params?: { start?: string; end?: strin
     console.error("Failed to fetch dashboard metrics:", error);
     return {
       success: false,
-      error: error.message || "Failed to fetch metrics"
+      error: sanitizeErrorMessage(error, "Gagal memuat metrik dashboard."),
     };
   }
 }
@@ -1716,7 +1864,7 @@ export async function getPurchaseOrders() {
     return { success: true, data: serializedPos };
   } catch (error: any) {
     console.error("Gagal mengambil data PO:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memuat data Purchase Order.") };
   }
 }
 
@@ -1766,7 +1914,171 @@ export async function sendNoteToEngineering(projectId: string, notes: string) {
 
     return { success: true };
   } catch (error: any) {
-    return { success: false, error: error.message || "Gagal mengirim catatan ke Engineering" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengirim catatan ke Engineering.") };
+  }
+}
+
+/**
+ * Closes a project after commissioning 100% by Engineering submitting Berita Acara.
+ * Saves multiple testing/handover files as documents, updates status to CLOSED, and logs history.
+ */
+export async function closeProjectWithBeritaAcara(params: {
+  projectId: string;
+  notes?: string;
+  files: Array<{
+    url: string;
+    fileName: string;
+    fileType?: string;
+    fileSize?: number;
+  }>;
+}) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const uBy = session?.user?.name || "Engineering";
+
+    if (!params.projectId) {
+      return { success: false, error: "ID Proyek wajib diisi." };
+    }
+
+    if (!params.files || params.files.length === 0) {
+      return {
+        success: false,
+        error: "Minimal satu file Berita Acara atau hasil uji site wajib diunggah.",
+      };
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: params.projectId },
+      select: { id: true, projectName: true, projectNumber: true, status: true },
+    });
+
+    if (!project) {
+      return { success: false, error: "Proyek tidak ditemukan." };
+    }
+
+    const cleanNotes = params.notes?.trim() || null;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Simpan setiap file Berita Acara ke tabel Document
+      for (const file of params.files) {
+        await tx.document.create({
+          data: {
+            projectId: project.id,
+            category: "BERITA_ACARA",
+            label: "Berita Acara & Hasil Uji Site",
+            name: file.fileName,
+            fileName: file.fileName,
+            url: file.url,
+            fileType: file.fileType || "application/pdf",
+            notes: cleanNotes,
+            uploadedBy: uBy,
+            isExternal: false,
+            version: 1,
+          },
+        });
+      }
+
+      // 2. Tutup entri history aktif
+      const lastHistory = await tx.projectHistory.findFirst({
+        where: { projectId: project.id, exitDate: null },
+        orderBy: { entryDate: "desc" },
+      });
+
+      if (lastHistory) {
+        await tx.projectHistory.update({
+          where: { id: lastHistory.id },
+          data: { exitDate: new Date() },
+        });
+      }
+
+      // 3. Catat history penutupan proyek resmi oleh Engineering
+      await tx.projectHistory.create({
+        data: {
+          projectId: project.id,
+          division: "ENGINEERING",
+          status: "CLOSED",
+          action: "PROJECT_CLOSING_BERITA_ACARA",
+          notes:
+            cleanNotes ||
+            "Proyek resmi ditutup oleh Engineering setelah verifikasi uji fungsi unit conveyor di site (Commissioning 100%).",
+          updatedBy: uBy,
+          remark: `Berita Acara Closing Proyek (${params.files.length} dokumen)`,
+        },
+      });
+
+      // 4. Update status Proyek menjadi CLOSED
+      await tx.project.update({
+        where: { id: project.id },
+        data: {
+          status: "CLOSED",
+          prodStatus: "DONE",
+          engStatus: "DONE",
+        },
+      });
+    });
+
+    // 5. Kirim notifikasi global
+    try {
+      await createNotification({
+        title: "Proyek Resmi Ditutup (Closed)",
+        message: `${uBy} (Engineering) telah mengunggah Berita Acara uji site dan menutup Proyek ${project.projectNumber || project.projectName}.`,
+        type: "SUCCESS",
+        module: "TRACKER",
+        targetUrl: `/dashboard?search=${encodeURIComponent(project.projectNumber || "")}`,
+      });
+    } catch (notifErr) {
+      console.error("Gagal mengirim notifikasi closing proyek:", notifErr);
+    }
+
+    revalidatePath("/trackers/engineering");
+    revalidatePath("/trackers/production");
+    revalidatePath("/dashboard");
+    revalidatePath("/leads");
+
+    return {
+      success: true,
+      message: `Proyek ${project.projectNumber || project.projectName} berhasil ditutup resmi dengan Berita Acara.`,
+    };
+  } catch (error: any) {
+    console.error("Error closeProjectWithBeritaAcara:", error);
+    return {
+      success: false,
+      error: sanitizeErrorMessage(error, "Gagal memproses penutupan proyek."),
+    };
+  }
+}
+
+/**
+ * Mengambil daftar dokumen Berita Acara untuk proyek tertentu.
+ */
+export async function getProjectBeritaAcaraDocuments(projectId: string) {
+  try {
+    await requireAuth();
+    if (!projectId) return { success: true, data: [] };
+
+    const docs = await prisma.document.findMany({
+      where: {
+        projectId,
+        category: "BERITA_ACARA",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return {
+      success: true,
+      data: docs.map((d: any) => ({
+        ...d,
+        createdAt: d.createdAt.toISOString(),
+        updatedAt: d.updatedAt.toISOString(),
+      })),
+    };
+  } catch (error: any) {
+    console.error("Error getProjectBeritaAcaraDocuments:", error);
+    return {
+      success: false,
+      error: sanitizeErrorMessage(error, "Gagal mengambil dokumen Berita Acara."),
+    };
   }
 }
 

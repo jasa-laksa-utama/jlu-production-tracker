@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireAuth, requireRole } from "@/lib/auth-guard";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export async function submitBoQForApproval(boqId: string, makerName: string) {
   try {
@@ -35,6 +36,15 @@ export async function submitBoQForApproval(boqId: string, makerName: string) {
       });
     } catch (err) {
       console.error("Error creating BoQ submit notification:", err);
+    }
+
+    if (boq.projectId || boq.project?.id) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(boq.projectId || boq.project.id);
+      } catch (e) {
+        console.error("Error auto-syncing engineering masterplan on submitBoQForApproval:", e);
+      }
     }
 
     revalidatePath("/trackers/engineering");
@@ -127,13 +137,23 @@ export async function approveBoQByPpic(boqId: string) {
       console.error("Error creating BoQ PPIC approval notification:", err);
     }
 
+    if (boq.projectId || boq.project?.id) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(boq.projectId || boq.project.id);
+      } catch (e) {
+        console.error("Error auto-syncing engineering masterplan on approveBoQByPpic:", e);
+      }
+    }
+
     revalidatePath("/trackers/ppic");
+    revalidatePath("/trackers/engineering");
     revalidatePath("/trackers/spb-approval-ppic");
     revalidatePath("/trackers/spb-approval-pm");
     return { success: true, data: JSON.parse(JSON.stringify(boq)) };
   } catch (error: any) {
     console.error("Error approving BoQ by PPIC:", error);
-    return { success: false, error: error.message || "Gagal menyetujui BoQ." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui BoQ.") };
   }
 }
 
@@ -211,13 +231,23 @@ export async function approveBoQByPm(boqId: string) {
       console.error("Error creating BoQ PM approval notification:", err);
     }
 
+    if (boq.projectId || boq.project?.id) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(boq.projectId || boq.project.id);
+      } catch (e) {
+        console.error("Error auto-syncing engineering masterplan on approveBoQByPm:", e);
+      }
+    }
+
     revalidatePath("/trackers/ppic");
+    revalidatePath("/trackers/engineering");
     revalidatePath("/trackers/spb-approval-ppic");
     revalidatePath("/trackers/spb-approval-pm");
     return { success: true, data: JSON.parse(JSON.stringify(boq)) };
   } catch (error: any) {
     console.error("Error approving BoQ by PM:", error);
-    return { success: false, error: error.message || "Gagal menyetujui BoQ." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui BoQ.") };
   }
 }
 
@@ -269,6 +299,15 @@ export async function rejectBoQ(boqId: string, reason: string) {
       console.error("Error creating BoQ rejection notification:", err);
     }
 
+    if (boq.projectId || boq.project?.id) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(boq.projectId || boq.project.id);
+      } catch (e) {
+        console.error("Error auto-syncing engineering masterplan on rejectBoQ:", e);
+      }
+    }
+
     revalidatePath("/trackers/ppic");
     revalidatePath("/trackers/engineering");
     revalidatePath("/trackers/spb-approval-ppic");
@@ -276,7 +315,7 @@ export async function rejectBoQ(boqId: string, reason: string) {
     return { success: true, data: JSON.parse(JSON.stringify(boq)) };
   } catch (error: any) {
     console.error("Error rejecting BoQ:", error);
-    return { success: false, error: error.message || "Gagal menolak BoQ." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menolak BoQ.") };
   }
 }
 

@@ -208,6 +208,18 @@ const getItemStatusDetails = (status: string, source: string) => {
         className:
           "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/20 dark:text-sky-400 dark:border-sky-900/50",
       };
+    case "READY":
+      return {
+        label: "Siap Diambil",
+        className:
+          "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50",
+      };
+    case "FULL":
+      return {
+        label: "Selesai (PO Tiba)",
+        className:
+          "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50",
+      };
     case "PREPARING":
       return {
         label: "Sedang Disiapkan",
@@ -2069,33 +2081,48 @@ export function CreateSPBDialog({
                                     </span>
                                   )}
                                 {(() => {
-                                  const isCompletedSpb = [
-                                    "COMPLETED",
-                                    "ISSUED",
-                                    "FULFILLED",
-                                  ].includes((spb.status || "").toUpperCase());
-                                  const processed = isCompletedSpb
-                                    ? spb.items.length
-                                    : spb.items.filter((it: any) => {
-                                        const st = (
-                                          it.status || ""
-                                        ).toUpperCase();
-                                        return (
-                                          st === "FULFILLED" ||
-                                          st === "RECEIVED" ||
-                                          st === "ISSUED" ||
-                                          st === "COMPLETED" ||
-                                          st === "PARTIALLY_ISSUED" ||
-                                          st === "PARTIALLY ISSUED" ||
-                                          (it.issuedQty &&
-                                            Number(it.issuedQty) > 0) ||
-                                          (it.fulfilledQty &&
-                                            Number(it.fulfilledQty) > 0)
-                                        );
-                                      }).length;
-                                  const total = spb.items.length;
-                                  const isAll = processed === total;
-                                  const isNone = processed === 0;
+                                    const isCompletedSpb = [
+                                      "COMPLETED",
+                                      "ISSUED",
+                                      "FULFILLED",
+                                    ].includes((spb.status || "").toUpperCase());
+                                    const processed = isCompletedSpb
+                                      ? spb.items.length
+                                      : spb.items.filter((it: any) => {
+                                          const st = (
+                                            it.status || ""
+                                          ).toUpperCase();
+                                          const isWarehouseApproved =
+                                            (it.source || "").toUpperCase() === "WAREHOUSE" &&
+                                            [
+                                              "APPROVED_WAREHOUSE",
+                                              "READY",
+                                              "APPROVED",
+                                              "ISSUED",
+                                              "FULFILLED",
+                                              "COMPLETED",
+                                            ].includes(st);
+                                          const qtyIssued = Number(
+                                            it.qtyIssued ?? it.issuedQty ?? 0,
+                                          );
+                                          return (
+                                            isWarehouseApproved ||
+                                            [
+                                              "FULFILLED",
+                                              "RECEIVED",
+                                              "ISSUED",
+                                              "COMPLETED",
+                                              "FULL",
+                                            ].includes(st) ||
+                                            st === "PARTIALLY_ISSUED" ||
+                                            st === "PARTIALLY ISSUED" ||
+                                            qtyIssued > 0 ||
+                                            Number(it.fulfilledQty || 0) > 0
+                                          );
+                                        }).length;
+                                    const total = spb.items.length;
+                                    const isAll = processed === total;
+                                    const isNone = processed === 0;
                                   return (
                                     <Badge
                                       variant="outline"

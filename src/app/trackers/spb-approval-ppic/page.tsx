@@ -28,6 +28,7 @@ export default async function PpicSpbApprovalPage() {
     pendingSpbGudangRes,
     pendingVendorItemsRes,
     masterItems,
+    packages,
   ] = await Promise.all([
     prisma.sPB.findMany({
       where: {
@@ -119,6 +120,19 @@ export default async function PpicSpbApprovalPage() {
         name: true,
       },
     }),
+    prisma.shipmentPackage.findMany({
+      include: {
+        project: {
+          include: {
+            customer: true,
+          },
+        },
+        project_components: true,
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+    }),
   ]);
 
   // Convert dates and decimal fields to serialize correctly
@@ -130,19 +144,20 @@ export default async function PpicSpbApprovalPage() {
   const serializedSpbGudang = pendingSpbGudangRes.success ? pendingSpbGudangRes.data : [];
   const serializedVendorItems = pendingVendorItemsRes.success ? pendingVendorItemsRes.data : [];
   const serializedMasterItems = JSON.parse(JSON.stringify(masterItems));
+  const serializedPackages = JSON.parse(JSON.stringify(packages));
 
   return (
     <div className="flex w-full overflow-hidden bg-background h-screen">
       <AppSidebar />
       <div className="flex flex-col flex-1 w-full bg-background md:rounded-tl-xl md:border-l md:border-t border-border overflow-hidden md:m-2 md:ml-0 shadow-sm relative">
         <DashboardHeader />
-        <main className="flex-1 w-full p-6 pb-8 overflow-y-auto overflow-x-hidden space-y-6 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
+        <main className="flex-1 w-full px-4 sm:px-6 py-6 pb-8 overflow-y-auto overflow-x-hidden space-y-6 max-w-full 2xl:max-w-[1920px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
           <div className="flex flex-col gap-2">
             <h2 className="text-2xl font-bold tracking-tight text-foreground">
               Portal Persetujuan (PPIC)
             </h2>
             <p className="text-sm text-muted-foreground font-medium">
-              Review dan berikan persetujuan untuk dokumen SPB Proyek, SPB Gudang, Persetujuan Vendor PO, SPJ, BoQ, Memo Pengeluaran Barang, dan Substitusi Barang.
+              Review dan berikan persetujuan untuk dokumen SPB Proyek, SPB Gudang, Persetujuan Vendor PO, SPJ, BoQ, Memo Pengeluaran Barang, Validasi Paket Koli, dan Substitusi Barang.
             </p>
           </div>
 
@@ -155,6 +170,7 @@ export default async function PpicSpbApprovalPage() {
             initialSpbGudang={serializedSpbGudang}
             initialVendorItems={serializedVendorItems}
             masterItems={serializedMasterItems}
+            initialPackages={serializedPackages}
           />
         </main>
       </div>

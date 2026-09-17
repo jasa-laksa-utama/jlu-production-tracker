@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth, requireRole } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 import { calcMechanicalItemProgress } from "@/lib/progress-calculator";
 
 export interface CreateSPBItemInput {
@@ -248,7 +249,7 @@ export async function createSPB(
     return { success: true, data: result, warnings: warnings.map((w) => w.message) };
   } catch (error: any) {
     console.error("Error creating SPB:", error);
-    return { success: false, error: error?.message || "Failed to create SPB" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat SPB.") };
   }
 }
 
@@ -393,7 +394,7 @@ export async function deleteSPB(spbId: string) {
     return { success: true };
   } catch (error: any) {
     console.error("Error deleting SPB:", error);
-    return { success: false, error: error?.message || "Failed to delete SPB" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghapus SPB.") };
   }
 }
 
@@ -655,7 +656,7 @@ export async function updateSPB(
     return { success: true, data: result, warnings: warnings.map((w) => w.message) };
   } catch (error: any) {
     console.error("Error updating SPB:", error);
-    return { success: false, error: error?.message || "Failed to update SPB" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui SPB.") };
   }
 }
 
@@ -758,7 +759,7 @@ export async function updateSPBItemStatus(spbItemId: string, newStatus: string) 
     return { success: true, data: { id: result.id, status: result.status } };
   } catch (error: any) {
     console.error("Error updating SPB item status:", error);
-    return { success: false, error: error.message || "Failed to update SPB item status" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui status item SPB.") };
   }
 }
 
@@ -805,7 +806,7 @@ export async function approveSpbByPpic(spbId: string) {
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error approving SPB by PPIC:", error);
-    return { success: false, error: error.message || "Gagal menyetujui SPB." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPB.") };
   }
 }
 
@@ -852,7 +853,7 @@ export async function approveSpbByPm(spbId: string) {
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error approving SPB by PM:", error);
-    return { success: false, error: error.message || "Gagal menyetujui SPB." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPB.") };
   }
 }
 
@@ -944,7 +945,7 @@ export async function approveSpbByDireksi(spbId: string) {
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error approving SPB by Direksi:", error);
-    return { success: false, error: error.message || "Gagal menyetujui SPB." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPB.") };
   }
 }
 
@@ -980,7 +981,7 @@ export async function getPendingSPBForDireksi() {
     console.error("Error getPendingSPBForDireksi:", error);
     return {
       success: false,
-      error: error.message || "Gagal mengambil data SPB Direksi",
+      error: sanitizeErrorMessage(error, "Gagal mengambil data SPB Direksi."),
       data: [],
     };
   }
@@ -1050,7 +1051,7 @@ export async function rejectSpb(spbId: string, reason: string) {
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error rejecting SPB:", error);
-    return { success: false, error: error.message || "Gagal menolak SPB." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menolak SPB.") };
   }
 }
 
@@ -1066,11 +1067,12 @@ export async function getApprovalCounts() {
         AND ("approvalEngineering" = 'NONE' OR "approvalEngineering" = 'PENDING' OR "approvalEngineering" IS NULL)
     `;
 
+    // PM Vendor Count: SPB Project only, after PPIC approved
     const pmVendorCountRes: any[] = await prisma.$queryRaw`
       SELECT COUNT(*)::int as count FROM spb_items 
       WHERE ("vendorSelectionStatus" IN ('SUBMITTED', 'PENDING_PPIC', 'PENDING_PM', 'PENDING_DIREKSI', 'PENDING_APPROVAL', 'PENDING')
              OR ("selectedSupplierName" IS NOT NULL AND "vendorSelectionStatus" NOT IN ('APPROVED', 'REJECTED', 'NONE')))
-        AND ("approvalEngineering" = 'APPROVED' OR "approvalEngineering" IS NULL) 
+        AND "approvalPpic" = 'APPROVED'
         AND ("approvalPm" = 'NONE' OR "approvalPm" = 'PENDING' OR "approvalPm" IS NULL)
     `;
 
@@ -1092,12 +1094,13 @@ export async function getApprovalCounts() {
       `;
     } catch (e) {}
 
-    // Direksi Vendor Count: SPB Project + SPB Gudang (yang sudah lolos Stage 1 PPIC/PM)
+    // Direksi Vendor Count: SPB Project (setelah PPIC AND PM approved) + SPB Gudang (setelah PPIC approved)
     const direksiProjectVendorCountRes: any[] = await prisma.$queryRaw`
       SELECT COUNT(*)::int as count FROM spb_items 
       WHERE ("vendorSelectionStatus" IN ('SUBMITTED', 'PENDING_PPIC', 'PENDING_PM', 'PENDING_DIREKSI', 'PENDING_APPROVAL', 'PENDING')
              OR ("selectedSupplierName" IS NOT NULL AND "vendorSelectionStatus" NOT IN ('APPROVED', 'REJECTED', 'NONE')))
-        AND ("approvalPpic" = 'APPROVED' OR "approvalPm" = 'APPROVED')
+        AND "approvalPpic" = 'APPROVED'
+        AND "approvalPm" = 'APPROVED'
         AND ("approvalDireksi" = 'NONE' OR "approvalDireksi" = 'PENDING' OR "approvalDireksi" IS NULL)
     `;
     let direksiGudangVendorCountRes: any[] = [{ count: 0 }];
@@ -1131,6 +1134,7 @@ export async function getApprovalCounts() {
       engSub,
       direksiSpb,
       direksiSpbGudang,
+      ppicPackages,
     ] = await Promise.all([
       prisma.sPB.count({
         where: {
@@ -1219,6 +1223,11 @@ export async function getApprovalCounts() {
             },
           })
         : Promise.resolve(0),
+      prisma.shipmentPackage.count({
+        where: {
+          ppicStatus: "WAITING_APPROVAL",
+        },
+      }),
     ]);
 
     return {
@@ -1231,6 +1240,7 @@ export async function getApprovalCounts() {
         substitutions: ppicSub,
         spbGudang: ppicSpbGudang || 0,
         vendorSelections: ppicVendorCount,
+        packages: ppicPackages || 0,
         total:
           ppicSpb +
           ppicBoq +
@@ -1238,7 +1248,8 @@ export async function getApprovalCounts() {
           ppicMemo +
           ppicSub +
           (ppicSpbGudang || 0) +
-          ppicVendorCount,
+          ppicVendorCount +
+          (ppicPackages || 0),
       },
       pm: {
         spb: pmSpb,
@@ -1264,7 +1275,7 @@ export async function getApprovalCounts() {
     console.error("Error fetching approval counts:", error);
     return {
       success: false,
-      ppic: { spb: 0, boq: 0, spj: 0, total: 0 },
+      ppic: { spb: 0, boq: 0, spj: 0, packages: 0, total: 0 },
       pm: { spb: 0, boq: 0, spj: 0, total: 0 },
       engineering: { substitutions: 0, vendorSelections: 0, total: 0 },
       direksi: { vendorSelections: 0, total: 0 },
@@ -1385,7 +1396,7 @@ export async function resubmitSpb(spbId: string) {
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error resubmitting SPB:", error);
-    return { success: false, error: error.message || "Gagal mengajukan kembali SPB." };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengajukan kembali SPB.") };
   }
 }
 
@@ -1536,7 +1547,7 @@ export async function updateSPBItemSubstitution({
     return {
       success: false,
       status: 500,
-      error: error?.message || "Gagal memperbarui status approval substitusi",
+      error: sanitizeErrorMessage(error, "Gagal memperbarui status approval substitusi."),
     };
   }
 }
@@ -1598,7 +1609,7 @@ export async function getPendingSPBSubstitutions(stage?: "ENGINEERING" | "PPIC" 
     console.error("Error fetching pending SPB substitutions:", error);
     return {
       success: false,
-      error: error?.message || "Gagal mengambil data pengajuan substitusi",
+      error: sanitizeErrorMessage(error, "Gagal mengambil data pengajuan substitusi."),
       data: [],
     };
   }
@@ -1632,20 +1643,37 @@ export async function getPendingSPBVendorSelection(stage: "PPIC" | "ENGINEERING"
       }
     }
 
-    // 3. Filter berdasarkan tahap (stage): PPIC (Stage 1) -> DIREKSI (Stage 2)
+    // 3. Filter berdasarkan tahap (stage): PPIC (Stage 1) -> PM (Stage 2) -> DIREKSI (Stage 3)
     const filterByStage = (items: any[]) => {
       return items.filter((item: any) => {
         const appPpic = item.approvalPpic || "NONE";
         const appPm = item.approvalPm || "NONE";
         const appDireksi = item.approvalDireksi || "NONE";
+        const isGudang = item.itemType === "GUDANG";
 
         if (stage === "PPIC") {
           return appPpic === "NONE" || appPpic === "PENDING";
         } else if (stage === "PM") {
-          return appPm === "NONE" || appPm === "PENDING";
+          if (isGudang) return false;
+          return (
+            appPpic === "APPROVED" &&
+            (appPm === "NONE" || appPm === "PENDING")
+          );
         } else if (stage === "DIREKSI") {
-          const isStage1Approved = appPpic === "APPROVED" || appPm === "APPROVED";
-          return isStage1Approved && (appDireksi === "NONE" || appDireksi === "PENDING");
+          if (isGudang) {
+            // SPB Gudang: butuh persetujuan PPIC
+            return (
+              appPpic === "APPROVED" &&
+              (appDireksi === "NONE" || appDireksi === "PENDING")
+            );
+          } else {
+            // SPB Project: butuh persetujuan PPIC dan PM (PPIC > PM > Direksi)
+            return (
+              appPpic === "APPROVED" &&
+              appPm === "APPROVED" &&
+              (appDireksi === "NONE" || appDireksi === "PENDING")
+            );
+          }
         }
         return true;
       });
@@ -1739,7 +1767,7 @@ export async function getPendingSPBVendorSelection(stage: "PPIC" | "ENGINEERING"
     console.error("Error fetching pending SPB vendor selections:", error);
     return {
       success: false,
-      error: error?.message || "Gagal mengambil data pengajuan vendor",
+      error: sanitizeErrorMessage(error, "Gagal mengambil data pengajuan vendor."),
       data: [],
     };
   }
@@ -1819,7 +1847,7 @@ export async function requestSPBItemSubstitution({
     console.error("Error requesting SPB item substitution:", error);
     return {
       success: false,
-      error: error?.message || "Gagal mengajukan substitusi barang",
+      error: sanitizeErrorMessage(error, "Gagal mengajukan substitusi barang."),
     };
   }
 }
@@ -1881,7 +1909,7 @@ export async function recommendSpbItemByEngineering(
     console.error("Error recommendSpbItemByEngineering:", error);
     return {
       success: false,
-      error: error.message || "Gagal memberikan rekomendasi Engineering",
+      error: sanitizeErrorMessage(error, "Gagal memberikan rekomendasi Engineering."),
     };
   }
 }
@@ -1943,7 +1971,7 @@ export async function recommendSpbItemByPm(
     console.error("Error recommendSpbItemByPm:", error);
     return {
       success: false,
-      error: error.message || "Gagal memberikan rekomendasi PM",
+      error: sanitizeErrorMessage(error, "Gagal memberikan rekomendasi PM."),
     };
   }
 }
@@ -1981,7 +2009,7 @@ export async function getPendingSPBGudangForPpic() {
     };
   } catch (error: any) {
     console.error("Error getPendingSPBGudangForPpic:", error);
-    return { success: false, error: error?.message || "Gagal mengambil SPB Gudang PPIC", data: [] };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil SPB Gudang PPIC."), data: [] };
   }
 }
 
@@ -2012,7 +2040,7 @@ export async function getPendingSPBGudangForDireksi() {
     };
   } catch (error: any) {
     console.error("Error getPendingSPBGudangForDireksi:", error);
-    return { success: false, error: error?.message || "Gagal mengambil SPB Gudang Direksi", data: [] };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil SPB Gudang Direksi."), data: [] };
   }
 }
 
@@ -2058,7 +2086,7 @@ export async function approveSPBGudangByPpic(spbId: string, note?: string) {
     };
   } catch (error: any) {
     console.error("Error approveSPBGudangByPpic:", error);
-    return { success: false, error: error?.message || "Gagal menyetujui SPB Gudang PPIC" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPB Gudang PPIC.") };
   }
 }
 
@@ -2112,7 +2140,7 @@ export async function approveSPBGudangByDireksi(spbId: string, note?: string) {
     };
   } catch (error: any) {
     console.error("Error approveSPBGudangByDireksi:", error);
-    return { success: false, error: error?.message || "Gagal menyetujui SPB Gudang Direksi" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPB Gudang Direksi.") };
   }
 }
 
@@ -2163,7 +2191,7 @@ export async function rejectSPBGudang(spbId: string, stage: "PPIC" | "DIREKSI", 
     };
   } catch (error: any) {
     console.error("Error rejectSPBGudang:", error);
-    return { success: false, error: error?.message || "Gagal menolak SPB Gudang" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menolak SPB Gudang.") };
   }
 }
 
@@ -2188,6 +2216,7 @@ export async function approveVendorSelection(
           UPDATE spb_gudang_items
           SET 
             "approvalPpic" = 'APPROVED',
+            "vendorSelectionStatus" = 'PENDING_DIREKSI',
             "updatedAt" = NOW()
           WHERE id = ${itemId}
         `;
@@ -2196,6 +2225,7 @@ export async function approveVendorSelection(
           UPDATE spb_items
           SET 
             "approvalPpic" = 'APPROVED',
+            "vendorSelectionStatus" = 'PENDING_PM',
             "updatedAt" = NOW()
           WHERE id = ${itemId}
         `;
@@ -2206,6 +2236,7 @@ export async function approveVendorSelection(
         UPDATE spb_items
         SET 
           "approvalPm" = 'APPROVED',
+          "vendorSelectionStatus" = 'PENDING_DIREKSI',
           "updatedAt" = NOW()
         WHERE id = ${itemId}
       `;
@@ -2235,9 +2266,28 @@ export async function approveVendorSelection(
       }
     }
 
+    // Auto-sync masterplan procurement progress if linked to project
+    try {
+      if (itemType === "PROJECT") {
+        const rawProj: any[] = await prisma.$queryRaw`
+          SELECT s."projectId" 
+          FROM spb_items i 
+          JOIN spb s ON i."spbId" = s.id 
+          WHERE i.id = ${itemId}
+        `;
+        if (rawProj.length > 0 && rawProj[0]?.projectId) {
+          const { syncProcurementMasterplanProgress } = await import("@/app/actions/masterplan");
+          await syncProcurementMasterplanProgress(rawProj[0].projectId);
+        }
+      }
+    } catch (syncErr) {
+      console.error("Error auto-syncing masterplan procurement in approveVendorSelection:", syncErr);
+    }
+
     revalidatePath("/trackers/spb-approval-ppic");
     revalidatePath("/trackers/spb-approval-direksi");
     revalidatePath("/trackers/spb-approval-pm");
+    revalidatePath("/trackers/production");
 
     return {
       success: true,
@@ -2247,7 +2297,7 @@ export async function approveVendorSelection(
     console.error("Error approveVendorSelection:", error);
     return {
       success: false,
-      error: error?.message || "Gagal menyetujui Vendor",
+      error: sanitizeErrorMessage(error, "Gagal menyetujui Vendor."),
     };
   }
 }
@@ -2327,9 +2377,28 @@ export async function rejectVendorSelection(
       }
     }
 
+    // Auto-sync masterplan procurement progress if linked to project
+    try {
+      if (itemType === "PROJECT") {
+        const rawProj: any[] = await prisma.$queryRaw`
+          SELECT s."projectId" 
+          FROM spb_items i 
+          JOIN spb s ON i."spbId" = s.id 
+          WHERE i.id = ${itemId}
+        `;
+        if (rawProj.length > 0 && rawProj[0]?.projectId) {
+          const { syncProcurementMasterplanProgress } = await import("@/app/actions/masterplan");
+          await syncProcurementMasterplanProgress(rawProj[0].projectId);
+        }
+      }
+    } catch (syncErr) {
+      console.error("Error auto-syncing masterplan procurement in rejectVendorSelection:", syncErr);
+    }
+
     revalidatePath("/trackers/spb-approval-ppic");
     revalidatePath("/trackers/spb-approval-direksi");
     revalidatePath("/trackers/spb-approval-pm");
+    revalidatePath("/trackers/production");
 
     return {
       success: true,
@@ -2339,7 +2408,7 @@ export async function rejectVendorSelection(
     console.error("Error rejectVendorSelection:", error);
     return {
       success: false,
-      error: error?.message || "Gagal menolak Vendor",
+      error: sanitizeErrorMessage(error, "Gagal menolak Vendor."),
     };
   }
 }
@@ -2353,20 +2422,207 @@ export async function rejectVendorSelectionByPm(spbItemId: string, rejectReason:
   return rejectVendorSelection(spbItemId, "PROJECT", "PM", rejectReason);
 }
 
-export async function approveVendorSelectionByDireksi(spbItemId: string, note?: string, itemType: "PROJECT" | "GUDANG" = "PROJECT") {
+export async function approveVendorSelectionByDireksi(
+  spbItemId: string,
+  arg2?: "PROJECT" | "GUDANG" | string,
+  arg3?: "PROJECT" | "GUDANG" | string
+) {
+  const itemType: "PROJECT" | "GUDANG" =
+    arg2 === "GUDANG" || arg3 === "GUDANG" ? "GUDANG" : "PROJECT";
+  const note =
+    typeof arg2 === "string" && arg2 !== "PROJECT" && arg2 !== "GUDANG"
+      ? arg2
+      : typeof arg3 === "string" && arg3 !== "PROJECT" && arg3 !== "GUDANG"
+      ? arg3
+      : undefined;
   return approveVendorSelection(spbItemId, itemType, "DIREKSI", note);
 }
 
-export async function rejectVendorSelectionByDireksi(spbItemId: string, rejectReason: string, itemType: "PROJECT" | "GUDANG" = "PROJECT") {
+export async function rejectVendorSelectionByDireksi(
+  spbItemId: string,
+  rejectReason: string,
+  itemType: "PROJECT" | "GUDANG" = "PROJECT"
+) {
   return rejectVendorSelection(spbItemId, itemType, "DIREKSI", rejectReason);
 }
 
-export async function approveVendorSelectionByPpic(spbItemId: string, note?: string, itemType: "PROJECT" | "GUDANG" = "PROJECT") {
+export async function approveVendorSelectionByPpic(
+  spbItemId: string,
+  arg2?: "PROJECT" | "GUDANG" | string,
+  arg3?: "PROJECT" | "GUDANG" | string
+) {
+  const itemType: "PROJECT" | "GUDANG" =
+    arg2 === "GUDANG" || arg3 === "GUDANG" ? "GUDANG" : "PROJECT";
+  const note =
+    typeof arg2 === "string" && arg2 !== "PROJECT" && arg2 !== "GUDANG"
+      ? arg2
+      : typeof arg3 === "string" && arg3 !== "PROJECT" && arg3 !== "GUDANG"
+      ? arg3
+      : undefined;
   return approveVendorSelection(spbItemId, itemType, "PPIC", note);
 }
 
-export async function rejectVendorSelectionByPpic(spbItemId: string, rejectReason: string, itemType: "PROJECT" | "GUDANG" = "PROJECT") {
+export async function rejectVendorSelectionByPpic(
+  spbItemId: string,
+  rejectReason: string,
+  itemType: "PROJECT" | "GUDANG" = "PROJECT"
+) {
   return rejectVendorSelection(spbItemId, itemType, "PPIC", rejectReason);
 }
+
+export async function batchApproveVendorSelection(
+  items: Array<{ id: string; itemType?: "PROJECT" | "GUDANG" }>,
+  stage: "PPIC" | "PM" | "DIREKSI" = "DIREKSI"
+) {
+  try {
+    if (!items || items.length === 0) {
+      return { success: false, error: "Tidak ada item untuk disetujui." };
+    }
+
+    if (stage === "PPIC") {
+      await requireRole(["PPIC", "Superadmin", "Admin"]);
+    } else if (stage === "PM") {
+      await requireRole(["Project Manager", "Superadmin", "Admin"]);
+    } else {
+      await requireRole(["Direksi", "Superadmin", "Admin"]);
+    }
+
+    const gudangItemIds = items
+      .filter((it) => it.itemType === "GUDANG")
+      .map((it) => it.id);
+    const projectItemIds = items
+      .filter((it) => it.itemType !== "GUDANG")
+      .map((it) => it.id);
+
+    await prisma.$transaction(async (tx) => {
+      if (stage === "PPIC") {
+        if (gudangItemIds.length > 0) {
+          await tx.spbGudangItem.updateMany({
+            where: { id: { in: gudangItemIds } },
+            data: {
+              approvalPpic: "APPROVED",
+              vendorSelectionStatus: "PENDING_DIREKSI",
+              updatedAt: new Date(),
+            },
+          });
+        }
+        if (projectItemIds.length > 0) {
+          await tx.sPBItem.updateMany({
+            where: { id: { in: projectItemIds } },
+            data: {
+              approvalPpic: "APPROVED",
+              vendorSelectionStatus: "PENDING_PM",
+              updatedAt: new Date(),
+            },
+          });
+        }
+      } else if (stage === "PM") {
+        if (projectItemIds.length > 0) {
+          await tx.sPBItem.updateMany({
+            where: { id: { in: projectItemIds } },
+            data: {
+              approvalPm: "APPROVED",
+              vendorSelectionStatus: "PENDING_DIREKSI",
+              updatedAt: new Date(),
+            },
+          });
+        }
+      } else {
+        // DIREKSI
+        if (gudangItemIds.length > 0) {
+          await tx.spbGudangItem.updateMany({
+            where: { id: { in: gudangItemIds } },
+            data: {
+              approvalPpic: "APPROVED",
+              approvalDireksi: "APPROVED",
+              vendorSelectionStatus: "APPROVED",
+              status: "PO_PENDING",
+              updatedAt: new Date(),
+            },
+          });
+        }
+        if (projectItemIds.length > 0) {
+          await tx.sPBItem.updateMany({
+            where: { id: { in: projectItemIds } },
+            data: {
+              approvalDireksi: "APPROVED",
+              vendorSelectionStatus: "APPROVED",
+              updatedAt: new Date(),
+            },
+          });
+        }
+      }
+    });
+
+    // Auto-sync masterplan procurement progress for affected projects
+    if (projectItemIds.length > 0) {
+      try {
+        const rawProjs = await prisma.sPBItem.findMany({
+          where: { id: { in: projectItemIds } },
+          select: {
+            spb: {
+              select: { projectId: true },
+            },
+          },
+        });
+        const uniqueProjectIds = Array.from(
+          new Set(
+            rawProjs
+              .map((item) => item.spb?.projectId)
+              .filter((id): id is string => Boolean(id))
+          )
+        );
+        if (uniqueProjectIds.length > 0) {
+          const { syncProcurementMasterplanProgress } = await import(
+            "@/app/actions/masterplan"
+          );
+          for (const projId of uniqueProjectIds) {
+            await syncProcurementMasterplanProgress(projId);
+          }
+        }
+      } catch (syncErr) {
+        console.error(
+          "Error auto-syncing masterplan procurement in batchApproveVendorSelection:",
+          syncErr
+        );
+      }
+    }
+
+    revalidatePath("/trackers/spb-approval-ppic");
+    revalidatePath("/trackers/spb-approval-direksi");
+    revalidatePath("/trackers/spb-approval-pm");
+    revalidatePath("/trackers/production");
+
+    return {
+      success: true,
+      message: `Semua pilihan vendor (${items.length} barang) berhasil disetujui (${stage})!`,
+    };
+  } catch (error: any) {
+    console.error("Error batchApproveVendorSelection:", error);
+    return {
+      success: false,
+      error: sanitizeErrorMessage(error, "Gagal menyetujui semua vendor."),
+    };
+  }
+}
+
+export async function batchApproveVendorSelectionByPpic(
+  items: Array<{ id: string; itemType?: "PROJECT" | "GUDANG" }>
+) {
+  return batchApproveVendorSelection(items, "PPIC");
+}
+
+export async function batchApproveVendorSelectionByPm(
+  items: Array<{ id: string; itemType?: "PROJECT" | "GUDANG" }>
+) {
+  return batchApproveVendorSelection(items, "PM");
+}
+
+export async function batchApproveVendorSelectionByDireksi(
+  items: Array<{ id: string; itemType?: "PROJECT" | "GUDANG" }>
+) {
+  return batchApproveVendorSelection(items, "DIREKSI");
+}
+
 
 

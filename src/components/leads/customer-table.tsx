@@ -27,6 +27,7 @@ import {
   ArrowUpDown,
   CheckCircle2,
   Loader2,
+  MapPin,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -121,6 +122,8 @@ export function CustomerTable({
     const email = formData.get("email") as string;
     const phone = formData.get("phone") as string;
     const address = formData.get("address") as string;
+    const city = formData.get("city") as string;
+    const province = formData.get("province") as string;
 
     const sanitizedData = new FormData();
     sanitizedData.append("name", sanitizeInput(name));
@@ -128,6 +131,8 @@ export function CustomerTable({
     sanitizedData.append("email", formatEmail(email));
     sanitizedData.append("phone", formatPhoneNumber(phone));
     sanitizedData.append("address", sanitizeInput(address));
+    sanitizedData.append("city", sanitizeInput(city));
+    sanitizedData.append("province", sanitizeInput(province));
 
     const promise = async () => {
       const result = await createCustomer(sanitizedData);
@@ -152,6 +157,8 @@ export function CustomerTable({
     const email = formData.get("email") as string;
     const phone = formData.get("phone") as string;
     const address = formData.get("address") as string;
+    const city = formData.get("city") as string;
+    const province = formData.get("province") as string;
 
     const sanitizedData = new FormData();
     sanitizedData.append("name", sanitizeInput(name));
@@ -159,6 +166,8 @@ export function CustomerTable({
     sanitizedData.append("email", formatEmail(email));
     sanitizedData.append("phone", formatPhoneNumber(phone));
     sanitizedData.append("address", sanitizeInput(address));
+    sanitizedData.append("city", sanitizeInput(city));
+    sanitizedData.append("province", sanitizeInput(province));
 
     const promise = async () => {
       const result = await updateCustomer(editCustomer.id, sanitizedData);
@@ -337,24 +346,26 @@ export function CustomerTable({
           <DialogTrigger className="inline-flex w-full md:w-auto items-center justify-center whitespace-nowrap rounded-md text-sm hover:bg-primary/90 bg-primary text-primary-foreground h-9 px-4 shadow-none cursor-pointer font-semibold transition-all active:scale-95">
             <Plus className="w-4 h-4 mr-2" /> New Customer
           </DialogTrigger>
-          <DialogContent className="md:max-w-fit!">
+          <DialogContent className="sm:max-w-[650px] md:max-w-[700px] w-full">
             <DialogHeader>
               <DialogTitle>Create New Customer</DialogTitle>
               <DialogDescription>
-                Add a new contact or company to your database.
+                Tambahkan kontak atau perusahaan baru ke database pelanggan.
               </DialogDescription>
             </DialogHeader>
-            <form action={handleCreateSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Name *</label>
-                <Input name="name" required placeholder="John Doe" />
+            <form action={handleCreateSubmit} className="space-y-4 pt-1">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Name *</label>
+                  <Input name="name" required placeholder="John Doe" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Company</label>
+                  <Input name="company" placeholder="Acme Corp" />
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Company</label>
-                <Input name="company" placeholder="Acme Corp" />
-              </div>
-              <div className="flex gap-4">
-                <div className="space-y-2 w-full">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Email</label>
                   <Input
                     name="email"
@@ -362,27 +373,37 @@ export function CustomerTable({
                     placeholder="john@acme.com"
                   />
                 </div>
-                <div className="space-y-2 w-full">
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Phone</label>
                   <Input name="phone" placeholder="+1234567890" />
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Address</label>
+                <label className="text-sm font-medium">Alamat Lengkap</label>
                 <textarea
                   name="address"
-                  placeholder="123 Main St"
-                  className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                  placeholder="Jl. Sudirman No. 123, Kel. ..."
+                  className="flex min-h-[85px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
                 />
               </div>
-              <DialogFooter>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Kota / Kabupaten</label>
+                  <Input name="city" placeholder="Contoh: Jakarta Selatan" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Provinsi</label>
+                  <Input name="province" placeholder="Contoh: DKI Jakarta" />
+                </div>
+              </div>
+              <DialogFooter className="pt-2">
                 <DialogTrigger className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2 cursor-pointer transition-all active:scale-95">
                   Cancel
                 </DialogTrigger>
                 <Button
                   type="submit"
                   disabled={isPending}
-                  className="cursor-pointer transition-all active:scale-95"
+                  className="cursor-pointer transition-all active:scale-95 px-5 font-semibold"
                 >
                   {isPending ? "Saving..." : "Save Customer"}
                 </Button>
@@ -445,8 +466,9 @@ export function CustomerTable({
           <TableHeader className="bg-muted/30">
             <TableRow className="hover:bg-transparent border-border text-xs font-bold">
               <TableHead className="w-[50px] text-center">No</TableHead>
-              <TableHead className="w-[250px]">Name</TableHead>
-              <TableHead className="w-[200px]">Company</TableHead>
+              <TableHead className="w-[180px]">Name</TableHead>
+              <TableHead className="w-[170px]">Company</TableHead>
+              <TableHead className="min-w-[220px]">Alamat & Lokasi</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-center">Leads</TableHead>
@@ -456,7 +478,7 @@ export function CustomerTable({
           <TableBody>
             {customers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center h-48">
+                <TableCell colSpan={8} className="text-center h-48">
                   <div className="flex flex-col items-center justify-center text-muted-foreground gap-2">
                     <Search className="w-8 h-8 opacity-20" />
                     <p>No customers found matching your criteria.</p>
@@ -472,9 +494,38 @@ export function CustomerTable({
                   <TableCell className="text-center text-muted-foreground text-xs font-mono">
                     {(currentPage - 1) * pageSize + index + 1}
                   </TableCell>
-                  <TableCell className="font-medium">{customer.name}</TableCell>
+                  <TableCell className="font-medium">
+                    {customer.name}
+                  </TableCell>
                   <TableCell className="text-muted-foreground font-medium">
                     {customer.company || "-"}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-0.5 max-w-[260px]">
+                      {(customer.city || customer.province) && (
+                        <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                          <span className="truncate">
+                            {[customer.city, customer.province]
+                              .filter(Boolean)
+                              .join(" - ")}
+                          </span>
+                        </div>
+                      )}
+                      {customer.address ? (
+                        <span
+                          className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed"
+                          title={customer.address}
+                        >
+                          {customer.address}
+                        </span>
+                      ) : (
+                        !customer.city &&
+                        !customer.province && (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-xs flex flex-col gap-1">
                     {customer.email && <span>{customer.email}</span>}
@@ -560,7 +611,7 @@ export function CustomerTable({
         open={!!viewCustomer}
         onOpenChange={(open) => !open && setViewCustomer(null)}
       >
-        <DialogContent className="sm:max-w-[450px]">
+        <DialogContent className="sm:max-w-[550px]">
           <DialogHeader>
             <DialogTitle>Customer Details</DialogTitle>
             <DialogDescription>
@@ -580,10 +631,20 @@ export function CustomerTable({
                 <div className="col-span-2">{viewCustomer.email || "-"}</div>
                 <div className="font-medium text-muted-foreground">Phone</div>
                 <div className="col-span-2">{viewCustomer.phone || "-"}</div>
-                <div className="font-medium text-muted-foreground">Address</div>
+                <div className="font-medium text-muted-foreground">
+                  Alamat Lengkap
+                </div>
                 <div className="col-span-2 whitespace-pre-wrap">
                   {viewCustomer.address || "-"}
                 </div>
+                <div className="font-medium text-muted-foreground">
+                  Kota / Kabupaten
+                </div>
+                <div className="col-span-2">{viewCustomer.city || "-"}</div>
+                <div className="font-medium text-muted-foreground">
+                  Provinsi
+                </div>
+                <div className="col-span-2">{viewCustomer.province || "-"}</div>
                 <div className="font-medium text-muted-foreground">Status</div>
                 <div className="col-span-2">
                   <Badge
@@ -618,7 +679,7 @@ export function CustomerTable({
         open={!!editCustomer}
         onOpenChange={(open) => !open && setEditCustomer(null)}
       >
-        <DialogContent className="sm:max-w-[450px]">
+        <DialogContent className="sm:max-w-[650px] md:max-w-[700px] w-full">
           <DialogHeader>
             <DialogTitle>Edit Customer</DialogTitle>
             <DialogDescription>
@@ -626,19 +687,21 @@ export function CustomerTable({
             </DialogDescription>
           </DialogHeader>
           {editCustomer && (
-            <form action={handleEditSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Name *</label>
-                <Input name="name" required defaultValue={editCustomer.name} />
+            <form action={handleEditSubmit} className="space-y-4 pt-1">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Name *</label>
+                  <Input name="name" required defaultValue={editCustomer.name} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Company</label>
+                  <Input
+                    name="company"
+                    defaultValue={editCustomer.company || ""}
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Company</label>
-                <Input
-                  name="company"
-                  defaultValue={editCustomer.company || ""}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Email</label>
                   <Input
@@ -653,14 +716,33 @@ export function CustomerTable({
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Address</label>
+                <label className="text-sm font-medium">Alamat Lengkap</label>
                 <textarea
                   name="address"
                   defaultValue={editCustomer.address || ""}
-                  className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                  placeholder="Jl. Sudirman No. 123, Kel. ..."
+                  className="flex min-h-[85px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
                 />
               </div>
-              <DialogFooter>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Kota / Kabupaten</label>
+                  <Input
+                    name="city"
+                    defaultValue={editCustomer.city || ""}
+                    placeholder="Contoh: Jakarta Selatan"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Provinsi</label>
+                  <Input
+                    name="province"
+                    defaultValue={editCustomer.province || ""}
+                    placeholder="Contoh: DKI Jakarta"
+                  />
+                </div>
+              </div>
+              <DialogFooter className="pt-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -672,7 +754,7 @@ export function CustomerTable({
                 <Button
                   type="submit"
                   disabled={isPending}
-                  className="cursor-pointer transition-all active:scale-95"
+                  className="cursor-pointer transition-all active:scale-95 px-5 font-semibold"
                 >
                   {isPending ? "Updating..." : "Update Customer"}
                 </Button>

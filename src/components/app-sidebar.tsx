@@ -49,7 +49,7 @@ export function AppSidebar() {
   const { setOpenMobile, state } = useSidebar();
   const [mounted, setMounted] = React.useState(false);
   const [counts, setCounts] = React.useState({
-    ppic: { spb: 0, boq: 0, spj: 0, total: 0 },
+    ppic: { spb: 0, boq: 0, spj: 0, packages: 0, total: 0 },
     pm: { spb: 0, boq: 0, spj: 0, total: 0 },
     engineering: { substitutions: 0, total: 0 },
     direksi: { vendorSelections: 0, total: 0 },
@@ -82,7 +82,11 @@ export function AppSidebar() {
           setCounts({
             ppic: res.ppic,
             pm: res.pm,
-            engineering: res.engineering || { substitutions: 0, vendorSelections: 0, total: 0 },
+            engineering: res.engineering || {
+              substitutions: 0,
+              vendorSelections: 0,
+              total: 0,
+            },
             direksi: (res as any).direksi || { vendorSelections: 0, total: 0 },
           });
         }
@@ -161,6 +165,35 @@ export function AppSidebar() {
                   <span>Dashboard</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {/* Pengadaan Kantor (Admin Kantor / Operasional Non-Proyek) */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className={
+                    pathname === "/office-procurement"
+                      ? "py-2.5 font-semibold"
+                      : "text-muted-foreground hover:text-foreground py-2.5"
+                  }
+                  isActive={pathname === "/office-procurement"}
+                  onClick={() => setOpenMobile(false)}
+                  render={<Link href="/office-procurement" />}
+                  tooltip="Pengadaan Kantor (BOQ & SPB Umum)"
+                >
+                  <Building2 className="h-4 w-4" />
+                  <span>Office Procurement</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarSeparator className="my-2" />
+
+        <SidebarGroup className="group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pt-0">
+          <SidebarGroupLabel className="text-xs font-semibold text-foreground-600">
+            Divisions Tracker
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
               {hasRole([
                 "Sales",
                 "PPIC",
@@ -179,25 +212,13 @@ export function AppSidebar() {
                     isActive={pathname === "/leads"}
                     onClick={() => setOpenMobile(false)}
                     render={<Link href="/leads" />}
-                    tooltip="Leads & Project"
+                    tooltip="Leads & Sales"
                   >
                     <Contact2 className="h-4 w-4" />
-                    <span>Leads & Project</span>
+                    <span>Leads & Sales</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               )}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarSeparator className="my-2" />
-
-        <SidebarGroup className="group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pt-0">
-          <SidebarGroupLabel className="text-xs font-semibold text-foreground-600">
-            Divisions Tracker
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
               {hasRole([
                 "Engineering",
                 "PPIC",
@@ -323,16 +344,17 @@ export function AppSidebar() {
                   >
                     <PenTool className="h-4 w-4" />
                     <span className="flex-1">Approval Engineering</span>
-                    {mounted && (counts.engineering?.substitutions ?? 0) > 0 && (
-                      <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
-                        <span
-                          className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground px-1.5 text-[9px] font-black shadow-2xs"
-                          title={`${counts.engineering?.substitutions} Substitusi Pending`}
-                        >
-                          {counts.engineering?.substitutions}
-                        </span>
-                      </div>
-                    )}
+                    {mounted &&
+                      (counts.engineering?.substitutions ?? 0) > 0 && (
+                        <div className="flex items-center gap-1.5 shrink-0 group-data-[collapsible=icon]:hidden">
+                          <span
+                            className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary text-primary-foreground px-1.5 text-[9px] font-black shadow-2xs"
+                            title={`${counts.engineering?.substitutions} Substitusi Pending`}
+                          >
+                            {counts.engineering?.substitutions}
+                          </span>
+                        </div>
+                      )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               )}

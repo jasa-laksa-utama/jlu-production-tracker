@@ -260,7 +260,12 @@ export function BoQManagerDialog({
       Promise.all([getProjectBoQs(project.id), getWarehouseItems(), getUnits()])
         .then(([list, items, allUnits]) => {
           setProjectBoQs(list);
-          setMasterItems(items);
+          const categoryAItems = Array.isArray(items)
+            ? items.filter(
+                (item: any) => (item.category || "A").toUpperCase() === "A",
+              )
+            : [];
+          setMasterItems(categoryAItems);
           setDbUnits(allUnits);
 
           // If the project already has BoQs, default to the history/list tab
@@ -334,7 +339,12 @@ export function BoQManagerDialog({
     setIsLoadingMaster(true);
     try {
       const items = await getWarehouseItems();
-      setMasterItems(items);
+      const categoryAItems = Array.isArray(items)
+        ? items.filter(
+            (item: any) => (item.category || "A").toUpperCase() === "A",
+          )
+        : [];
+      setMasterItems(categoryAItems);
     } catch (err) {
       console.error("Gagal mengambil master data barang:", err);
     } finally {
@@ -830,6 +840,12 @@ export function BoQManagerDialog({
                                 <CommandGroup heading="Master Data Items">
                                   {masterItems
                                     .filter((item) => {
+                                      // Hanya barang Kategori A (filter internal)
+                                      const isCatA =
+                                        (item.category || "A").toUpperCase() ===
+                                        "A";
+                                      if (!isCatA) return false;
+
                                       if (!searchQuery) return true;
                                       const q = searchQuery.toLowerCase();
                                       return (

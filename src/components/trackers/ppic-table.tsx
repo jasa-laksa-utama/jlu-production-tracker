@@ -587,7 +587,7 @@ export function PpicTable({
           if (res.success && res.data) {
             setAllShipments(res.data);
           } else if (res.error) {
-            toast.error(res.error);
+            toast.error(res.error || "Gagal memuat data pengiriman.");
           }
         })
         .catch((err) => {
@@ -604,7 +604,7 @@ export function PpicTable({
           if (res.success && res.data) {
             setAllPurchaseOrders(res.data);
           } else if (res.error) {
-            toast.error(res.error);
+            toast.error(res.error || "Gagal memuat data Purchase Order.");
           }
         })
         .catch((err) => {
@@ -2074,17 +2074,35 @@ export function PpicTable({
                       s.items.forEach((it: any) => {
                         totalItems++;
                         const itSt = (it.status || "").toUpperCase();
+                        const isWarehouseApproved =
+                          (it.source || "").toUpperCase() === "WAREHOUSE" &&
+                          [
+                            "APPROVED_WAREHOUSE",
+                            "READY",
+                            "APPROVED",
+                            "ISSUED",
+                            "FULFILLED",
+                            "COMPLETED",
+                          ].includes(itSt);
+                        const qtyIssued = Number(
+                          it.qtyIssued ?? it.issuedQty ?? 0,
+                        );
                         if (
-                          itSt === "FULFILLED" ||
-                          itSt === "RECEIVED" ||
-                          itSt === "COMPLETED" ||
-                          itSt === "ISSUED"
+                          isWarehouseApproved ||
+                          [
+                            "FULFILLED",
+                            "RECEIVED",
+                            "COMPLETED",
+                            "ISSUED",
+                            "FULL",
+                          ].includes(itSt)
                         ) {
                           completedItems++;
                         } else if (
                           itSt === "PARTIALLY_ISSUED" ||
                           itSt === "PARTIALLY ISSUED" ||
-                          (it.issuedQty && Number(it.issuedQty) > 0)
+                          qtyIssued > 0 ||
+                          Number(it.fulfilledQty || 0) > 0
                         ) {
                           hasPartiallyIssued = true;
                         }
@@ -2194,9 +2212,33 @@ export function PpicTable({
                               .map((spb: any) => {
                               const totalSpbItems = spb.items.length;
                               const completedSpbItems = spb.items.filter(
-                                (it: any) =>
-                                  it.status === "FULFILLED" ||
-                                  it.status === "RECEIVED",
+                                (it: any) => {
+                                  const itSt = (it.status || "").toUpperCase();
+                                  const isWarehouseApproved =
+                                    (it.source || "").toUpperCase() === "WAREHOUSE" &&
+                                    [
+                                      "APPROVED_WAREHOUSE",
+                                      "READY",
+                                      "APPROVED",
+                                      "ISSUED",
+                                      "FULFILLED",
+                                      "COMPLETED",
+                                    ].includes(itSt);
+                                  const qtyIssued = Number(
+                                    it.qtyIssued ?? it.issuedQty ?? 0,
+                                  );
+                                  return (
+                                    isWarehouseApproved ||
+                                    [
+                                      "FULFILLED",
+                                      "RECEIVED",
+                                      "COMPLETED",
+                                      "ISSUED",
+                                      "FULL",
+                                    ].includes(itSt) ||
+                                    qtyIssued > 0
+                                  );
+                                },
                               ).length;
                               const isSpbCompleted =
                                 completedSpbItems === totalSpbItems;
@@ -2696,27 +2738,56 @@ export function PpicTable({
                               <span
                                 className={cn(
                                   "text-[10px] font-bold px-2 py-0.5 rounded border inline-block",
-                                  it.status === "FULFILLED" ||
-                                    it.status === "RECEIVED"
-                                    ? "bg-emerald-500/5 text-emerald-600 border-emerald-500/10"
-                                    : it.status === "REJECTED"
-                                      ? "bg-red-500/5 text-red-600 border-red-500/10"
-                                      : "bg-amber-500/5 text-amber-600 border-amber-500/10",
+                                  (() => {
+                                    const st = (it.status || "").toUpperCase();
+                                    if (
+                                      [
+                                        "FULFILLED",
+                                        "RECEIVED",
+                                        "COMPLETED",
+                                        "ISSUED",
+                                        "FULL",
+                                        "READY",
+                                      ].includes(st)
+                                    ) {
+                                      return "bg-emerald-500/10 text-emerald-700 border-emerald-500/20";
+                                    }
+                                    if (st === "APPROVED_WAREHOUSE") {
+                                      return "bg-sky-500/10 text-sky-700 border-sky-500/20";
+                                    }
+                                    if (st === "REJECTED" || st === "DITOLAK") {
+                                      return "bg-red-500/10 text-red-700 border-red-500/20";
+                                    }
+                                    return "bg-amber-500/10 text-amber-700 border-amber-500/20";
+                                  })(),
                                 )}
                               >
-                                {it.status === "FULFILLED"
-                                  ? "Terpenuhi"
-                                  : it.status === "RECEIVED"
-                                    ? "Diterima"
-                                    : it.status === "PENDING"
-                                      ? "Pending"
-                                      : it.status === "APPROVED_WAREHOUSE"
-                                        ? "Disetujui Gudang"
-                                        : it.status === "PO_PENDING"
-                                          ? "Menunggu PO"
-                                          : it.status === "PO_CREATED"
-                                            ? "PO DIBUAT"
-                                            : it.status}
+                                {(() => {
+                                  const st = (it.status || "").toUpperCase();
+                                  switch (st) {
+                                    case "FULFILLED":
+                                      return "Terpenuhi";
+                                    case "RECEIVED":
+                                      return "Diterima";
+                                    case "FULL":
+                                      return "Selesai (PO Tiba)";
+                                    case "APPROVED_WAREHOUSE":
+                                      return "Disetujui Gudang";
+                                    case "READY":
+                                      return "Siap Diambil";
+                                    case "COMPLETED":
+                                    case "ISSUED":
+                                      return "Selesai";
+                                    case "PENDING":
+                                      return "Pending";
+                                    case "PO_PENDING":
+                                      return "Menunggu PO";
+                                    case "PO_CREATED":
+                                      return "PO Dibuat";
+                                    default:
+                                      return it.status;
+                                  }
+                                })()}
                               </span>
                             </td>
                           </tr>
@@ -3112,8 +3183,18 @@ export function PpicTable({
                             {spb.items.map((item: any, idx: number) => {
                               const getStatusStyle = (status: string) => {
                                 const s = status.toUpperCase();
-                                if (s === "FULFILLED" || s === "RECEIVED") {
+                                if (
+                                  s === "FULFILLED" ||
+                                  s === "RECEIVED" ||
+                                  s === "COMPLETED" ||
+                                  s === "ISSUED" ||
+                                  s === "FULL" ||
+                                  s === "READY"
+                                ) {
                                   return "bg-green-500/10 text-green-700 border-green-500/20";
+                                }
+                                if (s === "APPROVED_WAREHOUSE") {
+                                  return "bg-sky-500/10 text-sky-700 border-sky-500/20";
                                 }
                                 if (
                                   s === "PENDING" ||
@@ -3122,7 +3203,7 @@ export function PpicTable({
                                 ) {
                                   return "bg-amber-500/10 text-amber-700 border-amber-500/20";
                                 }
-                                if (s === "REJECTED") {
+                                if (s === "REJECTED" || s === "DITOLAK") {
                                   return "bg-red-500/10 text-red-700 border-red-500/20";
                                 }
                                 return "bg-blue-500/10 text-blue-700 border-blue-500/20";
@@ -3135,10 +3216,16 @@ export function PpicTable({
                                     return "Menunggu Verifikasi";
                                   case "APPROVED":
                                     return "Disetujui PPIC";
+                                  case "APPROVED_WAREHOUSE":
+                                    return "Disetujui Gudang";
+                                  case "READY":
+                                    return "Siap Diambil";
                                   case "PREPARING":
                                     return "Sedang Disiapkan";
                                   case "FULFILLED":
                                     return "Sudah Dikeluarkan";
+                                  case "FULL":
+                                    return "Selesai (PO Tiba)";
                                   case "COMPLETED":
                                   case "ISSUED":
                                     return "Selesai";
@@ -3562,14 +3649,33 @@ export function PpicTable({
                     spbMonitorHistory.forEach((spb) => {
                       spb.items.forEach((it: any) => {
                         totalItems++;
+                        const st = (it.status || "").toUpperCase();
+                        const isWarehouseApproved =
+                          (it.source || "").toUpperCase() === "WAREHOUSE" &&
+                          [
+                            "APPROVED_WAREHOUSE",
+                            "READY",
+                            "APPROVED",
+                            "ISSUED",
+                            "FULFILLED",
+                            "COMPLETED",
+                          ].includes(st);
+                        const qtyIssued = Number(
+                          it.qtyIssued ?? it.issuedQty ?? 0,
+                        );
                         if (
-                          it.status === "FULFILLED" ||
-                          it.status === "RECEIVED" ||
-                          it.status === "ISSUED" ||
-                          it.status === "COMPLETED" ||
-                          it.status === "PARTIALLY_ISSUED" ||
-                          it.status === "PARTIALLY ISSUED" ||
-                          (it.issuedQty && Number(it.issuedQty) > 0)
+                          isWarehouseApproved ||
+                          [
+                            "FULFILLED",
+                            "RECEIVED",
+                            "ISSUED",
+                            "COMPLETED",
+                            "FULL",
+                          ].includes(st) ||
+                          st === "PARTIALLY_ISSUED" ||
+                          st === "PARTIALLY ISSUED" ||
+                          qtyIssued > 0 ||
+                          Number(it.fulfilledQty || 0) > 0
                         ) {
                           processedItems++;
                         }
@@ -3635,16 +3741,36 @@ export function PpicTable({
                   {/* List of SPB Documents */}
                   <div className="space-y-3">
                     {spbMonitorHistory.map((spb) => {
-                      const spbProcessed = spb.items.filter(
-                        (it: any) =>
-                          it.status === "FULFILLED" ||
-                          it.status === "RECEIVED" ||
-                          it.status === "ISSUED" ||
-                          it.status === "COMPLETED" ||
-                          it.status === "PARTIALLY_ISSUED" ||
-                          it.status === "PARTIALLY ISSUED" ||
-                          (it.issuedQty && Number(it.issuedQty) > 0),
-                      ).length;
+                      const spbProcessed = spb.items.filter((it: any) => {
+                        const st = (it.status || "").toUpperCase();
+                        const isWarehouseApproved =
+                          (it.source || "").toUpperCase() === "WAREHOUSE" &&
+                          [
+                            "APPROVED_WAREHOUSE",
+                            "READY",
+                            "APPROVED",
+                            "ISSUED",
+                            "FULFILLED",
+                            "COMPLETED",
+                          ].includes(st);
+                        const qtyIssued = Number(
+                          it.qtyIssued ?? it.issuedQty ?? 0,
+                        );
+                        return (
+                          isWarehouseApproved ||
+                          [
+                            "FULFILLED",
+                            "RECEIVED",
+                            "ISSUED",
+                            "COMPLETED",
+                            "FULL",
+                          ].includes(st) ||
+                          st === "PARTIALLY_ISSUED" ||
+                          st === "PARTIALLY ISSUED" ||
+                          qtyIssued > 0 ||
+                          Number(it.fulfilledQty || 0) > 0
+                        );
+                      }).length;
                       const spbTotal = spb.items.length;
                       const isAll = spbProcessed === spbTotal;
                       const isNone = spbProcessed === 0;
@@ -3723,13 +3849,23 @@ export function PpicTable({
                                       const s = status.toUpperCase();
                                       if (
                                         s === "FULFILLED" ||
-                                        s === "RECEIVED"
+                                        s === "RECEIVED" ||
+                                        s === "COMPLETED" ||
+                                        s === "ISSUED" ||
+                                        s === "FULL" ||
+                                        s === "READY"
                                       ) {
                                         return {
                                           label:
                                             s === "FULFILLED"
                                               ? "Sudah Dikeluarkan"
-                                              : "Barang Diterima",
+                                              : s === "FULL"
+                                                ? "Selesai (PO Tiba)"
+                                                : s === "READY"
+                                                  ? "Siap Diambil"
+                                                  : s === "COMPLETED" || s === "ISSUED"
+                                                    ? "Selesai"
+                                                    : "Barang Diterima",
                                           className:
                                             "bg-green-500/10 text-green-700 border-green-500/20",
                                         };
@@ -3741,7 +3877,7 @@ export function PpicTable({
                                             "bg-zinc-100 text-zinc-600 border-zinc-200",
                                         };
                                       }
-                                      if (s === "REJECTED") {
+                                      if (s === "REJECTED" || s === "DITOLAK") {
                                         return {
                                           label: "Ditolak",
                                           className:

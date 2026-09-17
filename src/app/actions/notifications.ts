@@ -3,6 +3,7 @@
 import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export interface CreateNotificationInput {
   title: string;
@@ -74,7 +75,7 @@ export async function createNotification(data: CreateNotificationInput) {
     };
   } catch (error: any) {
     console.error("Error creating notification:", error);
-    return { success: false, error: error?.message || "Failed to create notification" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat notifikasi.") };
   }
 }
 
@@ -103,7 +104,7 @@ export async function getLatestNotifications(moduleName: string = "TRACKER") {
     return { success: true, data: serializedList };
   } catch (error: any) {
     console.error("Error fetching latest notifications:", error);
-    return { success: false, error: error?.message || "Failed to fetch notifications", data: [] };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil notifikasi."), data: [] };
   }
 }
 
@@ -124,7 +125,7 @@ export async function getUnreadCount(moduleName: string = "TRACKER") {
     return { success: true, data: count };
   } catch (error: any) {
     console.error("Error fetching unread count:", error);
-    return { success: false, error: error?.message || "Failed to fetch count", data: 0 };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghitung notifikasi belum dibaca."), data: 0 };
   }
 }
 
@@ -147,7 +148,7 @@ export async function markAsRead(id: string) {
     };
   } catch (error: any) {
     console.error("Error marking notification as read:", error);
-    return { success: false, error: error?.message || "Failed to mark as read" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menandai notifikasi telah dibaca.") };
   }
 }
 
@@ -169,7 +170,7 @@ export async function markAllAsRead(moduleName: string = "TRACKER") {
     return { success: true };
   } catch (error: any) {
     console.error("Error marking all notifications as read:", error);
-    return { success: false, error: error?.message || "Failed to mark all as read" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menandai semua notifikasi telah dibaca.") };
   }
 }
 

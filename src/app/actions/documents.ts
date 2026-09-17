@@ -7,6 +7,7 @@ import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth, requireRole } from "@/lib/auth-guard";
 import { parseSPBImageUrls } from "@/lib/utils";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 const BUCKET_NAME = "project-documents";
 
@@ -16,26 +17,33 @@ const CATEGORY_FOLDERS: Record<string, string> = {
   DRAWING: "drawing",
   BOQ: "boq",
   MECH_PART_LIST: "mechanical-part-list",
+  ASSEMBLY_LIST: "assembly-list",
   RAB: "rab",
   RAP: "rap",
   PO: "po",
+  SPB: "spb",
+  SPJ: "spj",
   PRODUCTION: "production",
   QC: "qc",
+  BERITA_ACARA: "berita-acara",
   OTHER: "other",
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
   BRIEF: "Brief",
   DRAWING: "Drawing",
-  BOQ: "BOQ",
+  BOQ: "Bill of Quantities (BoQ)",
   MECH_PART_LIST: "Mechanical Part List",
+  ASSEMBLY_LIST: "Assembly List",
   RAB: "RAB",
   RAP: "RAP",
   PO: "Purchase Order (PO)",
   OFFERING: "Bukti Penawaran",
   SPB: "Surat Permintaan Barang (SPB)",
+  SPJ: "Surat Pertanggungjawaban (SPJ)",
   PRODUCTION: "Dokumen Produksi",
   QC: "Dokumen QC / Kualitas",
+  BERITA_ACARA: "Berita Acara & Hasil Uji Site",
   OTHER: "Dokumen Lainnya",
 };
 
@@ -44,13 +52,16 @@ const NOTIF_DOC_TITLES: Record<string, string> = {
   DRAWING: "Drawing",
   BOQ: "Dokumen BOQ",
   MECH_PART_LIST: "Mech Part List",
+  ASSEMBLY_LIST: "Assembly List",
   RAB: "Dokumen RAB",
   RAP: "Dokumen RAP",
   PO: "Dokumen PO",
   OFFERING: "Bukti Penawaran",
   SPB: "Dokumen SPB",
+  SPJ: "Dokumen SPJ",
   PRODUCTION: "Dokumen Produksi",
   QC: "Dokumen QC",
+  BERITA_ACARA: "Berita Acara Closing Proyek",
   OTHER: "Dokumen",
 };
 
@@ -59,13 +70,16 @@ const NOTIF_DOC_LABELS: Record<string, string> = {
   DRAWING: "drawing",
   BOQ: "dokumen BOQ",
   MECH_PART_LIST: "mech part list",
+  ASSEMBLY_LIST: "assembly list",
   RAB: "dokumen RAB",
   RAP: "dokumen RAP",
   PO: "dokumen PO",
   OFFERING: "bukti penawaran",
   SPB: "dokumen SPB",
+  SPJ: "dokumen SPJ",
   PRODUCTION: "dokumen produksi",
   QC: "dokumen QC",
+  BERITA_ACARA: "berita acara closing",
   OTHER: "dokumen",
 };
 
@@ -109,6 +123,7 @@ export async function createDocumentUploadUrl(
     // Fetch descriptive info for folder name
     let companyName = "Unknown";
     let projectName = "Unknown";
+    let projectCode = "";
 
     if (ownerType === "LEAD") {
       const lead = await prisma.lead.findUnique({
@@ -118,6 +133,7 @@ export async function createDocumentUploadUrl(
       if (lead) {
         companyName = lead.customer.company || "Personal";
         projectName = lead.projectName;
+        projectCode = lead.leadNumber || "";
       }
     } else {
       const project = await prisma.project.findUnique({
@@ -127,13 +143,20 @@ export async function createDocumentUploadUrl(
       if (project) {
         companyName = project.customer.company || "Personal";
         projectName = project.projectName;
+        projectCode = project.projectNumber || "";
       }
     }
 
-    // Clean names for URL/Path safety
+    // Clean names for URL/Path safety (readable project identifier)
     const cleanCompany = companyName.replace(/[^a-zA-Z0-9]/g, "_");
     const cleanProject = projectName.replace(/[^a-zA-Z0-9]/g, "_");
-    const folderId = `${cleanCompany}-${cleanProject}-${ownerId}`;
+    const cleanCode = projectCode.replace(/[^a-zA-Z0-9]/g, "_");
+    const folderId =
+      [cleanCode, cleanCompany, cleanProject]
+        .filter(Boolean)
+        .join("-")
+        .replace(/_+/g, "_")
+        .replace(/-+/g, "-") || ownerId;
 
     // Construct safe file path
     const safeFileName = originalFileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
@@ -148,7 +171,7 @@ export async function createDocumentUploadUrl(
 
     if (error) {
       console.error("Supabase createSignedUploadUrl error:", error);
-      return { success: false, error: error.message };
+      return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat URL upload dokumen.") };
     }
 
     return {
@@ -162,7 +185,7 @@ export async function createDocumentUploadUrl(
     console.error("createDocumentUploadUrl error:", error);
     return {
       success: false,
-      error: error.message || "Failed to create upload URL",
+      error: sanitizeErrorMessage(error, "Gagal membuat URL upload dokumen."),
     };
   }
 }
@@ -267,7 +290,7 @@ export async function saveDocumentRecord(data: {
     console.error("saveDocumentRecord error:", error);
     return {
       success: false,
-      error: error.message || "Failed to save document record",
+      error: sanitizeErrorMessage(error, "Gagal menyimpan data dokumen."),
     };
   }
 }
@@ -314,7 +337,7 @@ export async function getDocumentsByOwner(
   } catch (error: any) {
     return {
       success: false,
-      error: error.message || "Failed to fetch documents",
+      error: sanitizeErrorMessage(error, "Gagal memuat dokumen proyek."),
     };
   }
 }
@@ -349,7 +372,7 @@ export async function getSalesDocuments(
 
     return { success: true, data: documents };
   } catch (error: any) {
-    return { success: false, error: error.message || "Failed to fetch sales documents" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memuat dokumen sales.") };
   }
 }
 
@@ -381,7 +404,7 @@ export async function getDocumentHistory(
 
     return { success: true, data: documents };
   } catch (error: any) {
-    return { success: false, error: error.message || "Failed to fetch history" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memuat riwayat dokumen.") };
   }
 }
 
@@ -395,7 +418,7 @@ export async function getDocumentDownloadUrl(documentId: string, download: boole
       where: { id: documentId },
     });
 
-    if (!doc) return { success: false, error: "Document not found" };
+    if (!doc) return { success: false, error: "Dokumen tidak ditemukan." };
 
     // If it's an external link, just return it
     if (doc.isExternal) {
@@ -411,7 +434,7 @@ export async function getDocumentDownloadUrl(documentId: string, download: boole
 
     if (error) {
       console.error("Supabase getDownloadUrl error:", error);
-      return { success: false, error: error.message };
+      return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat link download dokumen.") };
     }
 
     return { success: true, url: data.signedUrl };
@@ -419,7 +442,7 @@ export async function getDocumentDownloadUrl(documentId: string, download: boole
     console.error("getDocumentDownloadUrl error:", error);
     return {
       success: false,
-      error: error.message || "Failed to generate download URL",
+      error: sanitizeErrorMessage(error, "Gagal membuat link download dokumen."),
     };
   }
 }
@@ -445,7 +468,7 @@ export async function migrateLeadDocsToProject(
     console.error("migrateLeadDocsToProject error:", error);
     return {
       success: false,
-      error: error.message || "Failed to migrate documents",
+      error: sanitizeErrorMessage(error, "Gagal memigrasi dokumen."),
     };
   }
 }
@@ -466,9 +489,21 @@ export async function createSPBImageUploadUrl(
       throw new Error("Tipe file gambar tidak diizinkan. Hanya file JPG, PNG, dan WEBP yang diperbolehkan.");
     }
 
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { projectNumber: true, projectName: true },
+    });
+
+    const projectIdentifier = project
+      ? `${project.projectNumber || ""}_${project.projectName || ""}`
+          .replace(/[^a-zA-Z0-9.\-_]/g, "_")
+          .replace(/_+/g, "_")
+          .replace(/^_+|_+$/g, "")
+      : projectId;
+
     const timestamp = Date.now();
     const safeFileName = originalFileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-    const filePath = `spb_attachments/${projectId}/${timestamp}_${safeFileName}`;
+    const filePath = `spb_attachments/${projectIdentifier}/${timestamp}_${safeFileName}`;
 
     const supabase = createAdminClient();
     const { data, error } = await supabase.storage
@@ -477,7 +512,7 @@ export async function createSPBImageUploadUrl(
 
     if (error) {
       console.error("Supabase createSignedUploadUrl error:", error);
-      return { success: false, error: error.message };
+      return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat URL upload foto SPB.") };
     }
 
     return {
@@ -489,7 +524,7 @@ export async function createSPBImageUploadUrl(
     console.error("createSPBImageUploadUrl error:", error);
     return {
       success: false,
-      error: error.message || "Gagal membuat URL upload gambar SPB",
+      error: sanitizeErrorMessage(error, "Gagal membuat URL upload gambar SPB."),
     };
   }
 }
@@ -509,11 +544,11 @@ export async function getSPBImageUrl(imagePath: string) {
       .createSignedUrl(imagePath, 3600);
 
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: sanitizeErrorMessage(error, "Gagal memuat file gambar SPB.") };
     }
     return { success: true, url: data.signedUrl };
   } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memuat file gambar SPB.") };
   }
 }
 
@@ -549,6 +584,6 @@ export async function getSPBImageUrls(imageUrlOrPaths: string | string[]) {
 
     return { success: true, urls };
   } catch (error: any) {
-    return { success: false, error: error.message || "Gagal mengambil URL gambar" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengambil URL gambar lampiran.") };
   }
 }

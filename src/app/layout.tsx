@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Poppins } from "next/font/google";
 import "./globals.css";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { Toaster } from "sonner";
 
 const poppins = Poppins({
   variable: "--font-poppins",
@@ -21,6 +20,8 @@ export const metadata: Metadata = {
 
 import { AuthProvider } from "@/components/providers/auth-provider";
 
+import { AppToaster } from "@/components/providers/toaster-provider";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -32,7 +33,7 @@ export default function RootLayout({
         <AuthProvider>
           <SidebarProvider>
             {children}
-            <Toaster position="top-right" richColors />
+            <AppToaster />
           </SidebarProvider>
         </AuthProvider>
       </body>

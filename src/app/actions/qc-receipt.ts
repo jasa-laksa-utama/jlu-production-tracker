@@ -7,6 +7,7 @@ import { auth } from "@/auth";
 import { createNotification } from "@/app/actions/notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import { ensureBucketExists } from "@/lib/supabase/setup";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export interface ItemQCInput {
   itemId: string;
@@ -44,13 +45,24 @@ export async function getPOReceiptsForQC(statusFilter: string = "ALL") {
     const where: any = {};
     if (statusFilter && statusFilter !== "ALL") {
       if (statusFilter === "PENDING" || statusFilter === "PENDING_INSPECTION") {
-        where.qcStatus = "PENDING_INSPECTION";
+        where.qcStatus = { in: ["PENDING_INSPECTION", "PENDING"] };
+      } else if (statusFilter === "PENDING_APPROVAL") {
+        where.qcStatus = "PENDING_APPROVAL";
       } else {
         where.qcStatus = statusFilter;
       }
     } else {
-      // Hanya mengambil PO yang diajukan ke QC (PENDING_INSPECTION, APPROVED, REJECTED, PARTIAL)
-      where.qcStatus = { in: ["PENDING_INSPECTION", "APPROVED", "REJECTED", "PARTIAL"] };
+      // Mengambil semua PO yang masuk alur QC (PENDING_INSPECTION, PENDING_APPROVAL, APPROVED, REJECTED, PARTIAL)
+      where.qcStatus = {
+        in: [
+          "PENDING_INSPECTION",
+          "PENDING_APPROVAL",
+          "APPROVED",
+          "REJECTED",
+          "PARTIAL",
+          "PENDING",
+        ],
+      };
     }
 
     const purchaseOrders = await (prisma.purchaseOrder as any).findMany({
@@ -73,10 +85,10 @@ export async function getPOReceiptsForQC(statusFilter: string = "ALL") {
       data: JSON.parse(JSON.stringify(purchaseOrders)),
     };
   } catch (error: any) {
-    console.error("Error getPOReceiptsForQC:", error);
+    console.error("Error getPendingQCPOReceipts:", error);
     return {
       success: false,
-      error: error?.message || "Gagal mengambil data pengajuan QC PO",
+      error: sanitizeErrorMessage(error, "Gagal mengambil data pengajuan QC PO."),
       data: [],
     };
   }
@@ -187,8 +199,29 @@ export async function submitPOReceiptQCValidation(input: POQCSubmitInput) {
       targetUrl: "/trackers/quality-control",
     });
 
+    // Auto-sync masterplan procurement progress for associated projects
+    try {
+      const spbNumbers = allItems.map((i: any) => i.noSpb).filter(Boolean);
+      if (spbNumbers.length > 0) {
+        const matchingSpbs = await prisma.sPB.findMany({
+          where: { spbNumber: { in: spbNumbers } },
+          select: { projectId: true },
+        });
+        const projectIds = Array.from(new Set(matchingSpbs.map((s) => s.projectId).filter(Boolean)));
+        if (projectIds.length > 0) {
+          const { syncProcurementMasterplanProgress } = await import("@/app/actions/masterplan");
+          for (const pId of projectIds) {
+            await syncProcurementMasterplanProgress(pId);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error auto-syncing masterplan procurement in submitPOReceiptQCValidation:", e);
+    }
+
     revalidatePath("/trackers/quality-control");
     revalidatePath("/dashboard");
+    revalidatePath("/trackers/production");
 
     return {
       success: true,
@@ -196,10 +229,10 @@ export async function submitPOReceiptQCValidation(input: POQCSubmitInput) {
       data: JSON.parse(JSON.stringify(updatedPO)),
     };
   } catch (error: any) {
-    console.error("Error submitPOReceiptQCValidation:", error);
+    console.error("Error savePOReceiptQCAction:", error);
     return {
       success: false,
-      error: error?.message || "Gagal menyimpan hasil validasi QC per-item",
+      error: sanitizeErrorMessage(error, "Gagal menyimpan hasil validasi QC per-item."),
     };
   }
 }
@@ -236,7 +269,7 @@ export async function uploadQCAttachmentAction(formData: FormData) {
 
     if (error) {
       console.error("Supabase Storage upload error:", error);
-      return { success: false, error: error.message };
+      return { success: false, error: sanitizeErrorMessage(error, "Gagal mengunggah foto ke storage.") };
     }
 
     const { data: publicUrlData } = supabase.storage
@@ -248,10 +281,10 @@ export async function uploadQCAttachmentAction(formData: FormData) {
       url: publicUrlData.publicUrl,
     };
   } catch (error: any) {
-    console.error("Error uploadQCAttachmentAction:", error);
+    console.error("Error uploadQCReceiptPhotoAction:", error);
     return {
       success: false,
-      error: error?.message || "Gagal mengunggah foto bukti QC",
+      error: sanitizeErrorMessage(error, "Gagal mengunggah foto bukti QC."),
     };
   }
 }
@@ -370,8 +403,29 @@ export async function submitSingleItemQCValidation(input: SingleItemQCInput) {
       },
     });
 
+    // Auto-sync masterplan procurement progress for associated projects
+    try {
+      const spbNumbers = allItems.map((i: any) => i.noSpb).filter(Boolean);
+      if (spbNumbers.length > 0) {
+        const matchingSpbs = await prisma.sPB.findMany({
+          where: { spbNumber: { in: spbNumbers } },
+          select: { projectId: true },
+        });
+        const projectIds = Array.from(new Set(matchingSpbs.map((s) => s.projectId).filter(Boolean)));
+        if (projectIds.length > 0) {
+          const { syncProcurementMasterplanProgress } = await import("@/app/actions/masterplan");
+          for (const pId of projectIds) {
+            await syncProcurementMasterplanProgress(pId);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error auto-syncing masterplan procurement in submitSingleItemQC:", e);
+    }
+
     revalidatePath("/trackers/quality-control");
     revalidatePath("/dashboard");
+    revalidatePath("/trackers/production");
 
     return {
       success: true,
@@ -380,10 +434,10 @@ export async function submitSingleItemQCValidation(input: SingleItemQCInput) {
       globalPOStatus: globalStatus,
     };
   } catch (error: any) {
-    console.error("Error submitSingleItemQCValidation:", error);
+    console.error("Error saveSinglePOItemQCAction:", error);
     return {
       success: false,
-      error: error?.message || "Gagal menyimpan hasil validasi QC item",
+      error: sanitizeErrorMessage(error, "Gagal menyimpan hasil validasi QC item."),
     };
   }
 }

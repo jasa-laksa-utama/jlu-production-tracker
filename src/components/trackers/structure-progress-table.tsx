@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useTransition, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Table,
   TableBody,
@@ -14,8 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -24,52 +23,153 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import {
   Hammer,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Trash2,
-  Loader2,
-  GripVertical,
+  Search,
+  SlidersHorizontal,
+  RotateCcw,
   ShieldAlert,
   AlertTriangle,
+  TrendingUp,
+  CheckCheck,
+  Layers,
+  Camera,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { QCRevisionDetailDialog } from "@/components/trackers/qc-revision-detail-dialog";
+import { ProgressPhotoDialog } from "@/components/trackers/progress-photo-dialog";
+import { StageProgressDialog } from "@/components/trackers/stage-progress-dialog";
 import {
   updateStructureItemChecklist,
-  updateStructureItemDetails,
-  addStructureItemsToUnit,
-  deleteStructureItem,
-  reorderStructureItems,
+  bulkUpdateStructureStage,
 } from "@/app/actions/conveyor-progress";
+import { toggleSubComponentComplete } from "@/app/actions/sub-components";
+import { calcStructureItemProgress } from "@/lib/progress-calculator";
 
-// Custom simple Progress bar to avoid dependency on progress.tsx
-function CustomProgress({ value }: { value: number }) {
-  return (
-    <div className="w-full bg-muted dark:bg-muted/40 rounded-full h-2 overflow-hidden">
-      <div
-        className="bg-primary h-full transition-all duration-300"
-        style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
-      />
-    </div>
-  );
+export interface StructureProgressTableProps {
+  currentProject?: any;
+  units: any[];
 }
 
-export function StructureProgressTable({ units }: { units: any[] }) {
+export function StructureProgressTable({
+  currentProject,
+  units,
+}: StructureProgressTableProps) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [expandedUnits, setExpandedUnits] = useState<Record<string, boolean>>(
-    units.reduce((acc, u) => ({ ...acc, [u.id]: true }), {}),
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const [filterType, setFilterType] = useState<
+    "ALL" | "IN_PROGRESS" | "COMPLETED" | "HAS_REVISION"
+  >("ALL");
+
+  // Accordion state (default all open)
+  const [expandedUnits, setExpandedUnits] = useState<string[]>(
+    units.map((u) => u.id),
   );
+  const [photoDialogOpen, setPhotoDialogOpen] = useState(false);
+  const [selectedPhotoUnit, setSelectedPhotoUnit] = useState<{
+    id?: string;
+    name?: string;
+  }>({});
+
+  // Dialog input catatan & foto dokumentasi tahapan fabrikasi struktur
+  const [stageDocDialogData, setStageDocDialogData] = useState<{
+    open: boolean;
+    unitId: string;
+    unitName: string;
+    componentId: string;
+    componentName: string;
+    stage: string;
+    stageLabel: string;
+    currentQty: number;
+    totalQty: number;
+    isInitiallyChecked: boolean;
+  } | null>(null);
+
+  // Find Structure Masterplan Phase
+  const structurePhase = currentProject?.masterplan?.phases?.find(
+    (p: any) =>
+      p.code === "FABRICATION_STRUCTURE" ||
+      p.code === "STRUCTURE" ||
+      p.code === "FABRICATION" ||
+      p.name?.toUpperCase().includes("STRUKTUR") ||
+      p.name?.toUpperCase().includes("STRUCTURE"),
+  );
+
+  const phaseWeight = Number(structurePhase?.weightPercent) || 50.0;
+  const phasePlanProgress = Number(structurePhase?.planProgress) || 0;
+
+  // Filter units that have structure components or are structure/both
+  const structureUnits = units.filter((u) => u.unitType !== "MECHANICAL");
+
+  // Calculate normalized unit weight plan so total is ALWAYS exactly 100%
+  const rawUnitWeights = structureUnits.map((u) => {
+    const upRecord = u.progresses?.find(
+      (up: any) => up.phaseId === structurePhase?.id,
+    );
+    return upRecord && Number(upRecord.weightPercent) > 0
+      ? Number(upRecord.weightPercent)
+      : 0;
+  });
+  const totalRawWeight = rawUnitWeights.reduce((sum, w) => sum + w, 0);
+
+  // Calculate Unit Progresses and Project Total Structure Progress
+  const unitStats = structureUnits.map((u, idx) => {
+    const sItems = u.structureItems || [];
+    const totalItems = sItems.length;
+    const avgProgress =
+      totalItems > 0
+        ? sItems.reduce(
+            (sum: number, item: any) =>
+              sum + Number(item.progressPercent || 0),
+            0,
+          ) / totalItems
+        : 0;
+
+    // Normalize so sum of weightPlan across active units is strictly 100%
+    let weightPlan = 0;
+    if (totalRawWeight > 0) {
+      weightPlan = (rawUnitWeights[idx] / totalRawWeight) * 100;
+    } else if (structureUnits.length > 0) {
+      weightPlan = 100 / structureUnits.length;
+    }
+
+    const actualWeight = (avgProgress * weightPlan) / 100;
+
+    return {
+      ...u,
+      indexLetter: String(idx + 1), // 1, 2, 3...
+      avgProgress,
+      weightPlan,
+      actualWeight,
+      totalItemsCount: totalItems,
+      completedItemsCount: sItems.filter(
+        (it: any) => Number(it.progressPercent || 0) >= 100,
+      ).length,
+    };
+  });
+
+  const totalActualProgress = unitStats.reduce(
+    (sum, u) => sum + u.actualWeight,
+    0,
+  );
+  const totalCompletedItems = unitStats.reduce(
+    (sum, u) => sum + u.completedItemsCount,
+    0,
+  );
+  const totalAllItems = unitStats.reduce(
+    (sum, u) => sum + u.totalItemsCount,
+    0,
+  );
+  const sCurveContribution = (totalActualProgress * phaseWeight) / 100;
+
   const [selectedRevisionData, setSelectedRevisionData] = useState<{
     open: boolean;
     revision: any;
@@ -79,118 +179,15 @@ export function StructureProgressTable({ units }: { units: any[] }) {
     unitName: string;
   } | null>(null);
 
-  // State for Add Component Dialog
-  const [addModalUnit, setAddModalUnit] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-  const [itemsList, setItemsList] = useState<
-    Array<{ name: string; qty: number; satuan: string }>
-  >([{ name: "", qty: 1, satuan: "set" }]);
-  const [bulkText, setBulkText] = useState("");
-  const [isAddingPending, setIsAddingPending] = useState(false);
-  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
-
-  // Spreadsheet-style Drag-and-Drop Reordering State
-  const [draggedItem, setDraggedItem] = useState<{
-    unitId: string;
-    fromIndex: number;
-  } | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<{
-    unitId: string;
-    toIndex: number;
-  } | null>(null);
-
-  const handleDragStart = (
-    e: React.DragEvent,
-    unitId: string,
-    fromIndex: number,
-  ) => {
-    setDraggedItem({ unitId, fromIndex });
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", `${unitId}:${fromIndex}`);
-  };
-
-  const handleDragOver = (
-    e: React.DragEvent,
-    unitId: string,
-    overIndex: number,
-  ) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (
-      !dragOverIndex ||
-      dragOverIndex.unitId !== unitId ||
-      dragOverIndex.toIndex !== overIndex
-    ) {
-      setDragOverIndex({ unitId, toIndex: overIndex });
-    }
-  };
-
-  const handleDragEnd = () => {
-    setDraggedItem(null);
-    setDragOverIndex(null);
-  };
-
-  const handleDrop = (unit: any, toIndex: number) => {
-    if (!draggedItem || draggedItem.unitId !== unit.id) {
-      handleDragEnd();
-      return;
-    }
-
-    const { fromIndex } = draggedItem;
-    handleDragEnd();
-
-    if (fromIndex === toIndex) return;
-
-    const items = [...unit.structureItems];
-    const [moved] = items.splice(fromIndex, 1);
-    items.splice(toIndex, 0, moved);
-
-    const orderedIds = items.map((it) => it.id);
-
-    startTransition(async () => {
-      const res = await reorderStructureItems(unit.id, orderedIds);
-      if (res.success) {
-        toast.success(
-          `Urutan "${moved.name}" berhasil dipindahkan ke posisi #${toIndex + 1}!`,
-        );
-      } else {
-        toast.error(res.error || "Gagal mengubah urutan");
-      }
-    });
-  };
-
-  const toggleExpand = (unitId: string) => {
-    setExpandedUnits((prev) => ({ ...prev, [unitId]: !prev[unitId] }));
-  };
-
-  const handleRowChange = (index: number, field: string, value: any) => {
-    const updated = [...itemsList];
-    updated[index] = { ...updated[index], [field]: value };
-    setItemsList(updated);
-  };
-
-  const handleAddRow = () => {
-    setItemsList([...itemsList, { name: "", qty: 1, satuan: "set" }]);
-  };
-
-  const handleRemoveRow = (index: number) => {
-    if (itemsList.length === 1) {
-      setItemsList([{ name: "", qty: 1, satuan: "set" }]);
-      return;
-    }
-    setItemsList(itemsList.filter((_, i) => i !== index));
-  };
-
-  const handleStageQtyChange = (
+  const handleStageCheckChange = (
     itemId: string,
-    field: string,
-    newQty: number,
+    stageKey: string,
+    isChecked: boolean,
+    itemQty: number,
   ) => {
     startTransition(async () => {
       const res = await updateStructureItemChecklist(itemId, {
-        [field]: newQty,
+        [stageKey]: isChecked ? itemQty : 0,
       });
 
       if (res.success) {
@@ -201,278 +198,674 @@ export function StructureProgressTable({ units }: { units: any[] }) {
     });
   };
 
-  const handleDetailChange = (
-    itemId: string,
-    details: { name?: string; qty?: number; satuan?: string },
-  ) => {
+  const handleToggleSubItem = (subId: string, currentStatus: boolean) => {
     startTransition(async () => {
-      const res = await updateStructureItemDetails(itemId, details);
+      const res = await toggleSubComponentComplete(
+        subId,
+        "STRUCTURE",
+        !currentStatus
+      );
       if (res.success) {
-        toast.success("Rincian komponen diperbarui!");
+        toast.success(
+          !currentStatus
+            ? "Sub-part ditandai selesai!"
+            : "Status sub-part direset!"
+        );
       } else {
-        toast.error(res.error || "Gagal memperbarui rincian");
+        toast.error(res.error || "Gagal memperbarui status sub-part");
       }
     });
   };
 
-  const handleAddItemsSubmit = async () => {
-    if (!addModalUnit) return;
-
-    // Combine dynamic rows and bulk text if present
-    const validRows = itemsList
-      .filter((r) => r.name.trim().length > 0)
-      .map((r) => ({
-        name: r.name.trim(),
-        qty: Number(r.qty) || 1,
-        satuan: r.satuan.trim() || "set",
-      }));
-
-    const bulkRows = bulkText
-      .split("\n")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-      .map((s) => ({ name: s, qty: 1, satuan: "set" }));
-
-    const payload = [...validRows, ...bulkRows];
-
-    if (payload.length === 0) {
-      toast.error("Masukkan minimal 1 nama komponen.");
-      return;
-    }
-
-    setIsAddingPending(true);
-    try {
-      const res = await addStructureItemsToUnit(addModalUnit.id, payload);
+  const handleBulkStage = (
+    unitId: string,
+    stage:
+      | "CUTTING"
+      | "SETTING"
+      | "WELDING"
+      | "FINISHING"
+      | "PAINTING"
+      | "PACKAGING"
+      | "RESET"
+      | "ALL",
+    isDone: boolean,
+  ) => {
+    startTransition(async () => {
+      const res = await bulkUpdateStructureStage(unitId, stage, isDone);
       if (res.success) {
-        toast.success(
-          `${payload.length} komponen struktur berhasil ditambahkan!`,
-        );
-        setAddModalUnit(null);
-        setItemsList([{ name: "", qty: 1, satuan: "set" }]);
-        setBulkText("");
+        if (stage === "RESET") {
+          toast.success("Progress unit berhasil direset ke 0%!");
+        } else {
+          toast.success(`Tahapan ${stage} unit berhasil diperbarui!`);
+        }
       } else {
-        toast.error(res.error || "Gagal menambahkan komponen");
+        toast.error(res.error || "Gagal memperbarui progress");
       }
-    } catch (err: any) {
-      toast.error(err?.message || "Terjadi kesalahan");
-    } finally {
-      setIsAddingPending(false);
-    }
-  };
-
-  const [deleteConfirmItem, setDeleteConfirmItem] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-
-  const handleDeleteItem = async () => {
-    if (!deleteConfirmItem) return;
-    const { id, name } = deleteConfirmItem;
-    setDeletingItemId(id);
-    try {
-      const res = await deleteStructureItem(id);
-      if (res.success) {
-        toast.success(`Komponen "${name}" berhasil dihapus!`);
-        setDeleteConfirmItem(null);
-      } else {
-        toast.error(res.error || "Gagal menghapus komponen");
-      }
-    } catch (err: any) {
-      toast.error(err?.message || "Terjadi kesalahan");
-    } finally {
-      setDeletingItemId(null);
-    }
+    });
   };
 
   return (
     <div className="space-y-6">
-      <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
-        <CardHeader className="bg-linear-to-r from-primary/5 via-transparent to-primary/5 pt-4 px-6 pb-4 border-b border-border/20">
-          <CardTitle className="text-lg font-bold gap-1.5 flex items-center">
-            <Hammer className="w-5 h-5 text-primary" /> Fabrikasi Struktur
-            (Structure Progress)
-          </CardTitle>
-          <CardDescription className="text-xs text-muted-foreground/80">
-            Perbarui checklist status pabrikasi rangka utama conveyor. Bobot
-            langkah: C/D (15%), Setting (35%), Welding (40%), Finishing (5%),
-            Painting (3.5%), Packaging (1.5%).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-6 space-y-4">
-          {units.map((unit, unitIdx) => {
-            if (unit.unitType === "MECHANICAL") return null;
+      {/* 1. TOP KPI SUMMARY CARDS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Card 1: Total Progress Fabrikasi Struktur */}
+        <Card className="rounded-2xl border bg-card/80 backdrop-blur shadow-sm overflow-hidden">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">
+              Total Progress Struktur
+            </CardTitle>
+            <div className="p-2 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <Hammer className="w-4 h-4" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-black tracking-tight text-foreground">
+                {totalActualProgress.toFixed(2)}%
+              </div>
+              <Badge
+                variant={
+                  totalActualProgress >= 100
+                    ? "default"
+                    : totalActualProgress > 0
+                      ? "secondary"
+                      : "outline"
+                }
+                className="text-[10px] font-bold"
+              >
+                {totalActualProgress >= 100
+                  ? "Selesai"
+                  : totalActualProgress > 0
+                    ? "In Progress"
+                    : "Belum Mulai"}
+              </Badge>
+            </div>
+            <div className="w-full bg-muted/60 rounded-full h-2 mt-2.5 overflow-hidden">
+              <div
+                className="bg-blue-600 h-full transition-all duration-500 rounded-full"
+                style={{ width: `${Math.min(100, totalActualProgress)}%` }}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-2 flex items-center justify-between">
+              <span>Target Plan: {phasePlanProgress.toFixed(2)}%</span>
+              <span
+                className={cn(
+                  "font-bold",
+                  totalActualProgress >= phasePlanProgress
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-rose-600 dark:text-rose-400",
+                )}
+              >
+                {(totalActualProgress - phasePlanProgress >= 0 ? "+" : "") +
+                  (totalActualProgress - phasePlanProgress).toFixed(2)}
+                %
+              </span>
+            </p>
+          </CardContent>
+        </Card>
 
-            const isExpanded = !!expandedUnits[unit.id];
-            const totalItems = unit.structureItems.length;
-            const avgProgress =
-              totalItems > 0
-                ? unit.structureItems.reduce(
-                    (sum: number, item: any) =>
-                      sum + Number(item.progressPercent || 0),
-                    0,
-                  ) / totalItems
-                : 0;
+        {/* Card 2: Kontribusi ke S-Curve Proyek */}
+        <Card className="rounded-2xl border bg-card/80 backdrop-blur shadow-sm overflow-hidden">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">
+              Kontribusi Masterplan
+            </CardTitle>
+            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-black tracking-tight text-foreground">
+                {sCurveContribution.toFixed(2)}%
+              </div>
+              <span className="text-xs font-semibold text-muted-foreground">
+                dari {phaseWeight.toFixed(2)}% Bobot
+              </span>
+            </div>
+            <div className="w-full bg-muted/60 rounded-full h-2 mt-2.5 overflow-hidden">
+              <div
+                className="bg-purple-600 h-full transition-all duration-500 rounded-full"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    phaseWeight > 0
+                      ? (sCurveContribution / phaseWeight) * 100
+                      : 0,
+                  )}%`,
+                }}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1">
+              <span>Sesuai formula S-Curve (Hal. 8 Report)</span>
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Card 3: Komponen Selesai Fabrikasi */}
+        <Card className="rounded-2xl border bg-card/80 backdrop-blur shadow-sm overflow-hidden">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">
+              Komponen Selesai
+            </CardTitle>
+            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <CheckCheck className="w-4 h-4" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-black tracking-tight text-foreground">
+                {totalCompletedItems}{" "}
+                <span className="text-sm font-semibold text-muted-foreground">
+                  / {totalAllItems}
+                </span>
+              </div>
+              <span className="text-xs font-bold text-emerald-600">
+                {totalAllItems > 0
+                  ? ((totalCompletedItems / totalAllItems) * 100).toFixed(1)
+                  : 0}
+                %
+              </span>
+            </div>
+            <div className="w-full bg-muted/60 rounded-full h-2 mt-2.5 overflow-hidden">
+              <div
+                className="bg-emerald-600 h-full transition-all duration-500 rounded-full"
+                style={{
+                  width: `${
+                    totalAllItems > 0
+                      ? (totalCompletedItems / totalAllItems) * 100
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1">
+              <span>Packaging 100% Selesai</span>
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Card 4: Unit Conveyor Struktur */}
+        <Card className="rounded-2xl border bg-card/80 backdrop-blur shadow-sm overflow-hidden">
+          <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">
+              Unit Struktur
+            </CardTitle>
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <Layers className="w-4 h-4" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-black tracking-tight text-foreground">
+                {structureUnits.length} Unit
+              </div>
+              <span className="text-xs font-semibold text-muted-foreground">
+                Setup Dinamis
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 mt-3 text-[11px] text-muted-foreground flex-wrap">
+              <span className="font-semibold text-foreground">
+                {currentProject?.projectNumber || "PRJ"}
+              </span>
+              <span>{currentProject?.projectName}</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 2. REKAPITULASI STRUCTURE PROGRESS TABLE (Sesuai Hal. 8 PDF) */}
+      <Card className="rounded-2xl border shadow-sm overflow-hidden">
+        <CardHeader className="p-4 sm:p-5 border-b bg-muted/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base font-bold flex items-center gap-2 text-foreground">
+              <Hammer className="w-4 h-4 text-blue-600" />
+              Rekapitulasi Structure Progress
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Rangkuman pencapaian bobot fabrikasi struktur per unit conveyor (Halaman 8 PDF Laporan).
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSelectedPhotoUnit({});
+                setPhotoDialogOpen(true);
+              }}
+              className="h-8 px-3 rounded-xl text-xs font-bold text-primary border-primary/30 hover:bg-primary/5 cursor-pointer flex items-center gap-1.5 shadow-xs"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              Foto Struktur
+            </Button>
+            <Badge
+              variant="outline"
+              className="text-xs font-bold px-3 py-1 bg-background"
+            >
+              Total Actual:{" "}
+              <span className="text-blue-600 ml-1">
+                {totalActualProgress.toFixed(2)}%
+              </span>
+            </Badge>
+          </div>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader className="bg-muted/40">
+              <TableRow>
+                <TableHead className="w-12 text-center text-xs font-bold">
+                  No
+                </TableHead>
+                <TableHead className="text-xs font-bold">
+                  Unit Conveyor / Description
+                </TableHead>
+                <TableHead className="text-center text-xs font-bold w-32">
+                  Bobot Plan (%)
+                </TableHead>
+                <TableHead className="text-center text-xs font-bold w-32 text-blue-600 dark:text-blue-400">
+                  Bobot Actual (%)
+                </TableHead>
+                <TableHead className="text-center text-xs font-bold w-32">
+                  Progress Unit (%)
+                </TableHead>
+                <TableHead className="text-center text-xs font-bold w-36">
+                  Status
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {unitStats.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className="text-center py-8 text-muted-foreground text-xs"
+                  >
+                    Belum ada unit conveyor struktur pada proyek ini. Silakan atur di menu Kelola Unit & Komponen.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                unitStats.map((u) => (
+                  <TableRow
+                    key={u.id}
+                    className="hover:bg-muted/30 transition-colors"
+                  >
+                    <TableCell className="text-center font-bold text-xs text-muted-foreground">
+                      {u.indexLetter}
+                    </TableCell>
+                    <TableCell className="font-semibold text-xs text-foreground">
+                      <div className="flex items-center gap-2">
+                        <Layers className="w-3.5 h-3.5 text-primary shrink-0" />
+                        <span>{u.name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-center font-semibold text-xs text-muted-foreground">
+                      {u.weightPlan.toFixed(2)}%
+                    </TableCell>
+                    <TableCell className="text-center font-black text-xs text-blue-600 dark:text-blue-400">
+                      {u.actualWeight.toFixed(2)}%
+                    </TableCell>
+                    <TableCell className="text-center font-bold text-xs">
+                      <div className="flex flex-col items-center gap-1">
+                        <span>{u.avgProgress.toFixed(2)}%</span>
+                        <div className="w-20 bg-muted rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-blue-600 h-full rounded-full"
+                            style={{
+                              width: `${Math.min(100, u.avgProgress)}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px] font-bold px-2 py-0.5 rounded-md",
+                          u.avgProgress >= 100
+                            ? "border-emerald-500 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40"
+                            : u.avgProgress > 0
+                              ? "border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-950/40"
+                              : "border-muted-foreground/30 text-muted-foreground",
+                        )}
+                      >
+                        {u.avgProgress >= 100
+                          ? "Selesai"
+                          : u.avgProgress > 0
+                            ? "Fabrikasi In Progress"
+                            : "Belum Mulai"}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+            <TableFooter className="bg-muted/60 font-bold text-xs">
+              <TableRow>
+                <TableCell
+                  colSpan={2}
+                  className="text-right font-black uppercase"
+                >
+                  TOTAL STRUKTUR
+                </TableCell>
+                <TableCell className="text-center font-black">
+                  {unitStats
+                    .reduce((sum, u) => sum + u.weightPlan, 0)
+                    .toFixed(2)}
+                  %
+                </TableCell>
+                <TableCell className="text-center font-black text-blue-600 dark:text-blue-400 text-sm">
+                  {totalActualProgress.toFixed(2)}%
+                </TableCell>
+                <TableCell className="text-center">-</TableCell>
+                <TableCell className="text-center">-</TableCell>
+              </TableRow>
+            </TableFooter>
+          </Table>
+        </div>
+      </Card>
+
+      {/* 3. DETAIL CHECKLIST FABRIKASI STRUKTUR PER UNIT */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+              <Hammer className="w-4 h-4 text-primary" />
+              Detail Checklist Fabrikasi Struktur
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Tahapan langkah fabrikasi rangka: <b>C/D (15%)</b>, <b>Setting (35%)</b>,{" "}
+              <b>Welding (40%)</b>, <b>Finishing (5%)</b>, <b>Painting (3.5%)</b>, dan <b>Packaging (1.5%)</b>.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Cari komponen..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-8 text-xs pl-8 w-48 sm:w-60 rounded-lg font-medium"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Accordion Units */}
+        <Accordion
+          type="multiple"
+          value={expandedUnits}
+          onValueChange={setExpandedUnits}
+          className="space-y-3"
+        >
+          {unitStats.map((unit) => {
+            const structureItems = (unit.structureItems || []).filter(
+              (it: any) =>
+                !searchQuery ||
+                it.name.toLowerCase().includes(searchQuery.toLowerCase()),
+            );
 
             return (
-              <div
+              <AccordionItem
                 key={unit.id}
-                className="border border-border/50 rounded-xl overflow-hidden bg-background/20 backdrop-blur-sm"
+                value={unit.id}
+                className="rounded-2xl border bg-card shadow-sm overflow-hidden"
               >
-                {/* Header Collapsible */}
-                <div
-                  onClick={() => toggleExpand(unit.id)}
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/10 transition-colors select-none border-b border-border/40"
-                >
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-accent/80 text-primary border border-border/60">
-                        {unitIdx + 1}
-                      </span>
-                      <span>{unit.name}</span>
-                    </h4>
-                    <span className="text-xs text-muted-foreground/80">
-                      Total item struktur: {totalItems}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="w-36 hidden sm:block">
-                      <CustomProgress value={avgProgress} />
+                <AccordionTrigger className="px-4 sm:px-5 py-3 hover:bg-muted/30 transition-colors hover:no-underline">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between w-full pr-4 gap-2 text-left">
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        variant="secondary"
+                        className="font-bold text-xs w-6 h-6 rounded-md flex items-center justify-center p-0 shrink-0"
+                      >
+                        {unit.indexLetter}
+                      </Badge>
+                      <div>
+                        <div className="font-bold text-sm text-foreground flex items-center gap-2">
+                          <span>{unit.name}</span>
+                          <span className="text-[11px] font-normal text-muted-foreground">
+                            ({unit.totalItemsCount} Komponen)
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <Badge className="bg-primary/10 text-primary hover:bg-primary/20 border-none font-bold">
-                      {avgProgress.toFixed(1)}%
-                    </Badge>
-                    {isExpanded ? (
-                      <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                    )}
-                  </div>
-                </div>
 
-                {/* Collapsible Content */}
-                {isExpanded && (
-                  <div className="p-4 bg-background/40 space-y-3">
-                    <div className="flex justify-between items-center px-1">
-                      <span className="text-xs font-semibold text-muted-foreground">
-                        Komponen Rangka Conveyor
-                      </span>
+                    <div className="flex items-center gap-4 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground text-[11px]">
+                          Bobot: <b>{unit.weightPlan.toFixed(2)}%</b>
+                        </span>
+                        <span>•</span>
+                        <span className="font-bold text-blue-600 dark:text-blue-400">
+                          Progres: {unit.avgProgress.toFixed(2)}%
+                        </span>
+                      </div>
+                      <div className="w-24 bg-muted/60 rounded-full h-2 overflow-hidden hidden sm:block">
+                        <div
+                          className="bg-blue-600 h-full rounded-full transition-all duration-300"
+                          style={{
+                            width: `${Math.min(100, unit.avgProgress)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </AccordionTrigger>
+
+                <AccordionContent className="p-0 border-t bg-muted/5">
+                  {/* Bulk Action Buttons Bar */}
+                  <div className="p-3 sm:px-5 border-b bg-muted/20 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <span>Aksi Cepat Unit ({unit.name}):</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <Button
-                        type="button"
                         size="sm"
                         variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAddModalUnit({ id: unit.id, name: unit.name });
-                          setItemsList([{ name: "", qty: 1, satuan: "set" }]);
-                          setBulkText("");
-                        }}
-                        className="h-8 px-3 text-xs border-dashed border-primary/40 text-primary hover:bg-primary/10 rounded-xl gap-1.5 cursor-pointer font-semibold"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "CUTTING", true)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold rounded-md border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-900/40 dark:text-blue-400 cursor-pointer"
                       >
-                        <Plus className="w-3.5 h-3.5" /> Tambah Komponen
-                        Struktur
+                        ✓ C/D Semua
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "SETTING", true)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold rounded-md border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-900/40 dark:text-amber-400 cursor-pointer"
+                      >
+                        ✓ Setting Semua
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "WELDING", true)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold rounded-md border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-900/40 dark:text-purple-400 cursor-pointer"
+                      >
+                        ✓ Welding Semua
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "FINISHING", true)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold rounded-md border-teal-200 text-teal-700 hover:bg-teal-50 dark:border-teal-900/40 dark:text-teal-400 cursor-pointer"
+                      >
+                        ✓ Finish Semua
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "PAINTING", true)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold rounded-md border-orange-200 text-orange-700 hover:bg-orange-50 dark:border-orange-900/40 dark:text-orange-400 cursor-pointer"
+                      >
+                        ✓ Paint Semua
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "PACKAGING", true)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold rounded-md border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900/40 dark:text-emerald-400 cursor-pointer"
+                      >
+                        ✓ Pack Semua
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          handleBulkStage(unit.id, "RESET", false)
+                        }
+                        disabled={isPending}
+                        className="h-7 text-[11px] font-semibold text-muted-foreground hover:text-red-600 rounded-md cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3 mr-1" /> Reset Unit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setSelectedPhotoUnit({
+                            id: unit.id,
+                            name: unit.name,
+                          });
+                          setPhotoDialogOpen(true);
+                        }}
+                        className="h-7 text-[11px] font-semibold rounded-md border-primary/40 text-primary hover:bg-primary/10 cursor-pointer flex items-center gap-1"
+                        title={`Dokumentasi Foto untuk ${unit.name}`}
+                      >
+                        <Camera className="w-3 h-3" /> Foto Unit
                       </Button>
                     </div>
+                  </div>
 
-                    <div className="rounded-xl border border-border/40 overflow-hidden">
-                      {totalItems > 0 ? (
-                        <Table>
-                          <TableHeader className="bg-muted/40">
-                            <TableRow className="hover:bg-transparent">
-                              <TableHead className="font-semibold text-xs text-center w-12 py-3">
-                                No.
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs py-3">
-                                Nama Item Rangka
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-20">
-                                C/D (15%)
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-20">
-                                Sett (35%)
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-20">
-                                Weld (40%)
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-16">
-                                Fin (5%)
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-20">
-                                Paint (3.5%)
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-20">
-                                Pack (1.5%)
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-right w-24">
-                                Progress
-                              </TableHead>
-                              <TableHead className="font-semibold text-xs text-center w-12">
-                                Hapus
-                              </TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {unit.structureItems.map(
-                              (item: any, itemIdx: number) => (
-                                <TableRow
-                                  key={item.id}
-                                  id={`item-${item.id}`}
-                                  draggable
-                                  onDragStart={(e) =>
-                                    handleDragStart(e, unit.id, itemIdx)
-                                  }
-                                  onDragOver={(e) =>
-                                    handleDragOver(e, unit.id, itemIdx)
-                                  }
-                                  onDragEnd={handleDragEnd}
-                                  onDrop={() => handleDrop(unit, itemIdx)}
-                                  className={cn(
-                                    "hover:bg-muted/5 transition-all select-none",
-                                    draggedItem?.unitId === unit.id &&
-                                      draggedItem?.fromIndex === itemIdx
-                                      ? "opacity-30 bg-primary/10 border-2 border-dashed border-primary"
-                                      : "",
-                                    dragOverIndex?.unitId === unit.id &&
-                                      dragOverIndex?.toIndex === itemIdx &&
-                                      draggedItem?.fromIndex !== itemIdx
-                                      ? "border-b-2 border-b-primary bg-primary/10 font-bold"
-                                      : "",
-                                  )}
-                                >
-                                  <td
-                                    className="text-center text-xs font-semibold py-2.5 w-12 cursor-grab active:cursor-grabbing hover:bg-muted/40 transition-colors rounded-l-md"
-                                    title="Geser/drag untuk mengubah urutan komponen"
-                                  >
-                                    <div className="flex items-center justify-center gap-1 text-muted-foreground/70 hover:text-primary transition-colors">
-                                      <GripVertical className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
-                                      <span className="text-xs font-bold text-foreground">
-                                        {itemIdx + 1}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="font-medium text-xs py-2">
-                                    <div className="flex items-center gap-2">
-                                      <Input
-                                        key={`name-${item.id}-${item.name}`}
-                                        defaultValue={item.name}
-                                        disabled={isPending}
-                                        onBlur={(e) => {
-                                          const val = e.target.value.trim();
-                                          if (val && val !== item.name) {
-                                            handleDetailChange(item.id, {
-                                              name: val,
-                                            });
-                                          }
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === "Enter") {
-                                            (
-                                              e.target as HTMLInputElement
-                                            ).blur();
-                                          }
-                                        }}
-                                        className="h-7 text-xs font-semibold bg-transparent hover:bg-muted/30 focus:bg-background border-transparent hover:border-border/60 focus:border-primary transition-all px-2 rounded-lg"
-                                        title="Klik untuk ubah nama komponen"
-                                      />
+                  {structureItems.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-muted-foreground">
+                      {searchQuery
+                        ? "Tidak ada komponen struktur yang cocok dengan pencarian."
+                        : `Belum ada komponen struktur untuk unit ${unit.name}. Silakan tambahkan di menu Kelola Unit & Komponen.`}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader className="bg-muted/30">
+                          <TableRow>
+                            <TableHead className="w-16 text-center text-[11px] font-bold">
+                              No
+                            </TableHead>
+                            <TableHead className="text-[11px] font-bold">
+                              Deskripsi Komponen
+                            </TableHead>
+                            <TableHead className="w-24 text-center text-[11px] font-bold">
+                              Kategori
+                            </TableHead>
+                            <TableHead className="w-20 text-center text-[11px] font-bold">
+                              Qty (Set)
+                            </TableHead>
+                            <TableHead className="w-24 text-center text-[11px] font-bold text-blue-700 dark:text-blue-400">
+                              C/D (15%)
+                            </TableHead>
+                            <TableHead className="w-24 text-center text-[11px] font-bold text-amber-700 dark:text-amber-400">
+                              Sett (35%)
+                            </TableHead>
+                            <TableHead className="w-24 text-center text-[11px] font-bold text-purple-700 dark:text-purple-400">
+                              Weld (40%)
+                            </TableHead>
+                            <TableHead className="w-20 text-center text-[11px] font-bold text-teal-700 dark:text-teal-400">
+                              Finish (5%)
+                            </TableHead>
+                            <TableHead className="w-24 text-center text-[11px] font-bold text-orange-700 dark:text-orange-400">
+                              Paint (3.5%)
+                            </TableHead>
+                            <TableHead className="w-24 text-center text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                              Pack (1.5%)
+                            </TableHead>
+                            <TableHead className="w-28 text-center text-[11px] font-bold">
+                              Progress (%)
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {/* Structure Section Banner */}
+                          <TableRow className="bg-muted/40 font-bold text-xs">
+                            <TableCell
+                              colSpan={11}
+                              className="py-1.5 px-4 text-orange-600 dark:text-orange-400 text-[11px] tracking-wide uppercase font-bold"
+                            >
+                              🏗️ STRUCTURE COMPONENTS ({structureItems.length} ITEMS)
+                            </TableCell>
+                          </TableRow>
+
+                          {structureItems.map((item: any, itemIdx: number) => {
+                            const qty = Math.max(1, item.qty || 1);
+                            const itemProgress = calcStructureItemProgress(item);
+
+                            const isCDChecked =
+                              (item.cuttingQty ?? (item.cuttingDone ? qty : 0)) >= qty;
+                            const isSettChecked =
+                              (item.settingQty ?? (item.settingDone ? qty : 0)) >= qty;
+                            const isWeldChecked =
+                              (item.weldingQty ?? (item.weldingDone ? qty : 0)) >= qty;
+                            const isFinChecked =
+                              (item.finishingQty ?? (item.finishingDone ? qty : 0)) >= qty;
+                            const isPaintChecked =
+                              (item.paintingQty ?? (item.paintingDone ? qty : 0)) >= qty;
+                            const isPackChecked =
+                              (item.packagingQty ?? (item.packagingDone ? qty : 0)) >= qty;
+
+                            const hasSubItems =
+                              item.subItems && item.subItems.length > 0;
+
+                            return (
+                              <React.Fragment key={item.id}>
+                                <TableRow className="hover:bg-muted/20 transition-colors text-xs">
+                                  <TableCell className="text-center font-medium text-muted-foreground text-[11px]">
+                                    {itemIdx + 1}
+                                  </TableCell>
+                                  <TableCell className="font-semibold text-foreground">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span>{item.name}</span>
+
+                                      {/* Bundel Pengiriman Badge */}
+                                      {item.bundleTag && (
+                                        <Badge
+                                          variant="secondary"
+                                          className="text-[9px] px-1.5 py-0 h-4 bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-medium"
+                                          title={`Bundel/Palet: ${item.bundleTag}`}
+                                        >
+                                          📦 {item.bundleTag}
+                                        </Badge>
+                                      )}
+
+                                      {/* Badge Counter Sub-Komponen */}
+                                      {hasSubItems && (
+                                        <Badge
+                                          variant="secondary"
+                                          className="text-[9px] px-1.5 py-0 h-4 bg-primary/10 text-primary border border-primary/20 font-semibold"
+                                        >
+                                          {item.subItems.filter((s: any) => s.isCompleted).length}/{item.subItems.length} Sub-Part
+                                        </Badge>
+                                      )}
+
                                       {(() => {
                                         const problematicCp =
                                           unit.qcCheckpoints?.find(
@@ -481,788 +874,341 @@ export function StructureProgressTable({ units }: { units: any[] }) {
                                               (cp.status === "FAIL" ||
                                                 cp.status === "ON_HOLD"),
                                           );
-                                        const activeRev =
-                                          problematicCp?.revisions?.find(
-                                            (r: any) => r.status !== "CLOSED",
-                                          ) ||
+                                        const openRevision =
                                           unit.qcRevisions?.find(
                                             (rev: any) =>
-                                              (rev.checkpointId ===
-                                                problematicCp?.id ||
-                                                rev.checkpoint?.itemId ===
-                                                  item.id) &&
-                                              rev.status !== "CLOSED",
+                                              rev.itemId === item.id &&
+                                              rev.status === "OPEN",
                                           );
 
-                                        if (problematicCp || activeRev) {
-                                          const isDR =
-                                            activeRev?.revisionType ===
-                                              "DRAWING_REVISION" ||
-                                            problematicCp?.status ===
-                                              "ON_HOLD" ||
-                                            !!activeRev?.drNumber;
-
+                                        if (openRevision) {
                                           return (
                                             <Badge
-                                              variant="outline"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
+                                              variant="destructive"
+                                              onClick={() =>
                                                 setSelectedRevisionData({
                                                   open: true,
-                                                  revision: activeRev || {
-                                                    id: problematicCp?.id,
-                                                    ncrNumber: isDR
-                                                      ? activeRev?.drNumber ||
-                                                        "Request Drawing Revision"
-                                                      : "Laporan Revisi QC",
-                                                    ncrDescription:
-                                                      activeRev?.ncrDescription ||
-                                                      activeRev?.fieldCondition ||
-                                                      problematicCp?.notes ||
-                                                      (isDR
-                                                        ? "Item di-hold menunggu revisi drawing"
-                                                        : "Ditolak oleh QC"),
-                                                    status:
-                                                      activeRev?.status ||
-                                                      (problematicCp?.status ===
-                                                      "ON_HOLD"
-                                                        ? "ON_HOLD"
-                                                        : "OPEN"),
-                                                    raisedBy:
-                                                      activeRev?.raisedBy ||
-                                                      problematicCp?.inspectedBy ||
-                                                      "QC Inspector",
-                                                    raisedAt:
-                                                      activeRev?.createdAt ||
-                                                      problematicCp?.inspectedAt,
-                                                  },
+                                                  revision: openRevision,
                                                   itemType: "STRUCTURE",
                                                   itemName: item.name,
                                                   stageName:
-                                                    problematicCp?.stage ||
-                                                    "QC",
+                                                    openRevision.stage ||
+                                                    "Fabrikasi",
                                                   unitName: unit.name,
-                                                });
-                                              }}
-                                              className={cn(
-                                                "font-bold text-[10px] px-2 py-0.5 animate-pulse cursor-pointer shrink-0 gap-1 transition-all",
-                                                isDR
-                                                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-300 hover:bg-amber-500/25"
-                                                  : "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-300 hover:bg-rose-500/25",
-                                              )}
+                                                })
+                                              }
+                                              className="text-[9px] px-1 py-0 h-4 font-bold flex items-center gap-1 cursor-pointer bg-red-600 hover:bg-red-700 text-white animate-pulse"
                                             >
-                                              <ShieldAlert
-                                                className={cn(
-                                                  "w-3 h-3",
-                                                  isDR
-                                                    ? "text-amber-600"
-                                                    : "text-rose-600",
-                                                )}
-                                              />
-                                              <span>
-                                                {isDR
-                                                  ? "Revisi Drawing"
-                                                  : "Perlu Produksi"}
-                                              </span>
+                                              <ShieldAlert className="w-2.5 h-2.5" />
+                                              REVISI QC
+                                            </Badge>
+                                          );
+                                        }
+
+                                        if (problematicCp) {
+                                          return (
+                                            <Badge
+                                              variant="outline"
+                                              className="text-[9px] px-1 py-0 h-4 font-bold flex items-center gap-1 text-amber-500 border-amber-500/30 bg-amber-500/10"
+                                            >
+                                              <AlertTriangle className="w-2.5 h-2.5" />
+                                              QC ISU
                                             </Badge>
                                           );
                                         }
                                         return null;
                                       })()}
-                                      <div className="flex items-center gap-1 border border-border/70 rounded-lg bg-muted/30 px-1.5 py-0.5 shrink-0">
-                                        <input
-                                          type="number"
-                                          min={1}
-                                          key={`qty-${item.id}-${item.qty}`}
-                                          defaultValue={item.qty || 1}
-                                          disabled={isPending}
-                                          onBlur={(e) => {
-                                            const val = Math.max(
-                                              1,
-                                              Number(e.target.value) || 1,
-                                            );
-                                            if (val !== item.qty) {
-                                              handleDetailChange(item.id, {
-                                                qty: val,
-                                              });
-                                            }
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === "Enter") {
-                                              (
-                                                e.target as HTMLInputElement
-                                              ).blur();
-                                            }
-                                          }}
-                                          className="w-12 h-5 text-xs font-bold text-center bg-transparent border-none outline-none focus:ring-0"
-                                          title="Ubah total jumlah unit/pcs"
-                                        />
-                                        <select
-                                          key={`satuan-${item.id}-${item.satuan}`}
-                                          value={item.satuan || "set"}
-                                          disabled={isPending}
-                                          onChange={(e) => {
-                                            const val = e.target.value;
-                                            if (val !== item.satuan) {
-                                              handleDetailChange(item.id, {
-                                                satuan: val,
-                                              });
-                                            }
-                                          }}
-                                          className="h-5 text-xs font-semibold text-muted-foreground bg-transparent border-none outline-none focus:ring-0 cursor-pointer p-0 pr-1"
-                                          title="Pilih satuan komponen"
-                                        >
-                                          <option value="set">set</option>
-                                          <option value="unit">unit</option>
-                                          <option value="pcs">pcs</option>
-                                          <option value="mtr">mtr</option>
-                                          <option value="lot">lot</option>
-                                          <option value="batang">batang</option>
-                                          <option value="lembar">lembar</option>
-                                          <option value="kg">kg</option>
-                                        </select>
-                                      </div>
                                     </div>
-                                  </td>
-                                  {[
-                                    {
-                                      key: "cuttingQty",
-                                      val:
-                                        item.cuttingQty ??
-                                        (item.cuttingDone ? item.qty || 1 : 0),
-                                    },
-                                    {
-                                      key: "assemblyQty",
-                                      val:
-                                        item.assemblyQty ??
-                                        (item.assemblyDone
-                                          ? item.qty || 1
-                                          : 0),
-                                    },
-                                    {
-                                      key: "weldingQty",
-                                      val:
-                                        item.weldingQty ??
-                                        (item.weldingDone ? item.qty || 1 : 0),
-                                    },
-                                    {
-                                      key: "paintingQty",
-                                      val:
-                                        item.paintingQty ??
-                                        (item.paintingDone ? item.qty || 1 : 0),
-                                    },
-                                    {
-                                      key: "packagingQty",
-                                      val:
-                                        item.packagingQty ??
-                                        (item.packagingDone
-                                          ? item.qty || 1
-                                          : 0),
-                                    },
-                                  ].map((stg) => {
-                                    const maxQty = Math.max(1, item.qty || 1);
-                                    const isStageDone =
-                                      stg.val >= maxQty && maxQty > 0;
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[9px] font-semibold uppercase px-1.5 py-0 border-blue-200 text-blue-600 bg-blue-50/50"
+                                    >
+                                      STRUCTURE
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-center font-semibold">
+                                    {qty} {item.satuan || "set"}
+                                  </TableCell>
 
-                                    const stageMapName: Record<string, string> =
-                                      {
-                                        cuttingQty: "CUTTING",
-                                        assemblyQty: "ASSEMBLY",
-                                        weldingQty: "WELDING",
-                                        paintingQty: "PAINTING",
-                                        packagingQty: "PACKAGING",
-                                      };
-                                    const stgStageName = stageMapName[stg.key];
-                                    const stgCp = (
-                                      unit.qcCheckpoints || []
-                                    ).find(
-                                      (cp: any) =>
-                                        cp.itemId === item.id &&
-                                        cp.stage?.toUpperCase() ===
-                                          stgStageName &&
-                                        (cp.status === "FAIL" ||
-                                          cp.status === "ON_HOLD"),
-                                    );
-                                    const isStgHold =
-                                      stgCp?.status === "ON_HOLD";
-                                    const isStgFail = stgCp?.status === "FAIL";
+                                  {/* C/D Checkbox */}
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center">
+                                      <Checkbox
+                                        checked={isCDChecked}
+                                        onCheckedChange={(checked) =>
+                                          setStageDocDialogData({
+                                            open: true,
+                                            unitId: unit.id,
+                                            unitName: unit.name,
+                                            componentId: item.id,
+                                            componentName: item.name,
+                                            stage: "CUTTING",
+                                            stageLabel: "Cutting (C/D)",
+                                            currentQty: item.cuttingQty || 0,
+                                            totalQty: qty,
+                                            isInitiallyChecked: !!checked,
+                                          })
+                                        }
+                                        disabled={isPending}
+                                        className="cursor-pointer data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+                                      />
+                                    </div>
+                                  </TableCell>
 
-                                    return (
-                                      <td
-                                        key={stg.key}
-                                        className="text-center py-2"
-                                      >
-                                        <div className="flex items-center justify-center gap-1">
-                                          <Input
-                                            type="number"
-                                            min={0}
-                                            max={maxQty}
-                                            key={`${item.id}-${stg.key}-${stg.val}`}
-                                            defaultValue={stg.val}
-                                            disabled={isPending}
-                                            onBlur={(e) => {
-                                              const newV = Math.min(
-                                                maxQty,
-                                                Math.max(
-                                                  0,
-                                                  Number(e.target.value) || 0,
-                                                ),
-                                              );
-                                              if (newV !== stg.val) {
-                                                handleStageQtyChange(
-                                                  item.id,
-                                                  stg.key,
-                                                  newV,
-                                                );
-                                              }
-                                            }}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") {
-                                                (
-                                                  e.target as HTMLInputElement
-                                                ).blur();
-                                              }
-                                            }}
-                                            className={cn(
-                                              "w-14 h-7 text-xs font-semibold text-center rounded-lg border transition-all p-0",
-                                              isStgHold
-                                                ? "border-amber-500/90 bg-amber-500/20 text-amber-800 dark:text-amber-300 font-bold shadow-xs ring-1 ring-amber-500/50"
-                                                : isStgFail
-                                                  ? "border-rose-500/90 bg-rose-500/20 text-rose-800 dark:text-rose-300 font-bold shadow-xs ring-1 ring-rose-500/50 animate-pulse"
-                                                  : isStageDone
-                                                    ? "border-emerald-500/80 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold shadow-xs ring-1 ring-emerald-500/30"
-                                                    : "border-border/80 bg-background/80 focus:border-primary focus:ring-1 focus:ring-primary",
-                                            )}
-                                            title={
-                                              isStgHold
-                                                ? `⏸️ ON HOLD / Revisi Drawing (Tahap ${stgStageName})`
-                                                : isStgFail
-                                                  ? `🛑 Ditolak QC / Perlu Revisi (Tahap ${stgStageName})`
-                                                  : `Jumlah selesai tahap ini (Max: ${maxQty})`
-                                            }
-                                          />
-                                          <span
-                                            className={cn(
-                                              "text-sm font-semibold select-none transition-colors",
-                                              isStageDone
-                                                ? "text-emerald-700 dark:text-emerald-300 font-semibold"
-                                                : "text-muted-foreground/80",
-                                            )}
-                                          >
-                                            /{maxQty}
-                                          </span>
-                                        </div>
-                                      </td>
-                                    );
-                                  })}
-                                  <td className="text-right">
-                                    <span
+                                  {/* Sett Checkbox */}
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center">
+                                      <Checkbox
+                                        checked={isSettChecked}
+                                        onCheckedChange={(checked) =>
+                                          setStageDocDialogData({
+                                            open: true,
+                                            unitId: unit.id,
+                                            unitName: unit.name,
+                                            componentId: item.id,
+                                            componentName: item.name,
+                                            stage: "SETTING",
+                                            stageLabel: "Setting",
+                                            currentQty: item.settingQty || 0,
+                                            totalQty: qty,
+                                            isInitiallyChecked: !!checked,
+                                          })
+                                        }
+                                        disabled={isPending}
+                                        className="cursor-pointer data-[state=checked]:bg-amber-600 data-[state=checked]:border-amber-600"
+                                      />
+                                    </div>
+                                  </TableCell>
+
+                                  {/* Weld Checkbox */}
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center">
+                                      <Checkbox
+                                        checked={isWeldChecked}
+                                        onCheckedChange={(checked) =>
+                                          setStageDocDialogData({
+                                            open: true,
+                                            unitId: unit.id,
+                                            unitName: unit.name,
+                                            componentId: item.id,
+                                            componentName: item.name,
+                                            stage: "WELDING",
+                                            stageLabel: "Welding",
+                                            currentQty: item.weldingQty || 0,
+                                            totalQty: qty,
+                                            isInitiallyChecked: !!checked,
+                                          })
+                                        }
+                                        disabled={isPending}
+                                        className="cursor-pointer data-[state=checked]:bg-purple-600 data-[state=checked]:border-purple-600"
+                                      />
+                                    </div>
+                                  </TableCell>
+
+                                  {/* Finish Checkbox */}
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center">
+                                      <Checkbox
+                                        checked={isFinChecked}
+                                        onCheckedChange={(checked) =>
+                                          setStageDocDialogData({
+                                            open: true,
+                                            unitId: unit.id,
+                                            unitName: unit.name,
+                                            componentId: item.id,
+                                            componentName: item.name,
+                                            stage: "FINISHING",
+                                            stageLabel: "Finishing",
+                                            currentQty: item.finishingQty || 0,
+                                            totalQty: qty,
+                                            isInitiallyChecked: !!checked,
+                                          })
+                                        }
+                                        disabled={isPending}
+                                        className="cursor-pointer data-[state=checked]:bg-teal-600 data-[state=checked]:border-teal-600"
+                                      />
+                                    </div>
+                                  </TableCell>
+
+                                  {/* Paint Checkbox */}
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center">
+                                      <Checkbox
+                                        checked={isPaintChecked}
+                                        onCheckedChange={(checked) =>
+                                          setStageDocDialogData({
+                                            open: true,
+                                            unitId: unit.id,
+                                            unitName: unit.name,
+                                            componentId: item.id,
+                                            componentName: item.name,
+                                            stage: "PAINTING",
+                                            stageLabel: "Painting",
+                                            currentQty: item.paintingQty || 0,
+                                            totalQty: qty,
+                                            isInitiallyChecked: !!checked,
+                                          })
+                                        }
+                                        disabled={isPending}
+                                        className="cursor-pointer data-[state=checked]:bg-orange-600 data-[state=checked]:border-orange-600"
+                                      />
+                                    </div>
+                                  </TableCell>
+
+                                  {/* Pack Checkbox */}
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center">
+                                      <Checkbox
+                                        checked={isPackChecked}
+                                        onCheckedChange={(checked) =>
+                                          setStageDocDialogData({
+                                            open: true,
+                                            unitId: unit.id,
+                                            unitName: unit.name,
+                                            componentId: item.id,
+                                            componentName: item.name,
+                                            stage: "PACKAGING",
+                                            stageLabel: "Packaging",
+                                            currentQty: item.packagingQty || 0,
+                                            totalQty: qty,
+                                            isInitiallyChecked: !!checked,
+                                          })
+                                        }
+                                        disabled={isPending}
+                                        className="cursor-pointer data-[state=checked]:bg-emerald-600 data-[state=checked]:border-emerald-600"
+                                      />
+                                    </div>
+                                  </TableCell>
+
+                                  {/* Progress % Box */}
+                                  <TableCell className="text-center">
+                                    <div className="inline-flex items-center justify-center border border-border/80 bg-background/80 px-2 py-0.5 rounded-md text-[11px] font-bold text-foreground min-w-16">
+                                      {itemProgress.toFixed(2)}%
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+
+                                {/* Baris Sub-Komponen di Bawah Komponen Utama */}
+                                {hasSubItems &&
+                                  item.subItems.map((sub: any, subIdx: number) => (
+                                    <TableRow
+                                      key={sub.id || `${item.id}-sub-${subIdx}`}
                                       className={cn(
-                                        "text-sm font-semibold",
-                                        Number(item.progressPercent) >= 100
-                                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                          : "text-primary",
+                                        "bg-muted/15 border-b border-border/30 hover:bg-muted/30 transition-colors text-xs",
+                                        sub.isCompleted ? "bg-emerald-500/5" : ""
                                       )}
                                     >
-                                      {Number(item.progressPercent).toFixed(1)}%
-                                    </span>
-                                  </td>
-                                  <td className="text-center">
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      disabled={deletingItemId === item.id}
-                                      onClick={() =>
-                                        setDeleteConfirmItem({
-                                          id: item.id,
-                                          name: item.name,
-                                        })
-                                      }
-                                      className="h-7 w-7 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-lg cursor-pointer"
-                                      title="Hapus komponen ini"
-                                    >
-                                      {deletingItemId === item.id ? (
-                                        <Loader2 className="w-3 h-3 animate-spin text-destructive" />
-                                      ) : (
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      )}
-                                    </Button>
-                                  </td>
-                                </TableRow>
-                              ),
-                            )}
-                          </TableBody>
-                          {(() => {
-                            const sItems = unit.structureItems || [];
-                            const totalUnitQty = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc + Math.max(1, Number(item.qty || 1)),
-                              0,
-                            );
+                                      {/* Sub No */}
+                                      <TableCell className="text-center font-bold text-primary/80 p-1.5 text-[11px]">
+                                        <span className="font-mono text-muted-foreground/40 mr-1 select-none">└─</span>
+                                        {itemIdx + 1}.{subIdx + 1}
+                                      </TableCell>
 
-                            const sumCutting = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc +
-                                Number(
-                                  item.cuttingQty ??
-                                    (item.cuttingDone ? item.qty || 1 : 0),
-                                ),
-                              0,
-                            );
-                            const sumSetting = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc +
-                                Number(
-                                  item.settingQty ??
-                                    (item.settingDone ? item.qty || 1 : 0),
-                                ),
-                              0,
-                            );
-                            const sumWelding = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc +
-                                Number(
-                                  item.weldingQty ??
-                                    (item.weldingDone ? item.qty || 1 : 0),
-                                ),
-                              0,
-                            );
-                            const sumFinishing = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc +
-                                Number(
-                                  item.finishingQty ??
-                                    (item.finishingDone ? item.qty || 1 : 0),
-                                ),
-                              0,
-                            );
-                            const sumPainting = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc +
-                                Number(
-                                  item.paintingQty ??
-                                    (item.paintingDone ? item.qty || 1 : 0),
-                                ),
-                              0,
-                            );
-                            const sumPackaging = sItems.reduce(
-                              (acc: number, item: any) =>
-                                acc +
-                                Number(
-                                  item.packagingQty ??
-                                    (item.packagingDone ? item.qty || 1 : 0),
-                                ),
-                              0,
-                            );
+                                      {/* Sub-Part Name & Details (Tanpa Coretan) */}
+                                      <TableCell className="font-medium py-1.5 px-3">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[9px] px-1 py-0 h-3.5 bg-background text-muted-foreground font-semibold border-border/80"
+                                          >
+                                            Sub-Part
+                                          </Badge>
+                                          <span className="text-xs text-foreground font-medium">
+                                            {sub.name}
+                                          </span>
+                                          {sub.dimension && (
+                                            <span className="text-[10px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded font-mono">
+                                              {sub.dimension}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </TableCell>
 
-                            const cuttingPct =
-                              totalUnitQty > 0
-                                ? (sumCutting / totalUnitQty) * 15
-                                : 0;
-                            const settingPct =
-                              totalUnitQty > 0
-                                ? (sumSetting / totalUnitQty) * 35
-                                : 0;
-                            const weldingPct =
-                              totalUnitQty > 0
-                                ? (sumWelding / totalUnitQty) * 40
-                                : 0;
-                            const finishingPct =
-                              totalUnitQty > 0
-                                ? (sumFinishing / totalUnitQty) * 5
-                                : 0;
-                            const paintingPct =
-                              totalUnitQty > 0
-                                ? (sumPainting / totalUnitQty) * 3.5
-                                : 0;
-                            const packagingPct =
-                              totalUnitQty > 0
-                                ? (sumPackaging / totalUnitQty) * 1.5
-                                : 0;
+                                      {/* Kategori */}
+                                      <TableCell className="text-center">
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[9px] font-medium px-1.5 py-0 border-blue-200/60 text-blue-600/80 bg-blue-50/30"
+                                        >
+                                          SUB-PART
+                                        </Badge>
+                                      </TableCell>
 
-                            const totalUnitPercent =
-                              cuttingPct +
-                              settingPct +
-                              weldingPct +
-                              finishingPct +
-                              paintingPct +
-                              packagingPct;
+                                      {/* Qty */}
+                                      <TableCell className="text-center text-muted-foreground text-xs font-medium">
+                                        {sub.qty || 1} {sub.satuan || "pcs"}
+                                      </TableCell>
 
-                            return (
-                              <TableFooter className="bg-muted/30 border-t-2 border-border/70">
-                                {/* Row 1: Total */}
-                                <TableRow className="hover:bg-transparent font-bold text-xs">
-                                  <TableCell className="text-center py-2.5 w-12"></TableCell>
-                                  <TableCell className="py-2.5">
-                                    <div className="flex items-center justify-between gap-2 px-1">
-                                      <span className="font-semibold text-sm text-foreground">
-                                        Total
-                                      </span>
-                                      <div className="flex items-center justify-center border border-border/70 rounded-full bg-muted/60 px-2.5 py-0.5 shrink-0 min-w-14">
-                                        <span className="text-sm font-semibold text-foreground">
-                                          {totalUnitQty}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      sumCutting >= totalUnitQty &&
-                                        totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {sumCutting}
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      sumSetting >= totalUnitQty &&
-                                        totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {sumSetting}
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      sumWelding >= totalUnitQty &&
-                                        totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {sumWelding}
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      sumFinishing >= totalUnitQty &&
-                                        totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {sumFinishing}
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      sumPainting >= totalUnitQty &&
-                                        totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {sumPainting}
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      sumPackaging >= totalUnitQty &&
-                                        totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {sumPackaging}
-                                  </TableCell>
-                                  <TableCell className="text-right py-2.5 w-24"></TableCell>
-                                  <TableCell className="text-center py-2.5 w-12"></TableCell>
-                                </TableRow>
+                                      {/* C/D, Sett, Weld, Finish, Paint, Pack Columns: Kosong */}
+                                      <TableCell className="p-1.5" />
+                                      <TableCell className="p-1.5" />
+                                      <TableCell className="p-1.5" />
+                                      <TableCell className="p-1.5" />
+                                      <TableCell className="p-1.5" />
+                                      <TableCell className="p-1.5" />
 
-                                {/* Row 2: PROSENTASE */}
-                                <TableRow className="hover:bg-transparent font-semibold text-sm bg-muted/50 border-t border-border/40">
-                                  <TableCell className="text-center py-2.5 w-12"></TableCell>
-                                  <TableCell className="py-2.5 font-semibold text-sm pl-3 text-primary">
-                                    Prosentase (%)
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      cuttingPct >= 15 && totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {cuttingPct.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      settingPct >= 35 && totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {settingPct.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      weldingPct >= 40 && totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {weldingPct.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      finishingPct >= 5 && totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {finishingPct.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      paintingPct >= 3.5 && totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {paintingPct.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-center font-semibold text-sm py-2.5",
-                                      packagingPct >= 1.5 && totalUnitQty > 0
-                                        ? "text-emerald-600 dark:text-emerald-400 font-semibold"
-                                        : "text-foreground",
-                                    )}
-                                  >
-                                    {packagingPct.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell
-                                    className={cn(
-                                      "text-right font-semibold text-sm py-2.5 pr-0",
-                                      totalUnitPercent >= 100
-                                        ? "text-emerald-600 dark:text-emerald-400"
-                                        : "text-primary",
-                                    )}
-                                  >
+                                      {/* Kolom Paling Kanan (Progress): Checklist Penyelesaian Sub-Part */}
+                                      <TableCell className="text-center p-1.5">
+                                        <div className="flex items-center justify-center">
+                                          <Checkbox
+                                            checked={sub.isCompleted}
+                                            onCheckedChange={() =>
+                                              handleToggleSubItem(sub.id, sub.isCompleted)
+                                            }
+                                            disabled={isPending}
+                                            className="cursor-pointer h-4 w-4 data-[state=checked]:bg-emerald-600 data-[state=checked]:border-emerald-600"
+                                            title={sub.isCompleted ? "Selesai (Klik untuk batal)" : "Tandai Selesai"}
+                                          />
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                              </React.Fragment>
+                            );
+                          })}
+                        </TableBody>
+
+                        {/* Unit Table Footer */}
+                        {(() => {
+                          const totalUnitPercent =
+                            unit.structureItems.length > 0
+                              ? unit.structureItems.reduce(
+                                  (sum: number, it: any) =>
+                                    sum + Number(it.progressPercent || 0),
+                                  0,
+                                ) / unit.structureItems.length
+                              : 0;
+
+                          return (
+                            <TableFooter className="bg-muted/40 font-bold text-xs">
+                              <TableRow>
+                                <TableCell
+                                  colSpan={4}
+                                  className="text-right font-bold uppercase py-2.5"
+                                >
+                                  Rata-Rata Progres {unit.name}
+                                </TableCell>
+                                <TableCell colSpan={6} className="py-2.5"></TableCell>
+                                <TableCell className="text-center font-black text-primary py-2.5 text-xs">
+                                  <div className="inline-flex items-center justify-center border border-primary/40 bg-primary/10 text-primary px-2.5 py-0.5 rounded-md font-black text-xs min-w-16">
                                     {totalUnitPercent.toFixed(2)}%
-                                  </TableCell>
-                                  <TableCell className="text-center py-2.5 w-12"></TableCell>
-                                </TableRow>
-                              </TableFooter>
-                            );
-                          })()}
-                        </Table>
-                      ) : (
-                        <div className="p-6 text-center text-xs text-muted-foreground">
-                          Belum ada komponen struktur untuk unit{" "}
-                          <strong>{unit.name}</strong>.
-                        </div>
-                      )}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            </TableFooter>
+                          );
+                        })()}
+                      </Table>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
             );
           })}
-        </CardContent>
-      </Card>
-
-      {/* Dialog Quick Add Components with Dynamic Fields */}
-      <Dialog
-        open={!!addModalUnit}
-        onOpenChange={(open) => {
-          if (!open) {
-            setAddModalUnit(null);
-            setItemsList([{ name: "", qty: 1, satuan: "set" }]);
-            setBulkText("");
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-200! rounded-2xl border-border/80">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-primary font-bold text-base">
-              <Plus className="w-5 h-5 text-primary" />
-              Tambah Komponen Struktur
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              Tambahkan komponen rangka ke <strong>{addModalUnit?.name}</strong>{" "}
-              lengkap dengan jumlah dan satuan.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3 py-2 max-h-87.5 overflow-y-auto pr-1">
-            {/* Field Header */}
-            <div className="flex items-center gap-2 px-1 text-xs font-bold text-muted-foreground">
-              <span className="flex-1">Nama Komponen Rangka</span>
-              <span className="w-20 text-center">Jumlah</span>
-              <span className="w-24 text-center">Satuan</span>
-              <span className="w-8"></span>
-            </div>
-
-            {itemsList.map((row, idx) => (
-              <div key={idx} className="flex items-center gap-2">
-                <Input
-                  type="text"
-                  placeholder={`Komponen ${idx + 1} (mis: Room Hopper)`}
-                  value={row.name}
-                  onChange={(e) => handleRowChange(idx, "name", e.target.value)}
-                  className="flex-1 h-9 rounded-xl text-xs bg-background/50 focus:bg-background"
-                />
-                <Input
-                  type="number"
-                  min={1}
-                  value={row.qty}
-                  onChange={(e) =>
-                    handleRowChange(idx, "qty", Number(e.target.value))
-                  }
-                  className="w-20 h-9 rounded-xl text-xs text-center bg-background/50 focus:bg-background"
-                />
-                <select
-                  value={row.satuan || "set"}
-                  onChange={(e) =>
-                    handleRowChange(idx, "satuan", e.target.value)
-                  }
-                  className="w-24 h-9 rounded-xl text-xs font-semibold bg-background/50 focus:bg-background border border-input px-2 cursor-pointer text-foreground"
-                >
-                  <option value="set">set</option>
-                  <option value="unit">unit</option>
-                  <option value="pcs">pcs</option>
-                  <option value="mtr">mtr</option>
-                  <option value="lot">lot</option>
-                  <option value="batang">batang</option>
-                  <option value="lembar">lembar</option>
-                  <option value="kg">kg</option>
-                </select>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleRemoveRow(idx)}
-                  className="h-9 w-9 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 rounded-xl shrink-0 cursor-pointer"
-                  title="Hapus baris ini"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            ))}
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleAddRow}
-              className="w-full h-9 border-dashed border-primary/40 text-primary hover:bg-primary/10 rounded-xl gap-1.5 font-semibold text-xs cursor-pointer shadow-none mt-2"
-            >
-              <Plus className="w-3.5 h-3.5" /> Tambah Baris Komponen Baru
-            </Button>
-
-            <details className="text-xs text-muted-foreground pt-2">
-              <summary className="cursor-pointer font-medium hover:text-foreground text-[11px] select-none">
-                + Atau paste banyak nama komponen sekaligus (Multi-baris)
-              </summary>
-              <Textarea
-                placeholder="Contoh:&#10;Room Hopper&#10;Extra Hopper&#10;Structure Hopper"
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                className="min-h-20 rounded-xl text-xs bg-background/50 focus:bg-background resize-y mt-2"
-              />
-            </details>
-          </div>
-
-          <DialogFooter className="pt-2 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setAddModalUnit(null);
-                setItemsList([{ name: "", qty: 1, satuan: "set" }]);
-                setBulkText("");
-              }}
-              disabled={isAddingPending}
-              className="text-xs h-9 px-4 rounded-xl cursor-pointer"
-            >
-              Batal
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleAddItemsSubmit}
-              disabled={
-                isAddingPending ||
-                (itemsList.every((r) => !r.name.trim()) && !bulkText.trim())
-              }
-              className="text-xs h-9 px-4 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-xs cursor-pointer"
-            >
-              {isAddingPending && (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-              )}
-              Simpan Komponen
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Confirmation Dialog for Deleting Structure Item */}
-      <Dialog
-        open={!!deleteConfirmItem}
-        onOpenChange={(open) => {
-          if (!open && !deletingItemId) setDeleteConfirmItem(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-105 rounded-2xl border-border/80">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive font-bold text-base">
-              <Trash2 className="w-5 h-5 text-destructive" />
-              Hapus Komponen Struktur
-            </DialogTitle>
-            <DialogDescription className="text-xs pt-1">
-              Apakah Anda yakin ingin menghapus komponen{" "}
-              <strong className="text-foreground">
-                "{deleteConfirmItem?.name}"
-              </strong>
-              ? Tindakan ini akan memperbarui kalkulasi progress & S-Curve
-              secara otomatis.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter className="pt-3 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteConfirmItem(null)}
-              disabled={!!deletingItemId}
-              className="text-xs h-9 px-4 rounded-xl cursor-pointer"
-            >
-              Batal
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="destructive"
-              onClick={handleDeleteItem}
-              disabled={!!deletingItemId}
-              className="text-xs h-9 px-4 rounded-xl font-bold cursor-pointer"
-            >
-              {deletingItemId ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  Menghapus...
-                </>
-              ) : (
-                "Ya, Hapus Komponen"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </Accordion>
+      </div>
 
       {/* QC Revision Detail Dialog */}
       {selectedRevisionData && (
@@ -1279,6 +1225,43 @@ export function StructureProgressTable({ units }: { units: any[] }) {
           itemName={selectedRevisionData.itemName}
           stageName={selectedRevisionData.stageName}
           unitName={selectedRevisionData.unitName}
+        />
+      )}
+
+      {/* Stage Progress Documentation Dialog (Optional Notes & Photos) */}
+      {stageDocDialogData && currentProject && (
+        <StageProgressDialog
+          open={stageDocDialogData.open}
+          onOpenChange={(open) => {
+            if (!open) setStageDocDialogData(null);
+          }}
+          componentType="STRUCTURE"
+          projectId={currentProject.id}
+          unitId={stageDocDialogData.unitId}
+          unitName={stageDocDialogData.unitName}
+          componentId={stageDocDialogData.componentId}
+          componentName={stageDocDialogData.componentName}
+          stage={stageDocDialogData.stage}
+          stageLabel={stageDocDialogData.stageLabel}
+          currentQty={stageDocDialogData.currentQty}
+          totalQty={stageDocDialogData.totalQty}
+          isInitiallyChecked={stageDocDialogData.isInitiallyChecked}
+          onSuccess={() => {
+            router.refresh();
+          }}
+        />
+      )}
+
+      {/* Progress Photo Dialog */}
+      {currentProject && (
+        <ProgressPhotoDialog
+          isOpen={photoDialogOpen}
+          onOpenChange={setPhotoDialogOpen}
+          projectId={currentProject.id}
+          projectName={currentProject.projectName}
+          unitId={selectedPhotoUnit.id}
+          unitName={selectedPhotoUnit.name}
+          category="FABRICATION_STRUCTURE"
         />
       )}
     </div>

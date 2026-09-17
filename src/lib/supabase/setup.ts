@@ -24,6 +24,8 @@ export async function ensureBucketExists() {
         "application/vnd.ms-excel",
         "image/jpeg",
         "image/png",
+        "image/webp",
+        "image/heic",
         "application/zip",
       ],
       fileSizeLimit: 26214400, // 25MB

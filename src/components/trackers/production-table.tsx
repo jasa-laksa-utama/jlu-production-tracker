@@ -57,7 +57,11 @@ import {
   Percent,
   BarChart3,
   Settings2,
+  SlidersHorizontal,
   Check,
+  Building2,
+  HardHat,
+  Camera,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -118,12 +122,18 @@ import { SCurveChart } from "./s-curve-chart";
 import { MasterScheduleTable } from "./master-schedule-table";
 import { StructureProgressTable } from "./structure-progress-table";
 import { MechanicalProgressTable } from "./mechanical-progress-table";
+import { ErectionProgressTable } from "./erection-progress-table";
+import { ConveyorManagementTable } from "./conveyor-management-table";
 import { SummaryProgressTable } from "./summary-progress-table";
+import { ManualPhaseProgressTable } from "./manual-phase-progress-table";
+import { TeamAndMemoManager } from "./team-and-memo-manager";
+import { MarkingManagerPanel } from "./marking-manager-dialog";
 import {
   ProductionRevisionQuickDialog,
   getProjectActiveRevisions,
 } from "./production-revision-quick-dialog";
-import { ShieldAlert } from "lucide-react";
+import { ProgressPhotoDialog } from "./progress-photo-dialog";
+import { ShieldAlert, Tag } from "lucide-react";
 
 // Import real backend server actions
 import {
@@ -391,6 +401,12 @@ export function ProductionTable({
   // Quick Revision Summary Dialog state
   const [selectedRevisionSummaryProject, setSelectedRevisionSummaryProject] =
     useState<any | null>(null);
+
+  // Progress Photo Dialog state
+  const [selectedPhotoProject, setSelectedPhotoProject] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   // Edit Masterplan Phase progress modal states
   const [editPhaseModal, setEditPhaseModal] = useState<{
@@ -1628,12 +1644,15 @@ export function ProductionTable({
                           ownerId={project.id}
                           ownerType="PROJECT"
                           leadId={project.leadId}
+                          projectData={project}
+                          readOnly={true}
                           categories={[
                             "BRIEF",
                             "DRAWING",
                             "MECH_PART_LIST",
-                            "PRODUCTION",
-                            "QC",
+                            "ASSEMBLY_LIST",
+                            "BOQ",
+                            "SPB",
                             "OTHER",
                           ]}
                           globalDriveUrl={project.globalDriveUrl}
@@ -1790,16 +1809,6 @@ export function ProductionTable({
                                           icon: TrendingUp,
                                         },
                                         {
-                                          id: "progres-tahapan",
-                                          label: "Persentase Progres",
-                                          icon: Percent,
-                                        },
-                                        {
-                                          id: "documents",
-                                          label: "Dokumen",
-                                          icon: FolderOpen,
-                                        },
-                                        {
                                           id: "structure",
                                           label: "Fabrikasi Struktur",
                                           icon: Hammer,
@@ -1810,8 +1819,28 @@ export function ProductionTable({
                                           icon: Wrench,
                                         },
                                         {
+                                          id: "erection",
+                                          label: "Erection",
+                                          icon: Building2,
+                                        },
+                                        {
+                                          id: "marking",
+                                          label: "Kode Marking",
+                                          icon: Tag,
+                                        },
+                                        {
+                                          id: "conveyor-management",
+                                          label: "Kelola Unit & Komponen",
+                                          icon: SlidersHorizontal,
+                                        },
+                                        {
+                                          id: "manual-progress",
+                                          label: "Update Progres Lapangan",
+                                          icon: HardHat,
+                                        },
+                                        {
                                           id: "summary",
-                                          label: "Rekap Progress",
+                                          label: "Summary Progress",
                                           icon: BarChart3,
                                         },
                                         {
@@ -1930,6 +1959,23 @@ export function ProductionTable({
                                         </Button>
                                       );
                                     })()}
+
+                                    {/* Tombol Akses Dokumentasi Foto (di kanan Ringkasan Revisi) */}
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() =>
+                                        setSelectedPhotoProject({
+                                          id: project.id,
+                                          name: project.projectName,
+                                        })
+                                      }
+                                      className="h-9 text-xs font-semibold px-3 rounded-xl shadow-xs border-border/60 hover:bg-muted text-foreground cursor-pointer flex items-center gap-1.5 shrink-0"
+                                      title="Dokumentasi Foto Produksi"
+                                    >
+                                      <Camera className="w-3.5 h-3.5 text-primary" />
+                                      <span>Dokumentasi Foto</span>
+                                    </Button>
                                   </div>
 
                                   {/* Right: Action Buttons Group */}
@@ -1982,433 +2028,51 @@ export function ProductionTable({
                                       <MasterScheduleTable project={project} />
                                     );
                                   }
-                                  if (activeTab === "progres-tahapan") {
-                                    return (
-                                      <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
-                                        <CardHeader className="bg-linear-to-r from-primary/5 via-transparent to-primary/5 pt-4 px-6 pb-4 border-b border-border/20">
-                                          <CardTitle className="text-lg font-bold gap-1.5 flex items-center">
-                                            <Layers className="w-5 h-5 text-primary" />{" "}
-                                            Persentase Progress per Tahapan
-                                          </CardTitle>
-                                          <CardDescription className="text-xs text-muted-foreground/80">
-                                            Status kemajuan pekerjaan proyek
-                                            untuk setiap tahapan/fase produksi
-                                            berdasarkan masterplan.
-                                          </CardDescription>
-                                        </CardHeader>
-                                        <CardContent className="pt-6">
-                                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                                            {getStageAverageProgress(
-                                              project,
-                                            ).map((sa) => (
-                                              <div
-                                                key={sa.name}
-                                                className="flex flex-col p-4 rounded-xl border border-border/50 bg-background/20 backdrop-blur-xs justify-between gap-3 relative group"
-                                              >
-                                                <div className="flex justify-between items-start gap-2">
-                                                  <div className="flex flex-col">
-                                                    <span className="font-bold text-sm text-foreground leading-snug">
-                                                      {sa.name}
-                                                    </span>
-                                                    {sa.weightPercent !==
-                                                      undefined && (
-                                                      <span className="text-[10px] text-muted-foreground font-semibold mt-0.5">
-                                                        Bobot:{" "}
-                                                        {sa.weightPercent}%
-                                                      </span>
-                                                    )}
-                                                  </div>
-                                                  <div className="flex items-center gap-2">
-                                                    <span className="font-extrabold text-base text-primary font-mono shrink-0">
-                                                      {sa.progress}%
-                                                    </span>
-                                                    {sa.id && (
-                                                      <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg cursor-pointer shrink-0"
-                                                        title="Update Progress Tahapan"
-                                                        onClick={() => {
-                                                          setEditPhaseModal({
-                                                            phaseId: sa.id!,
-                                                            phaseName: sa.name,
-                                                            currentProgress:
-                                                              sa.progress,
-                                                            code: sa.code,
-                                                          });
-                                                          setEditPhaseValue(
-                                                            sa.progress,
-                                                          );
-                                                          setEditPhaseNotes("");
-                                                        }}
-                                                      >
-                                                        <Pencil className="w-3.5 h-3.5" />
-                                                      </Button>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                                <div className="w-full bg-muted dark:bg-muted/40 rounded-full h-1.5 overflow-hidden">
-                                                  <div
-                                                    className={cn(
-                                                      "h-full rounded-full transition-all duration-300",
-                                                      sa.progress === 100
-                                                        ? "bg-emerald-500"
-                                                        : sa.progress > 0
-                                                          ? "bg-primary"
-                                                          : "bg-muted-foreground/20",
-                                                    )}
-                                                    style={{
-                                                      width: `${sa.progress}%`,
-                                                    }}
-                                                  />
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        </CardContent>
-                                      </Card>
-                                    );
-                                  }
-                                  if (activeTab === "documents") {
-                                    // Gather unique documents from project and its lead
-                                    const allDocs = [
-                                      ...(project.documents || []),
-                                      ...(project.lead?.documents || []),
-                                    ];
-                                    const uniqueDocs = Array.from(
-                                      new Map(
-                                        allDocs.map((doc: any) => [
-                                          doc.id,
-                                          doc,
-                                        ]),
-                                      ).values(),
-                                    );
-
-                                    // 1. Drawing items:
-                                    const drawingDocs = uniqueDocs
-                                      .filter(
-                                        (d: any) =>
-                                          d.category?.toUpperCase() ===
-                                          "DRAWING",
-                                      )
-                                      .map((d: any) => ({
-                                        id: d.id,
-                                        label:
-                                          d.label ||
-                                          d.fileName ||
-                                          d.name ||
-                                          "Gambar Kerja",
-                                        version: `v${d.version || 1}`,
-                                        uploadedBy: d.uploadedBy || "System",
-                                        date: d.createdAt,
-                                        isSystem: false,
-                                        onClick: () => handleDownloadDoc(d),
-                                      }));
-
-                                    // 2. Mechanical Part List items:
-                                    const mechDocs = uniqueDocs
-                                      .filter(
-                                        (d: any) =>
-                                          d.category?.toUpperCase() ===
-                                          "MECH_PART_LIST",
-                                      )
-                                      .map((d: any) => ({
-                                        id: d.id,
-                                        label:
-                                          d.label ||
-                                          d.fileName ||
-                                          d.name ||
-                                          "Part List",
-                                        version: `v${d.version || 1}`,
-                                        uploadedBy: d.uploadedBy || "System",
-                                        date: d.createdAt,
-                                        isSystem: false,
-                                        onClick: () => handleDownloadDoc(d),
-                                      }));
-
-                                    // 3. BoQ items (Document Hub + BoQ database table records):
-                                    const boqHubDocs = uniqueDocs
-                                      .filter(
-                                        (d: any) =>
-                                          d.category?.toUpperCase() === "BOQ",
-                                      )
-                                      .map((d: any) => ({
-                                        id: d.id,
-                                        label:
-                                          d.label ||
-                                          d.fileName ||
-                                          d.name ||
-                                          "BoQ File",
-                                        version: `v${d.version || 1}`,
-                                        uploadedBy: d.uploadedBy || "System",
-                                        date: d.createdAt,
-                                        isSystem: false,
-                                        onClick: () => handleDownloadDoc(d),
-                                      }));
-
-                                    const boqDbDocs = (project.boqs || []).map(
-                                      (boq: any) => ({
-                                        id: boq.id,
-                                        label: `${boq.boqNumber} (System BoQ)`,
-                                        version: boq.boqStatus,
-                                        uploadedBy: boq.boqMakerName || "PPIC",
-                                        date: boq.createdAt,
-                                        isSystem: true,
-                                        onViewDetails: () => {
-                                          setViewingDetailType("BOQ");
-                                          setViewingDetailData({
-                                            ...boq,
-                                            projectName: project.projectName,
-                                          });
-                                        },
-                                        onClick: () => {
-                                          setPreviewPdfType("BOQ");
-                                          setPreviewPdfData({
-                                            project: {
-                                              ...project,
-                                              boqNumber: boq.boqNumber,
-                                              boqStatus: boq.boqStatus,
-                                              boqMakerName: boq.boqMakerName,
-                                              boqApprovedByPpic:
-                                                boq.boqApprovedByPpic,
-                                              boqApprovedByPm:
-                                                boq.boqApprovedByPm,
-                                              createdAt: boq.createdAt,
-                                            },
-                                            items: boq.boqItems.map(
-                                              (bi: any) => ({
-                                                itemId: bi.itemId,
-                                                itemCode:
-                                                  bi.item?.itemCode || "",
-                                                itemName:
-                                                  bi.item?.itemName || "",
-                                                itemTypeMerk:
-                                                  bi.item?.typeMerk || "",
-                                                qty: bi.qty,
-                                                unit: bi.unit,
-                                                price: Number(bi.price) || 0,
-                                                note: bi.note || "",
-                                              }),
-                                            ),
-                                          });
-                                        },
-                                      }),
-                                    );
-
-                                    const allBoqItems = [
-                                      ...boqHubDocs,
-                                      ...boqDbDocs,
-                                    ];
-
-                                    // 4. SPB items (Document Hub + SPB database table records):
-                                    const spbHubDocs = uniqueDocs
-                                      .filter(
-                                        (d: any) =>
-                                          d.category?.toUpperCase() === "SPB",
-                                      )
-                                      .map((d: any) => ({
-                                        id: d.id,
-                                        label:
-                                          d.label ||
-                                          d.fileName ||
-                                          d.name ||
-                                          "SPB File",
-                                        version: `v${d.version || 1}`,
-                                        uploadedBy: d.uploadedBy || "System",
-                                        date: d.createdAt,
-                                        isSystem: false,
-                                        onClick: () => handleDownloadDoc(d),
-                                      }));
-
-                                    const spbDbDocs = (project.spb || []).map(
-                                      (spb: any) => ({
-                                        id: spb.id,
-                                        label: `${spb.spbNumber} (System SPB)`,
-                                        version: spb.status.replace(/_/g, " "),
-                                        uploadedBy:
-                                          spb.makerName || "Engineering",
-                                        date: spb.createdAt,
-                                        isSystem: true,
-                                        onViewDetails: () => {
-                                          setViewingDetailType("SPB");
-                                          setViewingDetailData({
-                                            ...spb,
-                                            projectName: project.projectName,
-                                          });
-                                        },
-                                        onClick: () => {
-                                          setPreviewPdfType("SPB");
-                                          setPreviewPdfData({ spb, project });
-                                        },
-                                      }),
-                                    );
-
-                                    const allSpbItems = [
-                                      ...spbHubDocs,
-                                      ...spbDbDocs,
-                                    ];
-
-                                    const sections = [
-                                      {
-                                        label: "Drawing (Gambar Kerja)",
-                                        items: drawingDocs,
-                                      },
-                                      {
-                                        label: "Mechanical Part List",
-                                        items: mechDocs,
-                                      },
-                                      {
-                                        label: "Bill of Quantities (BoQ)",
-                                        items: allBoqItems,
-                                      },
-                                      {
-                                        label: "Surat Permintaan Barang (SPB)",
-                                        items: allSpbItems,
-                                      },
-                                    ];
-
-                                    return (
-                                      <Card className="border-border/50 shadow-xl bg-card/60 backdrop-blur-md overflow-hidden rounded-2xl pt-0">
-                                        <CardHeader className="bg-linear-to-r from-primary/5 via-transparent to-primary/5 pt-4 px-6 pb-4 border-b border-border/20 flex flex-row items-center justify-between">
-                                          <div className="space-y-1">
-                                            <CardTitle className="text-lg font-bold gap-1.5 flex items-center">
-                                              <FileText className="w-5 h-5 text-primary" />{" "}
-                                              Hub Dokumen Proyek
-                                            </CardTitle>
-                                            <CardDescription className="text-xs text-muted-foreground/80">
-                                              Lihat dan unduh berkas Drawing,
-                                              Mechanical Part List, BoQ, dan
-                                              dokumen SPB terkait proyek ini.
-                                            </CardDescription>
-                                          </div>
-
-                                          <DocumentManagerDialog
-                                            ownerId={project.id}
-                                            ownerType="PROJECT"
-                                            leadId={project.leadId}
-                                            categories={[
-                                              "BRIEF",
-                                              "DRAWING",
-                                              "MECH_PART_LIST",
-                                            ]}
-                                            trigger={
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs font-semibold gap-1.5 h-8 cursor-pointer rounded-lg border-primary/20 hover:bg-primary/5 text-primary bg-background shadow-none"
-                                              >
-                                                <FolderOpen className="w-3.5 h-3.5" />{" "}
-                                                Kelola Berkas
-                                              </Button>
-                                            }
-                                          />
-                                        </CardHeader>
-                                        <CardContent className="pt-6">
-                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            {sections.map((sect) => (
-                                              <div
-                                                key={sect.label}
-                                                className="border border-border/50 rounded-xl bg-background/20 p-4 space-y-3 flex flex-col justify-between"
-                                              >
-                                                <div className="space-y-2">
-                                                  <h5 className="font-semibold text-sm text-primary flex items-center justify-between border-b pb-1.5 border-border/40">
-                                                    <span>{sect.label}</span>
-                                                    <Badge
-                                                      variant="outline"
-                                                      className="h-6 px-1.5 text-[10px] font-semibold bg-muted border-border/40"
-                                                    >
-                                                      {sect.items.length} Berkas
-                                                    </Badge>
-                                                  </h5>
-
-                                                  {sect.items.length === 0 ? (
-                                                    <p className="text-[11px] text-muted-foreground/60 italic py-4 text-center">
-                                                      Belum ada file diunggah.
-                                                    </p>
-                                                  ) : (
-                                                    <div className="divide-y divide-border/30 max-h-45 overflow-y-auto pr-1">
-                                                      {sect.items.map(
-                                                        (
-                                                          item: any,
-                                                          idx: number,
-                                                        ) => (
-                                                          <div
-                                                            key={item.id}
-                                                            className="py-2 text-[11px] flex items-center justify-between gap-3 group"
-                                                          >
-                                                            <div className="min-w-0 flex-1 space-y-0.5">
-                                                              <p
-                                                                className="font-semibold text-foreground truncate"
-                                                                title={
-                                                                  item.label
-                                                                }
-                                                              >
-                                                                {idx + 1}.{" "}
-                                                                {item.label}
-                                                              </p>
-                                                              <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-                                                                <span className="uppercase font-medium text-[9px] px-1 bg-primary/10 text-primary rounded-xs">
-                                                                  {item.version}
-                                                                </span>
-                                                                <span>•</span>
-                                                                <span className="truncate">
-                                                                  Oleh:{" "}
-                                                                  {
-                                                                    item.uploadedBy
-                                                                  }
-                                                                </span>
-                                                              </p>
-                                                            </div>
-                                                            <div className="flex items-center gap-1 shrink-0">
-                                                              {item.isSystem && (
-                                                                <Button
-                                                                  variant="ghost"
-                                                                  size="sm"
-                                                                  onClick={
-                                                                    item.onViewDetails
-                                                                  }
-                                                                  className="h-7 px-2 rounded-lg text-primary hover:bg-primary/5 cursor-pointer text-[10px] font-bold gap-1 shrink-0"
-                                                                >
-                                                                  <Search className="w-3 h-3" />{" "}
-                                                                  Lihat
-                                                                </Button>
-                                                              )}
-                                                              <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                onClick={
-                                                                  item.onClick
-                                                                }
-                                                                className="h-7 w-7 rounded-lg text-primary hover:bg-primary/5 cursor-pointer"
-                                                                title="Pratinjau PDF"
-                                                              >
-                                                                <Eye className="w-3.5 h-3.5" />
-                                                              </Button>
-                                                            </div>
-                                                          </div>
-                                                        ),
-                                                      )}
-                                                    </div>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        </CardContent>
-                                      </Card>
-                                    );
-                                  }
                                   if (activeTab === "structure") {
                                     return (
                                       <StructureProgressTable
-                                        units={project.conveyorUnits}
+                                        currentProject={project}
+                                        units={project.conveyorUnits || []}
                                       />
                                     );
                                   }
                                   if (activeTab === "mechanical") {
                                     return (
                                       <MechanicalProgressTable
-                                        units={project.conveyorUnits}
+                                        currentProject={project}
+                                        units={project.conveyorUnits || []}
+                                      />
+                                    );
+                                  }
+                                  if (activeTab === "erection") {
+                                    return (
+                                      <ErectionProgressTable
+                                        currentProject={project}
+                                        units={project.conveyorUnits || []}
+                                      />
+                                    );
+                                  }
+                                  if (activeTab === "marking") {
+                                    return (
+                                      <MarkingManagerPanel
+                                        projectId={project.id}
+                                        projectName={project.projectName}
+                                      />
+                                    );
+                                  }
+                                  if (activeTab === "conveyor-management") {
+                                    return (
+                                      <ConveyorManagementTable
+                                        currentProject={project}
+                                        units={project.conveyorUnits || []}
+                                      />
+                                    );
+                                  }
+                                  if (activeTab === "manual-progress") {
+                                    return (
+                                      <ManualPhaseProgressTable
+                                        project={project}
+                                        masterplan={project.masterplan}
                                       />
                                     );
                                   }
@@ -2745,7 +2409,7 @@ export function ProductionTable({
                                                     key={log.id || lIdx}
                                                     className="p-3.5 text-xs flex justify-between items-start gap-4 hover:bg-muted/20 transition-colors"
                                                   >
-                                                    <div className="min-w-0 flex-1 space-y-1 break-words [overflow-wrap:anywhere]">
+                                                    <div className="min-w-0 flex-1 space-y-1 wrap-break-word">
                                                       <div className="flex items-center gap-2 flex-wrap">
                                                         <Badge
                                                           variant="outline"
@@ -2757,7 +2421,7 @@ export function ProductionTable({
                                                           {log.action}
                                                         </span>
                                                       </div>
-                                                      <p className="text-muted-foreground text-xs leading-relaxed break-words whitespace-normal mt-1 [overflow-wrap:anywhere]">
+                                                      <p className="text-muted-foreground text-xs leading-relaxed wrap-break-word whitespace-normal mt-1">
                                                         {log.notes}
                                                       </p>
                                                     </div>
@@ -2781,137 +2445,14 @@ export function ProductionTable({
                                     );
                                   }
                                   // Default: tim-memo view
-                                  const projectMemos =
-                                    project.goodsReleaseMemos || [];
                                   return (
-                                    <div className="space-y-6">
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-card border border-border/80 p-6 rounded-xl shadow-xs">
-                                        <div className="space-y-4">
-                                          <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5 border-b pb-2">
-                                            Tim & Leader Divisi
-                                          </h4>
-                                          <div className="space-y-2 text-xs">
-                                            {project.masterplan.divisionLeaders.map(
-                                              (dl: any) => (
-                                                <div
-                                                  key={dl.id}
-                                                  className="flex justify-between items-center py-1.5 border-b border-border/40"
-                                                >
-                                                  <span className="font-semibold text-muted-foreground uppercase">
-                                                    {dl.divisionName}
-                                                  </span>
-                                                  <span className="font-bold text-foreground">
-                                                    {dl.leaderName}
-                                                  </span>
-                                                </div>
-                                              ),
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div className="space-y-4">
-                                          <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5 border-b pb-2">
-                                            Instruksi & Catatan Proyek
-                                          </h4>
-                                          <div className="bg-muted/30 p-4 rounded-xl border text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
-                                            {project.productionSetup
-                                              ?.instructionMemo ||
-                                              "Tidak ada memo instruksi lapangan."}
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Goods Release Memos section for this project */}
-                                      <div className="bg-card border border-border/80 p-6 rounded-xl space-y-4 shadow-xs">
-                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/40 pb-3">
-                                          <div>
-                                            <h4 className="font-extrabold text-sm text-foreground flex items-center gap-2">
-                                              <FileText className="w-4.5 h-4.5 text-emerald-600" />
-                                              Memo Pengeluaran Barang Proyek (
-                                              {projectMemos.length})
-                                            </h4>
-                                            <p className="text-xs text-muted-foreground">
-                                              Request barang & pengembalian
-                                              sisa/alat terikat khusus untuk
-                                              proyek {project.projectName}.
-                                            </p>
-                                          </div>
-
-                                          <Button
-                                            type="button"
-                                            onClick={() => {
-                                              setSelectedGoodsMemoProject(
-                                                project,
-                                              );
-                                              setGoodsMemoOpen(true);
-                                            }}
-                                            className="h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs cursor-pointer shadow-md shadow-emerald-600/20 flex items-center gap-2 shrink-0"
-                                          >
-                                            <Plus className="w-4 h-4" />
-                                            Buat Memo Pengeluaran Barang
-                                          </Button>
-                                        </div>
-
-                                        {projectMemos.length === 0 ? (
-                                          <div className="py-8 text-center text-muted-foreground text-xs bg-muted/10 rounded-xl border border-dashed border-border/60 space-y-2">
-                                            <FileText className="w-8 h-8 opacity-30 mx-auto text-emerald-600" />
-                                            <p className="font-semibold">
-                                              Belum ada request memo barang
-                                              untuk proyek ini.
-                                            </p>
-                                            <p className="text-[11px] text-muted-foreground">
-                                              Klik tombol hijau di atas untuk
-                                              membuat memo baru.
-                                            </p>
-                                          </div>
-                                        ) : (
-                                          <div className="space-y-3">
-                                            {projectMemos.map((memo: any) => (
-                                              <div
-                                                key={memo.id}
-                                                className="p-4 rounded-xl border border-border/60 bg-muted/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                                              >
-                                                <div className="space-y-1">
-                                                  <div className="flex items-center gap-2">
-                                                    <span className="font-extrabold text-foreground">
-                                                      {memo.memoNumber}
-                                                    </span>
-                                                    <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-none text-[10px] font-bold">
-                                                      ✓ Terkirim ke Inventory
-                                                    </Badge>
-                                                  </div>
-                                                  <div className="text-muted-foreground">
-                                                    Pemohon:{" "}
-                                                    <strong className="text-foreground">
-                                                      {memo.requesterName}
-                                                    </strong>{" "}
-                                                    ({memo.division}) •{" "}
-                                                    {memo.items?.length || 0}{" "}
-                                                    Barang
-                                                  </div>
-                                                </div>
-
-                                                <div className="flex items-center gap-2 shrink-0">
-                                                  <Button
-                                                    type="button"
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => {
-                                                      setSelectedGoodsMemoProject(
-                                                        project,
-                                                      );
-                                                      setGoodsMemoOpen(true);
-                                                    }}
-                                                    className="h-8 px-3 rounded-lg text-xs font-bold border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 cursor-pointer"
-                                                  >
-                                                    Lihat & Kelola Memo
-                                                  </Button>
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
+                                    <TeamAndMemoManager
+                                      project={project}
+                                      onOpenGoodsMemo={() => {
+                                        setSelectedGoodsMemoProject(project);
+                                        setGoodsMemoOpen(true);
+                                      }}
+                                    />
                                   );
                                 })()}
                               </div>
@@ -3193,29 +2734,56 @@ export function ProductionTable({
                                         <span
                                           className={cn(
                                             "text-[8px] font-bold px-1 py-0.5 rounded-xs border inline-block mt-0.5 font-mono uppercase",
-                                            item.status === "FULFILLED" ||
-                                              item.status === "RECEIVED"
-                                              ? "bg-emerald-500/5 text-emerald-600 border-emerald-500/10"
-                                              : item.status === "REJECTED"
-                                                ? "bg-red-500/5 text-red-600 border-red-500/10"
-                                                : "bg-amber-500/5 text-amber-600 border-amber-500/10",
+                                            (() => {
+                                              const s = (item.status || "").toUpperCase();
+                                              if (
+                                                [
+                                                  "FULFILLED",
+                                                  "RECEIVED",
+                                                  "COMPLETED",
+                                                  "ISSUED",
+                                                  "FULL",
+                                                  "READY",
+                                                ].includes(s)
+                                              ) {
+                                                return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20";
+                                              }
+                                              if (s === "APPROVED_WAREHOUSE") {
+                                                return "bg-sky-500/10 text-sky-600 border-sky-500/20";
+                                              }
+                                              if (s === "REJECTED" || s === "DITOLAK") {
+                                                return "bg-red-500/10 text-red-600 border-red-500/20";
+                                              }
+                                              return "bg-amber-500/10 text-amber-600 border-amber-500/20";
+                                            })(),
                                           )}
                                         >
-                                          {item.status === "FULFILLED"
-                                            ? "TERPENUHI"
-                                            : item.status === "RECEIVED"
-                                              ? "DITERIMA"
-                                              : item.status === "PENDING"
-                                                ? "PENDING"
-                                                : item.status ===
-                                                    "APPROVED_WAREHOUSE"
-                                                  ? "DISETUJUI GUDANG"
-                                                  : item.status === "PO_PENDING"
-                                                    ? "MENUNGGU PO"
-                                                    : item.status ===
-                                                        "PO_CREATED"
-                                                      ? "PO DIBUAT"
-                                                      : item.status}
+                                          {(() => {
+                                            const s = (item.status || "").toUpperCase();
+                                            switch (s) {
+                                              case "FULFILLED":
+                                                return "TERPENUHI";
+                                              case "RECEIVED":
+                                                return "DITERIMA";
+                                              case "FULL":
+                                                return "SELESAI (PO TIBA)";
+                                              case "APPROVED_WAREHOUSE":
+                                                return "DISETUJUI GUDANG";
+                                              case "READY":
+                                                return "SIAP DIAMBIL";
+                                              case "COMPLETED":
+                                              case "ISSUED":
+                                                return "SELESAI";
+                                              case "PENDING":
+                                                return "PENDING";
+                                              case "PO_PENDING":
+                                                return "MENUNGGU PO";
+                                              case "PO_CREATED":
+                                                return "PO DIBUAT";
+                                              default:
+                                                return item.status;
+                                            }
+                                          })()}
                                         </span>
                                       </div>
                                     </div>
@@ -4665,7 +4233,8 @@ export function ProductionTable({
                   }
                   className="w-full h-8 border-dashed border-primary/40 text-primary hover:bg-primary/10 rounded-xl gap-1 font-semibold text-xs cursor-pointer shadow-none mt-2"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Tambah Baris Komponen Mekanikal
+                  <Plus className="w-3.5 h-3.5" /> Tambah Baris Komponen
+                  Mekanikal
                 </Button>
               </div>
             )}
@@ -5001,15 +4570,24 @@ export function ProductionTable({
                                   const s = (
                                     item.status || "PENDING"
                                   ).toUpperCase();
-                                  if (s === "FULFILLED" || s === "RECEIVED")
+                                  if (
+                                    s === "FULFILLED" ||
+                                    s === "RECEIVED" ||
+                                    s === "COMPLETED" ||
+                                    s === "ISSUED" ||
+                                    s === "FULL" ||
+                                    s === "READY"
+                                  )
                                     return "bg-green-500/10 text-green-700 border-green-500/20";
+                                  if (s === "APPROVED_WAREHOUSE")
+                                    return "bg-sky-500/10 text-sky-700 border-sky-500/20";
                                   if (
                                     s === "PENDING" ||
                                     s === "WAITING_PO" ||
                                     s === "PARTIALLY_ISSUED"
                                   )
                                     return "bg-amber-500/10 text-amber-700 border-amber-500/20";
-                                  if (s === "REJECTED")
+                                  if (s === "REJECTED" || s === "DITOLAK")
                                     return "bg-red-500/10 text-red-700 border-red-500/20";
                                   return "bg-blue-500/10 text-blue-700 border-blue-500/20";
                                 })(),
@@ -5024,10 +4602,19 @@ export function ProductionTable({
                                     return "Menunggu Verifikasi";
                                   case "APPROVED":
                                     return "Disetujui PPIC";
+                                  case "APPROVED_WAREHOUSE":
+                                    return "Disetujui Gudang";
+                                  case "READY":
+                                    return "Siap Diambil";
                                   case "PREPARING":
                                     return "Sedang Disiapkan";
                                   case "FULFILLED":
                                     return "Sudah Dikeluarkan";
+                                  case "FULL":
+                                    return "Selesai (PO Tiba)";
+                                  case "COMPLETED":
+                                  case "ISSUED":
+                                    return "Selesai";
                                   case "WAITING_PO":
                                     return "Menunggu PO";
                                   case "PO_CREATED":
@@ -5035,6 +4622,7 @@ export function ProductionTable({
                                   case "RECEIVED":
                                     return "Barang Diterima";
                                   case "REJECTED":
+                                  case "DITOLAK":
                                     return "Ditolak";
                                   case "PARTIALLY_ISSUED":
                                     return "Sebagian Keluar";
@@ -5191,6 +4779,17 @@ export function ProductionTable({
           }, 300);
         }}
       />
+
+      {/* Progress Photo Dialog for Production */}
+      {selectedPhotoProject && (
+        <ProgressPhotoDialog
+          isOpen={!!selectedPhotoProject}
+          onOpenChange={(open) => !open && setSelectedPhotoProject(null)}
+          projectId={selectedPhotoProject.id}
+          projectName={selectedPhotoProject.name}
+          category="FABRICATION"
+        />
+      )}
     </div>
   );
 }

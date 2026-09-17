@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useTransition } from "react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { formatJakartaDate } from "@/lib/date-utils";
@@ -15,6 +15,15 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +53,10 @@ import {
   Calendar,
   FileImage,
   ShoppingCart,
+  ShieldCheck,
+  Clock,
+  CheckCircle2,
+  CheckCheck,
 } from "lucide-react";
 import { getSPBImageUrl, getSPBImageUrls } from "@/app/actions/documents";
 import { parseSPBImageUrls, formatRupiah, cn } from "@/lib/utils";
@@ -52,10 +65,16 @@ import {
   approveSpbByPm,
   rejectSpb,
   approveVendorSelectionByPm,
+  batchApproveVendorSelectionByPm,
   rejectVendorSelectionByPm,
 } from "@/app/actions/spb";
 import { approveBoQByPm, rejectBoQ } from "@/app/actions/boq-approval";
 import { approveSPJByPm, rejectSPJ } from "@/app/actions/spj";
+import {
+  approveQCReceiptByPM,
+  rejectQCReceiptByPM,
+} from "@/app/actions/qc-receipt-approval";
+import { QCReceiptReportPreviewDialog } from "@/components/trackers/qc-receipt-report-preview-dialog";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 import { SPBPDFDocument } from "@/components/trackers/spb-pdf-document";
@@ -85,6 +104,7 @@ interface PmSpbApprovalClientProps {
   initialSpjs?: any[];
   initialSubstitutions?: any[];
   initialVendorItems?: any[];
+  initialQCReceipts?: any[];
   masterItems?: any[];
 }
 
@@ -94,6 +114,7 @@ export function PmSpbApprovalClient({
   initialSpjs = [],
   initialSubstitutions = [],
   initialVendorItems = [],
+  initialQCReceipts = [],
   masterItems = [],
 }: PmSpbApprovalClientProps) {
   const [spbs, setSpbs] = useState<any[]>(initialSpbs);
@@ -102,6 +123,8 @@ export function PmSpbApprovalClient({
   const [substitutions, setSubstitutions] =
     useState<any[]>(initialSubstitutions);
   const [vendorItems, setVendorItems] = useState<any[]>(initialVendorItems);
+  const [qcReceipts, setQcReceipts] = useState<any[]>(initialQCReceipts);
+  const [isPending, startTransition] = useTransition();
 
   const masterItemMap = useMemo(() => {
     const byId: Record<string, string> = {};
@@ -140,6 +163,7 @@ export function PmSpbApprovalClient({
     catalogPrice?: number;
     spbNumber: string;
   } | null>(null);
+  const [batchApprovingVendorGroup, setBatchApprovingVendorGroup] = useState<any | null>(null);
   const [rejectingVendorItem, setRejectingVendorItem] = useState<{
     id: string;
     name: string;
@@ -169,6 +193,35 @@ export function PmSpbApprovalClient({
       setApprovingVendorItem(null);
     } else {
       toast.error(res.error || "Gagal menyetujui vendor", { id: toastId });
+    }
+  };
+
+  const handleBatchApproveVendorPmSubmit = async () => {
+    if (!batchApprovingVendorGroup || !batchApprovingVendorGroup.items?.length) return;
+
+    const itemIds = batchApprovingVendorGroup.items.map((it: any) => it.id);
+    setIsApproving(true);
+    const toastId = toast.loading(
+      `Menyetujui vendor untuk ${itemIds.length} barang sekaligus...`,
+    );
+
+    try {
+      const res = await batchApproveVendorSelectionByPm(itemIds);
+      setIsApproving(false);
+
+      if (res.success) {
+        toast.success(res.message || "Semua vendor pada dokumen ini berhasil disetujui PM!", {
+          id: toastId,
+        });
+        const approvedSet = new Set(itemIds);
+        setVendorItems((prev) => prev.filter((item) => !approvedSet.has(item.id)));
+        setBatchApprovingVendorGroup(null);
+      } else {
+        toast.error(res.error || "Gagal menyetujui semua vendor", { id: toastId });
+      }
+    } catch (err: any) {
+      setIsApproving(false);
+      toast.error(err?.message || "Terjadi kesalahan sistem", { id: toastId });
     }
   };
 
@@ -593,6 +646,84 @@ export function PmSpbApprovalClient({
     activeVendorPage * pageSize,
   );
 
+  // --- TAB 6: QC Penerimaan Barang Filtering & Pagination ---
+  const [pmQcNotes, setPmQcNotes] = useState<Record<string, string>>({});
+  const [previewQCPO, setPreviewQCPO] = useState<any | null>(null);
+  const [approvingQCPO, setApprovingQCPO] = useState<any | null>(null);
+  const [rejectQCState, setRejectQCState] = useState<{
+    open: boolean;
+    poId: string;
+    poNumber: string;
+    reason: string;
+  }>({
+    open: false,
+    poId: "",
+    poNumber: "",
+    reason: "",
+  });
+
+  const filteredQCReceipts = useMemo(() => {
+    return qcReceipts.filter((po) => {
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return true;
+
+      const poNum = (po.nomorPO || "").toLowerCase();
+      const supplier = (po.kepada || po.supplier?.name || "").toLowerCase();
+      const project = (po.projek || "").toLowerCase();
+      const repNo = (po.qcReportNumber || "").toLowerCase();
+      const hasItem = (po.items || []).some((it: any) =>
+        (it.namaBarang || "").toLowerCase().includes(q)
+      );
+      return (
+        poNum.includes(q) ||
+        supplier.includes(q) ||
+        project.includes(q) ||
+        repNo.includes(q) ||
+        hasItem
+      );
+    });
+  }, [qcReceipts, searchQuery]);
+
+  const totalQCReceiptPages = Math.ceil(filteredQCReceipts.length / pageSize) || 1;
+  const paginatedQCReceipts = filteredQCReceipts.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
+  const handleApproveQCPO = (po: any) => {
+    const notes = pmQcNotes[po.id] || "";
+    startTransition(async () => {
+      const res = await approveQCReceiptByPM(po.id, notes);
+      if (res.success) {
+        toast.success(res.message || "Persetujuan final QC PO berhasil disimpan");
+        setQcReceipts((prev) => prev.filter((p) => p.id !== po.id));
+        setApprovingQCPO(null);
+      } else {
+        toast.error(res.error || "Gagal menyetujui laporan QC");
+      }
+    });
+  };
+
+  const handleConfirmRejectQCPO = () => {
+    if (!rejectQCState.reason.trim()) {
+      toast.error("Alasan penolakan wajib diisi");
+      return;
+    }
+    startTransition(async () => {
+      const res = await rejectQCReceiptByPM(
+        rejectQCState.poId,
+        rejectQCState.reason
+      );
+      if (res.success) {
+        toast.success(res.message || "Pengajuan QC dikembalikan");
+        setQcReceipts((prev) => prev.filter((p) => p.id !== rejectQCState.poId));
+        setRejectQCState({ open: false, poId: "", poNumber: "", reason: "" });
+      } else {
+        toast.error(res.error || "Gagal menolak laporan QC");
+      }
+    });
+  };
+
   return (
     <div className="space-y-4">
       <Tabs
@@ -659,6 +790,18 @@ export function PmSpbApprovalClient({
               {vendorItems.length > 0 && (
                 <span className="text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md border border-primary/20">
                   {vendorItems.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger
+              value="qc_receipt"
+              className="rounded-xl px-3 sm:px-4 py-2 text-xs font-bold transition-all data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-xs cursor-pointer flex items-center gap-1.5 sm:gap-2"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-primary" />
+              <span>Persetujuan QC Penerimaan</span>
+              {qcReceipts.length > 0 && (
+                <span className="text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md border border-primary/20">
+                  {qcReceipts.length}
                 </span>
               )}
             </TabsTrigger>
@@ -1587,152 +1730,481 @@ export function PmSpbApprovalClient({
             </Card>
           ) : (
             <div className="space-y-4">
-              {paginatedVendorSpbGroups.map((group, groupIdx) => {
-                const spbNumber = group.spb?.spbNumber || "SPB Tanpa Nomor";
-                const projectName =
-                  group.project?.projectName || "Tanpa Proyek";
-                const projectNumber = group.project?.projectNumber || "-";
-                const customerName =
-                  group.project?.customer?.name ||
-                  group.project?.customer?.company ||
-                  "-";
+              <Accordion
+                type="multiple"
+                defaultValue={paginatedVendorSpbGroups.map(
+                  (g, idx) => g.spb?.id || `pm-vendor-group-${idx}`,
+                )}
+                className="space-y-3"
+              >
+                {paginatedVendorSpbGroups.map((group, groupIdx) => {
+                  const globalIndex =
+                    (activeVendorPage - 1) * pageSize + groupIdx + 1;
+                  const spbNumber = group.spb?.spbNumber || "SPB Tanpa Nomor";
+                  const projectName =
+                    group.project?.projectName || "Tanpa Proyek";
+                  const projectNumber = group.project?.projectNumber || "-";
+                  const customerName =
+                    group.project?.customer?.name ||
+                    group.project?.customer?.company ||
+                    "-";
+
+                  return (
+                    <AccordionItem
+                      key={group.spb?.id || groupIdx}
+                      value={group.spb?.id || `pm-vendor-group-${groupIdx}`}
+                      className="border border-border/60 rounded-2xl bg-card overflow-hidden shadow-xs hover:border-primary/30 transition-all border-b-0"
+                    >
+                      <AccordionTrigger className="px-4 py-3.5 sm:px-5 sm:py-4 hover:bg-muted/10 hover:no-underline select-none">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between w-full pr-2 text-left gap-2 sm:gap-4">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-bold text-muted-foreground shrink-0 w-4">
+                              {globalIndex}.
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-primary">
+                                  {spbNumber}
+                                </span>
+                                <span className="text-muted-foreground/50 hidden sm:inline">
+                                  •
+                                </span>
+                                <span className="text-xs sm:text-sm font-bold text-foreground">
+                                  {projectName} ({projectNumber})
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                Customer:{" "}
+                                <strong className="font-semibold text-foreground">
+                                  {customerName}
+                                </strong>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setBatchApprovingVendorGroup(group);
+                              }}
+                              disabled={isApproving || isRejecting}
+                              className="h-7 text-[11px] font-bold rounded-lg bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 dark:hover:bg-emerald-900/50 cursor-pointer px-2.5 shadow-none gap-1"
+                              title="Setujui semua vendor untuk dokumen ini"
+                            >
+                              <CheckCheck className="w-3.5 h-3.5 mr-0.5 text-emerald-600 dark:text-emerald-400" />
+                              Setujui Semua ({group.items.length})
+                            </Button>
+                            <span className="text-xs font-semibold text-muted-foreground bg-muted/30 px-2.5 py-0.5 rounded-full border border-border/50">
+                              {group.items.length} Barang
+                            </span>
+                          </div>
+                        </div>
+                      </AccordionTrigger>
+
+                      <AccordionContent className="border-t border-border/40 bg-muted/5 p-3 sm:p-4 space-y-3 pb-4">
+                        <div className="overflow-x-auto rounded-xl border border-border/60 bg-background shadow-2xs">
+                          <table className="w-full text-left text-xs min-w-140">
+                            <thead className="bg-muted/30 text-muted-foreground font-semibold border-b border-border/40">
+                              <tr>
+                                <th className="p-3 text-center w-10">No</th>
+                                <th className="p-3">Material & Spesifikasi</th>
+                                <th className="p-3 text-center">Qty</th>
+                                <th className="p-3">Vendor Pilihan</th>
+                                <th className="p-3 text-right">Harga Satuan</th>
+                                <th className="p-3 text-right">
+                                  Total Estimasi
+                                </th>
+                                <th className="p-3">Catatan</th>
+                                <th className="p-3 text-center w-36">
+                                  Aksi PM
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border/20">
+                              {group.items.map((item, itemIdx) => {
+                                const unitPrice =
+                                  Number(item.selectedCatalogPrice) || 0;
+                                const totalPrice = (item.qty || 0) * unitPrice;
+
+                                return (
+                                  <tr
+                                    key={item.id || itemIdx}
+                                    className="hover:bg-muted/10 transition-colors"
+                                  >
+                                    <td className="p-3 text-center font-medium text-muted-foreground">
+                                      {itemIdx + 1}
+                                    </td>
+                                    <td className="p-3">
+                                      <div className="font-bold text-foreground text-xs">
+                                        {item.name}
+                                      </div>
+                                      {item.typeMerk ? (
+                                        <div className="text-[11px] text-muted-foreground font-normal mt-0.5">
+                                          {item.typeMerk}
+                                        </div>
+                                      ) : null}
+                                    </td>
+                                    <td className="p-3 text-center font-semibold text-foreground whitespace-nowrap">
+                                      {item.qty} {item.unit || "pcs"}
+                                    </td>
+                                    <td className="p-3">
+                                      <span className="font-semibold text-primary text-xs">
+                                        {item.selectedSupplierName || "-"}
+                                      </span>
+                                    </td>
+                                    <td className="p-3 text-right font-medium text-foreground whitespace-nowrap">
+                                      {unitPrice > 0
+                                        ? formatRupiah(unitPrice)
+                                        : "-"}
+                                    </td>
+                                    <td className="p-3 text-right font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                      {totalPrice > 0
+                                        ? formatRupiah(totalPrice)
+                                        : "-"}
+                                    </td>
+                                    <td className="p-3 text-xs text-muted-foreground max-w-48">
+                                      {item.vendorSelectionNote || "-"}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      <div className="flex items-center justify-center gap-1.5">
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => {
+                                            setRejectingVendorItem({
+                                              id: item.id,
+                                              name: item.name,
+                                              supplierName:
+                                                item.selectedSupplierName ||
+                                                "-",
+                                              spbNumber: spbNumber,
+                                            });
+                                            setVendorRejectReason("");
+                                          }}
+                                          disabled={isApproving || isRejecting}
+                                          className="h-7 text-[11px] font-bold rounded-lg border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/30 cursor-pointer px-2.5 shadow-none gap-1"
+                                        >
+                                          <X className="w-3.5 h-3.5 mr-1" />{" "}
+                                          Tolak
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          onClick={() =>
+                                            setApprovingVendorItem({
+                                              id: item.id,
+                                              name: item.name,
+                                              supplierName:
+                                                item.selectedSupplierName ||
+                                                "-",
+                                              catalogPrice:
+                                                item.selectedCatalogPrice,
+                                              spbNumber: spbNumber,
+                                            })
+                                          }
+                                          disabled={isApproving || isRejecting}
+                                          className="h-7 text-[11px] font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer px-2.5 shadow-none gap-1"
+                                        >
+                                          <Check className="w-3.5 h-3.5 mr-1" />{" "}
+                                          Setujui
+                                        </Button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  );
+                })}
+              </Accordion>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* TAB 6: PERSETUJUAN QC PENERIMAAN BARANG (ACCENT: INDIGO) */}
+        <TabsContent
+          value="qc_receipt"
+          className="space-y-4 m-0 border-0 p-0 outline-hidden"
+        >
+          {filteredQCReceipts.length === 0 ? (
+            <Card className="rounded-xl border border-dashed p-8 text-center bg-card">
+              <ShieldCheck className="w-10 h-10 text-muted-foreground/40 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-foreground">
+                Tidak ada laporan QC PO yang menunggu persetujuan PM
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Semua hasil inspeksi barang kedatangan yang telah diverifikasi Engineering telah disetujui.
+              </p>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {paginatedQCReceipts.map((po: any) => {
+                const items = po.items || [];
+                const failedItems = items.filter(
+                  (i: any) => (Number(i.qtyFailed) || 0) > 0
+                );
+                const hasFailedItems = failedItems.length > 0;
 
                 return (
                   <Card
-                    key={groupIdx}
-                    className="border border-border/60 rounded-2xl overflow-hidden shadow-xs bg-card"
+                    key={po.id}
+                    className="rounded-2xl border border-border/80 bg-card overflow-hidden shadow-2xs hover:border-primary/40 transition-colors"
                   >
-                    {/* Header Group */}
-                    <div className="bg-muted/30 border-b border-border/40 p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge
-                          variant="outline"
-                          className="bg-blue-500/10 text-blue-700 border-blue-300 font-bold text-[10px] px-2 py-0.5"
-                        >
-                          SPB Project
-                        </Badge>
-                        <span className="text-xs font-bold text-primary">
-                          {spbNumber}
-                        </span>
-                        <span className="text-muted-foreground/50 hidden sm:inline">
-                          •
-                        </span>
-                        <span className="text-xs font-bold text-foreground">
-                          {projectName} ({projectNumber})
-                        </span>
-                      </div>
-
-                      <div className="text-[11px] text-muted-foreground">
-                        Customer:{" "}
-                        <span className="font-semibold text-foreground">
-                          {customerName}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Table of Items */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs min-w-140">
-                        <thead className="bg-muted/20 text-muted-foreground font-semibold border-b border-border/40">
-                          <tr>
-                            <th className="p-3 text-center w-10">No</th>
-                            <th className="p-3">Nama Material / Barang</th>
-                            <th className="p-3">Tipe / Merk</th>
-                            <th className="p-3 text-center">Qty</th>
-                            <th className="p-3">Vendor Pilihan</th>
-                            <th className="p-3 text-right">Harga Satuan</th>
-                            <th className="p-3 text-right">Total Estimasi</th>
-                            <th className="p-3">Catatan</th>
-                            <th className="p-3 text-center">Aksi PM</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/20">
-                          {group.items.map((item, itemIdx) => {
-                            const unitPrice =
-                              Number(item.selectedCatalogPrice) || 0;
-                            const totalPrice = (item.qty || 0) * unitPrice;
-
-                            return (
-                              <tr
-                                key={item.id || itemIdx}
-                                className="hover:bg-muted/10"
+                    {/* Header Card PO */}
+                    <CardHeader className="p-4 sm:p-5 bg-muted/20 border-b border-border/60">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm text-foreground flex items-center gap-1.5">
+                              <FileText className="w-4 h-4 text-primary" />
+                              PO: {po.nomorPO}
+                            </span>
+                            {po.qcReportNumber && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] font-mono font-bold border-primary/30 text-primary bg-primary/5"
                               >
-                                <td className="p-3 text-center font-medium text-muted-foreground">
-                                  {itemIdx + 1}
-                                </td>
-                                <td className="p-3 font-bold text-foreground">
-                                  {item.name}
-                                </td>
-                                <td className="p-3 text-muted-foreground font-medium">
-                                  {item.typeMerk || "-"}
-                                </td>
-                                <td className="p-3 text-center font-semibold text-foreground">
-                                  {item.qty} {item.unit || "pcs"}
-                                </td>
-                                <td className="p-3">
-                                  <span className="font-bold text-primary">
-                                    {item.selectedSupplierName || "-"}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-right font-medium text-foreground">
-                                  {unitPrice > 0
-                                    ? formatRupiah(unitPrice)
-                                    : "-"}
-                                </td>
-                                <td className="p-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
-                                  {totalPrice > 0
-                                    ? formatRupiah(totalPrice)
-                                    : "-"}
-                                </td>
-                                <td className="p-3 text-xs text-muted-foreground font-medium">
-                                  {item.vendorSelectionNote || "-"}
-                                </td>
-                                <td className="p-3 text-center">
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    <Button
-                                      size="sm"
-                                      onClick={() =>
-                                        setApprovingVendorItem({
-                                          id: item.id,
-                                          name: item.name,
-                                          supplierName:
-                                            item.selectedSupplierName || "-",
-                                          catalogPrice:
-                                            item.selectedCatalogPrice,
-                                          spbNumber: spbNumber,
-                                        })
-                                      }
-                                      disabled={isApproving || isRejecting}
-                                      className="h-7 text-[11px] font-bold rounded-md bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer px-2.5 shadow-none gap-1"
-                                    >
-                                      <Check className="w-3 h-3" /> Setujui
-                                    </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => {
-                                        setRejectingVendorItem({
-                                          id: item.id,
-                                          name: item.name,
-                                          supplierName:
-                                            item.selectedSupplierName || "-",
-                                          spbNumber: spbNumber,
-                                        });
-                                        setVendorRejectReason("");
-                                      }}
-                                      disabled={isApproving || isRejecting}
-                                      className="h-7 text-[11px] font-bold rounded-md border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/30 cursor-pointer px-2.5 shadow-none gap-1"
-                                    >
-                                      <X className="w-3 h-3" /> Tolak
-                                    </Button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                                {po.qcReportNumber}
+                              </Badge>
+                            )}
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-400 animate-pulse"
+                            >
+                              <Clock className="w-3 h-3 mr-1 text-amber-600" />
+                              Menunggu Approval Final PM
+                            </Badge>
+                            {po.qcApprovedByEngineering && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-400"
+                              >
+                                <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" />
+                                Terverifikasi Engineering: {po.qcApprovedByEngineeringName || "Eng"}
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap pt-0.5">
+                            <span>
+                              Supplier:{" "}
+                              <strong className="text-foreground font-semibold">
+                                {po.kepada || po.supplier?.name || "-"}
+                              </strong>
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Proyek:{" "}
+                              <strong className="text-foreground font-semibold">
+                                {po.projek || "Gudang"}
+                              </strong>
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Inspector QC:{" "}
+                              <strong className="text-foreground font-semibold">
+                                {po.qcApprovedBy || "QC Inspector"}
+                              </strong>
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Tombol Pratinjau PDF */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPreviewQCPO(po)}
+                            className="h-8 text-xs font-semibold rounded-xl cursor-pointer gap-1.5 hover:bg-primary/10 hover:text-primary"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-primary" />
+                            Pratinjau PDF QC
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+
+                    <CardContent className="p-4 sm:p-5 space-y-4">
+                      {/* Tabel Item Barang Hasil QC */}
+                      <div className="rounded-xl border border-border/80 overflow-hidden bg-background">
+                        <Table>
+                          <TableHeader className="bg-muted/30">
+                            <TableRow className="h-8 text-[11px] font-bold border-b border-border/60">
+                              <TableHead className="w-10 text-center">No</TableHead>
+                              <TableHead>Nama Barang & Spesifikasi</TableHead>
+                              <TableHead className="w-20 text-center">Qty PO</TableHead>
+                              <TableHead className="w-20 text-center text-emerald-600">Lolos</TableHead>
+                              <TableHead className="w-20 text-center text-rose-600">Reject</TableHead>
+                              <TableHead>Status & Disposisi Engineering</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {items.map((it: any, idx: number) => {
+                              const pQty = Number(it.qtyPassed) || 0;
+                              const rQty = Number(it.qtyFailed) || 0;
+                              const isFailed = rQty > 0;
+                              const isUseAsIs = it.qcDisposition === "USE_AS_IS";
+                              const isReturn = it.qcDisposition === "RETURN_TO_VENDOR";
+
+                              return (
+                                <TableRow
+                                  key={it.id}
+                                  className={cn(
+                                    "text-xs border-b border-border/40",
+                                    isFailed && "bg-rose-500/5"
+                                  )}
+                                >
+                                  <TableCell className="text-center font-mono text-[11px] text-muted-foreground">
+                                    {idx + 1}
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="font-semibold text-foreground">
+                                      {it.namaBarang}
+                                    </div>
+                                    <div className="text-[10px] text-muted-foreground">
+                                      {it.ukuran || it.noticeMerkJenis || "-"}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-center font-semibold">
+                                    {it.qty} {it.satuan || "pcs"}
+                                  </TableCell>
+                                  <TableCell className="text-center font-bold text-emerald-600">
+                                    {pQty} {it.satuan || "pcs"}
+                                  </TableCell>
+                                  <TableCell className="text-center font-bold text-rose-600">
+                                    {rQty} {it.satuan || "pcs"}
+                                  </TableCell>
+                                  <TableCell>
+                                    {isFailed ? (
+                                      <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          {isUseAsIs ? (
+                                            <Badge
+                                              variant="outline"
+                                              className="text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-400"
+                                            >
+                                              ⚠️ Disetujui Digunakan (Use As-Is)
+                                            </Badge>
+                                          ) : isReturn ? (
+                                            <Badge
+                                              variant="outline"
+                                              className="text-[10px] font-bold bg-rose-500/15 text-rose-800 dark:text-rose-300 border-rose-400"
+                                            >
+                                              ✕ Dikembalikan (Retur)
+                                            </Badge>
+                                          ) : (
+                                            <Badge
+                                              variant="outline"
+                                              className="text-[10px] font-bold bg-muted text-muted-foreground"
+                                            >
+                                              Menunggu Disposisi
+                                            </Badge>
+                                          )}
+                                        </div>
+                                        {it.qcDefectReason && (
+                                          <p className="text-[10px] text-rose-600 font-medium">
+                                            Cacat: {it.qcDefectReason}
+                                          </p>
+                                        )}
+                                        {it.qcDispositionNotes && (
+                                          <p className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold bg-amber-500/10 p-1 rounded">
+                                            Justifikasi Eng: {it.qcDispositionNotes}
+                                          </p>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
+                                        <CheckCircle2 className="w-3 h-3" /> Lolos Pengujian
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+
+                      {/* Catatan QC & Engineering */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl bg-muted/20 border border-border/60 text-xs">
+                        <div>
+                          <span className="text-[11px] font-bold text-foreground block mb-0.5">
+                            Catatan QC Inspector:
+                          </span>
+                          <p className="text-[11px] text-muted-foreground">
+                            {po.qcNotes || "Pemeriksaan fisik sesuai standar spesifikasi kedatangan barang."}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-[11px] font-bold text-foreground block mb-0.5">
+                            Catatan & Disposisi Engineering:
+                          </span>
+                          <p className="text-[11px] text-muted-foreground">
+                            {po.qcEngineeringNotes || "Telah diverifikasi sesuai kelayakan teknis."}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Catatan Project Manager */}
+                      <div className="space-y-1">
+                        <Label className="text-[11px] font-semibold text-muted-foreground">
+                          Catatan Project Manager (Opsional):
+                        </Label>
+                        <Textarea
+                          rows={2}
+                          placeholder="Tulis catatan atau instruksi khusus untuk tim lapangan / gudang..."
+                          value={pmQcNotes[po.id] || ""}
+                          onChange={(e) =>
+                            setPmQcNotes((prev) => ({
+                              ...prev,
+                              [po.id]: e.target.value,
+                            }))
+                          }
+                          className="text-xs min-h-[44px] py-1.5"
+                        />
+                      </div>
+
+                      {/* Tombol Aksi Approval PM */}
+                      <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-3 flex-wrap">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setRejectQCState({
+                              open: true,
+                              poId: po.id,
+                              poNumber: po.nomorPO,
+                              reason: "",
+                            })
+                          }
+                          disabled={isPending}
+                          className="h-8 text-xs font-bold text-rose-600 hover:bg-rose-500/10 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5 mr-1" />
+                          Kembalikan ke QC
+                        </Button>
+
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => setApprovingQCPO(po)}
+                            disabled={isPending}
+                            className="h-8 text-xs font-bold px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-2xs cursor-pointer gap-1.5"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Setujui Final QC (Digital Sign)
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
                   </Card>
                 );
               })}
@@ -2737,7 +3209,8 @@ export function PmSpbApprovalClient({
         <DialogContent className="w-[95vw] sm:max-w-md rounded-2xl p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
-              <Check className="w-5 h-5 text-emerald-600" /> Persetujuan Vendor PO (PM)
+              <Check className="w-5 h-5 text-emerald-600" /> Persetujuan Vendor
+              PO (PM)
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground pt-1">
               Apakah Anda yakin ingin menyetujui pemilihan vendor berikut:
@@ -2805,6 +3278,97 @@ export function PmSpbApprovalClient({
         </DialogContent>
       </Dialog>
 
+      {/* MODAL APPROVAL KONFIRMASI SEMUA VENDOR SELECTION (PM) */}
+      <Dialog
+        open={!!batchApprovingVendorGroup}
+        onOpenChange={(open) => !open && setBatchApprovingVendorGroup(null)}
+      >
+        <DialogContent className="w-[95vw] sm:max-w-lg rounded-2xl p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <CheckCheck className="w-5 h-5 text-emerald-600" /> Setujui Semua
+              Vendor SPB (PM)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-1">
+              Apakah Anda yakin ingin menyetujui seluruh vendor terpilih untuk
+              dokumen ini sekaligus?
+            </DialogDescription>
+          </DialogHeader>
+
+          {batchApprovingVendorGroup && (
+            <div className="space-y-3 my-2">
+              <div className="bg-muted/30 border border-border/60 rounded-xl p-3 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Nomor SPB:</span>
+                  <span className="font-bold text-primary">
+                    {batchApprovingVendorGroup.spb?.spbNumber || "-"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Proyek:</span>
+                  <span className="font-semibold text-foreground text-right">
+                    {batchApprovingVendorGroup.project?.projectName || "-"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Jumlah Barang:</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                    {batchApprovingVendorGroup.items?.length || 0} Barang
+                  </span>
+                </div>
+              </div>
+
+              <div className="max-h-48 overflow-y-auto rounded-xl border border-border/60 bg-background/50 divide-y divide-border/30">
+                {batchApprovingVendorGroup.items?.map((it: any, idx: number) => (
+                  <div key={it.id || idx} className="p-2.5 text-xs flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-foreground truncate">{it.name}</div>
+                      <div className="text-[11px] text-muted-foreground truncate">
+                        Vendor: <strong className="text-primary font-medium">{it.selectedSupplierName || "-"}</strong>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-semibold text-foreground">
+                        {it.qty} {it.unit || "pcs"}
+                      </div>
+                      {it.selectedCatalogPrice ? (
+                        <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                          {formatRupiah(it.selectedCatalogPrice)}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex flex-row justify-end gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBatchApprovingVendorGroup(null)}
+              disabled={isApproving}
+              className="rounded-lg text-xs font-semibold cursor-pointer"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleBatchApproveVendorPmSubmit}
+              disabled={isApproving}
+              className="rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+            >
+              {isApproving ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                `Setujui Semua (${batchApprovingVendorGroup?.items?.length || 0})`
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* MODAL REJECTION VENDOR SELECTION (PM) */}
       <Dialog
         open={!!rejectingVendorItem}
@@ -2858,6 +3422,141 @@ export function PmSpbApprovalClient({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* MODAL REJECTION QC RECEIPT (PM) */}
+      <Dialog
+        open={rejectQCState.open}
+        onOpenChange={(open) =>
+          !open && setRejectQCState((prev) => ({ ...prev, open: false }))
+        }
+      >
+        <DialogContent className="w-[95vw] sm:max-w-md rounded-2xl p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-destructive flex items-center gap-2">
+              <X className="w-5 h-5 text-destructive" /> Kembalikan Laporan QC
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-1">
+              PO: <span className="font-semibold text-foreground">{rejectQCState.poNumber}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-3">
+            <Textarea
+              placeholder="Tulis alasan pengembalian / instruksi revisi untuk Inspector QC..."
+              value={rejectQCState.reason}
+              onChange={(e) =>
+                setRejectQCState((prev) => ({ ...prev, reason: e.target.value }))
+              }
+              className="text-xs rounded-xl min-h-24 resize-none border-border/60"
+            />
+          </div>
+
+          <DialogFooter className="flex flex-row justify-end gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setRejectQCState((prev) => ({ ...prev, open: false }))
+              }
+              className="rounded-lg text-xs font-semibold cursor-pointer"
+            >
+              Batal
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleConfirmRejectQCPO}
+              disabled={!rejectQCState.reason.trim()}
+              className="rounded-lg text-xs font-bold cursor-pointer"
+            >
+              Kembalikan ke QC
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL APPROVAL KONFIRMASI QC RECEIPT (PM) */}
+      <Dialog
+        open={!!approvingQCPO}
+        onOpenChange={(open) => !open && setApprovingQCPO(null)}
+      >
+        <DialogContent className="w-[95vw] sm:max-w-md rounded-2xl p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" /> Persetujuan Final QC Penerimaan
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground pt-1">
+              Apakah Anda yakin ingin menyetujui laporan pemeriksaan QC untuk PO berikut:
+            </DialogDescription>
+          </DialogHeader>
+
+          {approvingQCPO && (
+            <div className="bg-muted/30 border border-border/60 rounded-xl p-3.5 space-y-2 text-xs my-2">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Nomor PO:</span>
+                <span className="font-bold text-primary">{approvingQCPO.nomorPO}</span>
+              </div>
+              {approvingQCPO.qcReportNumber && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Nomor Laporan QC:</span>
+                  <span className="font-bold text-foreground font-mono">{approvingQCPO.qcReportNumber}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Supplier:</span>
+                <span className="font-semibold text-foreground text-right">{approvingQCPO.kepada || approvingQCPO.supplier?.name || "-"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Proyek:</span>
+                <span className="font-semibold text-foreground text-right">{approvingQCPO.projek || "Gudang"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total Item:</span>
+                <span className="font-bold text-foreground">{approvingQCPO.items?.length || 0} Barang</span>
+              </div>
+              {pmQcNotes[approvingQCPO.id] && (
+                <div className="pt-1 border-t border-border/40">
+                  <span className="text-muted-foreground block mb-0.5">Catatan PM:</span>
+                  <span className="font-medium text-foreground italic">{pmQcNotes[approvingQCPO.id]}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="flex flex-row justify-end gap-2 mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setApprovingQCPO(null)}
+              disabled={isPending}
+              className="rounded-lg text-xs font-semibold cursor-pointer"
+            >
+              Batal
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => approvingQCPO && handleApproveQCPO(approvingQCPO)}
+              disabled={isPending}
+              className="rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+            >
+              {isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                "Setujui Final QC"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* QC REPORT PDF PREVIEW DIALOG */}
+      {previewQCPO && (
+        <QCReceiptReportPreviewDialog
+          open={!!previewQCPO}
+          onOpenChange={(open) => !open && setPreviewQCPO(null)}
+          purchaseOrder={previewQCPO}
+        />
+      )}
     </div>
   );
 }

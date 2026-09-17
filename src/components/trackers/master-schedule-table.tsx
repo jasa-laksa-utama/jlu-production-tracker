@@ -8,10 +8,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Table, CheckCircle2, AlertCircle } from "lucide-react";
+import { Table, CheckCircle2, AlertCircle, Truck, ExternalLink, History } from "lucide-react";
 import { calculateMasterScheduleMatrix, generateWeekHeaders } from "@/lib/s-curve-calculator";
 import { cn } from "@/lib/utils";
 import { getPhaseProgressAtCutoff } from "@/lib/masterplan-cutoff-utils";
+import { ShippingProgressDetailDialog } from "./shipping-progress-detail-dialog";
+import { MasterplanWeeklyLogPanel } from "./masterplan-weekly-log-dialog";
 
 /**
  * Monotonic Cubic Spline Interpolation for smooth, non-oscillating S-curves
@@ -100,6 +102,14 @@ export function MasterScheduleTable({ project }: { project: any }) {
     left: 0,
     top: 0,
   });
+  const [isShippingDetailOpen, setIsShippingDetailOpen] = useState(false);
+  const [isLogDialogOpen, setIsLogDialogOpen] = useState(false);
+  const [selectedWeekForLog, setSelectedWeekForLog] = useState<number>(1);
+
+  const handleOpenWeekLog = (weekNumber: number) => {
+    setSelectedWeekForLog(weekNumber);
+    setIsLogDialogOpen(true);
+  };
 
   if (!project || !project.masterplan) {
     return (
@@ -114,17 +124,17 @@ export function MasterScheduleTable({ project }: { project: any }) {
   const startDate = masterplan.startDate || project.createdAt || new Date();
   const phases = masterplan.phases || [];
 
-  // Map actual progress for each phase (e.g. Procurement = 50%, Engineering = 100%)
+  // Map actual progress for each phase (e.g. Procurement, Engineering, Fabrication)
   const phaseActualMap: Record<string, number> = {};
   for (const p of phases) {
-    phaseActualMap[p.code] = Number(p.actualProgress || 0);
+    phaseActualMap[p.code] = getPhaseProgressAtCutoff(p, project, new Date());
   }
 
   // 1. Calculate real-time total actual progress from all masterplan phases
   const totalActualProgressFromPhases = phases.reduce(
     (sum: number, phase: any) => {
       const weight = Number(phase.weightPercent || 0);
-      const prog = Number(phase.actualProgress || 0);
+      const prog = getPhaseProgressAtCutoff(phase, project, new Date());
       return sum + (prog / 100) * weight;
     },
     0,
@@ -337,8 +347,50 @@ export function MasterScheduleTable({ project }: { project: any }) {
               </div>
             </div>
           </div>
+
+          {/* Tombol Audit Log Progres Masterplan (Menu Toggle) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (isLogDialogOpen) {
+                setIsLogDialogOpen(false);
+              } else {
+                handleOpenWeekLog(currentWeekNum);
+              }
+            }}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-2xs cursor-pointer",
+              isLogDialogOpen
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-background hover:bg-muted text-foreground border-border/70 hover:border-primary/40",
+            )}
+            title="Buka / tutup menu audit log progres mingguan masterplan"
+          >
+            <History
+              className={cn(
+                "w-3.5 h-3.5",
+                isLogDialogOpen ? "text-primary-foreground" : "text-primary",
+              )}
+            />
+            <span>Audit Log Progres</span>
+          </button>
         </div>
       </CardHeader>
+
+      {/* Menu Audit Log Progres Mingguan Simpel (Inline Panel) */}
+      {project && (
+        <MasterplanWeeklyLogPanel
+          isOpen={isLogDialogOpen}
+          onClose={() => setIsLogDialogOpen(false)}
+          projectId={project.id}
+          projectName={project.projectName || project.projectNumber}
+          totalWeeks={totalWeeks}
+          initialWeekNumber={selectedWeekForLog}
+          weekHeaders={matrix.weekHeaders}
+          weeklyActValues={matrix.summary.progressVarianceWeeks}
+          cachedLogs={project.productionLogs}
+        />
+      )}
 
       <CardContent className="p-0">
         {/* Relative container wrapping table & SVG overlay with min-w-max */}
@@ -481,7 +533,9 @@ export function MasterScheduleTable({ project }: { project: any }) {
                 {matrix.weekHeaders.map((wh) => (
                   <th
                     key={wh.weekNumber}
-                    className="p-1 text-center font-extrabold border-r border-b border-border/40 bg-muted/60 w-9 text-[9px]"
+                    onClick={() => handleOpenWeekLog(wh.weekNumber)}
+                    className="p-1 text-center font-extrabold border-r border-b border-border/40 bg-muted/60 w-9 text-[9px] cursor-pointer hover:bg-primary/20 hover:text-primary transition-colors select-none"
+                    title={`Klik untuk melihat detail log aktivitas Minggu ${wh.weekNumber}`}
                   >
                     {wh.weekInMonth}
                   </th>
@@ -492,7 +546,9 @@ export function MasterScheduleTable({ project }: { project: any }) {
                 {matrix.weekHeaders.map((wh) => (
                   <th
                     key={wh.weekNumber}
-                    className="p-1 text-center font-semibold text-muted-foreground border-r border-border/40 bg-muted/40 w-9 text-[8.5px]"
+                    onClick={() => handleOpenWeekLog(wh.weekNumber)}
+                    className="p-1 text-center font-semibold text-muted-foreground border-r border-border/40 bg-muted/40 w-9 text-[8.5px] cursor-pointer hover:bg-primary/20 hover:text-primary transition-colors select-none"
+                    title={`Klik untuk melihat detail log aktivitas ${wh.dateRange}`}
                   >
                     {wh.dateRange}
                   </th>
@@ -544,6 +600,15 @@ export function MasterScheduleTable({ project }: { project: any }) {
                   }
                 }
 
+                const isManualPhase =
+                  phaseObj &&
+                  !phaseObj.code?.includes("PROCURE") &&
+                  !phaseObj.code?.includes("PPIC") &&
+                  !phaseObj.code?.includes("ENG") &&
+                  !phaseObj.code?.includes("FAB") &&
+                  !phaseObj.code?.includes("STRUKTUR") &&
+                  !phaseObj.code?.includes("MEKANIKAL");
+
                 return (
                   <React.Fragment key={item.code || idx}>
                     {/* Sub-Row 1: PLAN */}
@@ -556,9 +621,24 @@ export function MasterScheduleTable({ project }: { project: any }) {
                       </td>
                       <td
                         rowSpan={2}
-                        className="font-semibold text-foreground border-r border-border/40 whitespace-pre-wrap align-middle bg-background/60 p-1 max-w-48 text-[11px]"
+                        className="font-semibold text-foreground border-r border-border/40 whitespace-pre-wrap align-middle bg-background/60 p-1.5 max-w-48 text-[11px]"
                       >
-                        {item.name}
+                        <div className="flex flex-col gap-1">
+                          <span>{item.name}</span>
+                          {(item.code === "SHIPMENT" ||
+                            item.name?.toUpperCase().includes("SHIPMENT") ||
+                            item.name?.toUpperCase().includes("PENGIRIMAN")) && (
+                            <button
+                              type="button"
+                              onClick={() => setIsShippingDetailOpen(true)}
+                              className="inline-flex items-center gap-1 text-[9.5px] text-primary hover:underline font-bold bg-primary/10 hover:bg-primary/20 px-1.5 py-0.5 rounded w-fit transition-colors cursor-pointer border border-primary/20"
+                              title="Klik untuk melihat monitoring status pengiriman per unit conveyor"
+                            >
+                              <Truck className="w-3 h-3 text-primary" />
+                              <span>Detail Unit</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td
                         rowSpan={2}
@@ -615,12 +695,14 @@ export function MasterScheduleTable({ project }: { project: any }) {
                         return (
                           <td
                             key={wh.weekNumber}
+                            onClick={() => handleOpenWeekLog(wh.weekNumber)}
                             className={cn(
-                              "border-r border-border/40 text-center font-bold transition-colors p-0.5 text-[9.5px] w-9",
+                              "border-r border-border/40 text-center font-bold transition-colors p-0.5 text-[9.5px] w-9 cursor-pointer select-none",
                               actVal > 0
-                                ? "bg-primary/20 text-foreground"
-                                : "text-muted-foreground/20",
+                                ? "bg-primary/20 text-foreground hover:bg-primary/40 hover:scale-105"
+                                : "text-muted-foreground/20 hover:bg-muted/40",
                             )}
+                            title={actVal > 0 ? `Klik untuk melihat rincian progres +${actVal.toFixed(2)}% pada Minggu ${wh.weekNumber}` : `Klik untuk melihat log Minggu ${wh.weekNumber}`}
                           >
                             {actVal > 0 ? actVal.toFixed(2) : "-"}
                           </td>
@@ -632,7 +714,14 @@ export function MasterScheduleTable({ project }: { project: any }) {
                         <div className="flex items-center justify-between px-1.5 py-0.5 text-foreground font-bold text-[9.5px]">
                           <span>
                             {(
-                              ((Number(phaseObj?.actualProgress || 0) / 100) *
+                              ((Number(
+                                (phaseObj?.code &&
+                                  phaseActualMap[phaseObj.code] !== undefined &&
+                                  phaseActualMap[phaseObj.code] > 0)
+                                  ? phaseActualMap[phaseObj.code]
+                                  : phaseObj?.actualProgress || 0,
+                              ) /
+                                100) *
                                 item.weightPercent)
                             ).toFixed(2)}
                             %
@@ -679,7 +768,9 @@ export function MasterScheduleTable({ project }: { project: any }) {
                 {matrix.weekHeaders.map((wh) => (
                   <td
                     key={wh.weekNumber}
-                    className="text-center font-black border-r border-border/40 text-foreground bg-muted/90 p-0.5 text-[9px] w-9"
+                    onClick={() => handleOpenWeekLog(wh.weekNumber)}
+                    className="text-center font-black border-r border-border/40 text-foreground bg-muted/90 p-0.5 text-[9px] w-9 cursor-pointer hover:bg-primary/20 hover:text-primary transition-colors select-none"
+                    title={`Klik untuk melihat detail log aktivitas Minggu ${wh.weekNumber}`}
                   >
                     {wh.weekNumber}
                   </td>
@@ -812,6 +903,23 @@ export function MasterScheduleTable({ project }: { project: any }) {
             </tfoot>
           </table>
         </div>
+
+        {/* Modal Detail Shipping Per Unit */}
+        {project && (
+          <ShippingProgressDetailDialog
+            isOpen={isShippingDetailOpen}
+            onClose={() => setIsShippingDetailOpen(false)}
+            projectId={project.id}
+            projectName={project.projectName || project.projectNumber || "Project"}
+            projectNumber={project.projectNumber || "-"}
+            clientName={
+              project.customer?.company ||
+              project.customer?.name ||
+              project.clientName ||
+              "-"
+            }
+          />
+        )}
       </CardContent>
     </Card>
   );

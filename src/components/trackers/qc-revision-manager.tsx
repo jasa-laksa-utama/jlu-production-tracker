@@ -16,6 +16,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -50,7 +58,19 @@ import {
   ChevronDown,
   RotateCcw,
   Lock,
+  Download,
+  Camera,
+  Tag,
+  Layers,
+  Boxes,
+  LayoutGrid,
+  Search,
 } from "lucide-react";
+import { QCReportDialog } from "./qc-report-dialog";
+import { ProgressPhotoDialog } from "./progress-photo-dialog";
+import { SubComponentDialog } from "./sub-component-dialog";
+import { toggleSubComponentComplete } from "@/app/actions/sub-components";
+import { cn } from "@/lib/utils";
 import {
   getProjectQCCheckpoints,
   inspectQCItem,
@@ -154,6 +174,7 @@ function StageQCSelector({
   isProductionReady = true,
   prodCompletedQty = 0,
   prodTotalQty = 1,
+  showStageName = false,
 }: {
   stageName: string;
   status: string;
@@ -164,6 +185,7 @@ function StageQCSelector({
   isProductionReady?: boolean;
   prodCompletedQty?: number;
   prodTotalQty?: number;
+  showStageName?: boolean;
 }) {
   return (
     <DropdownMenu>
@@ -174,57 +196,73 @@ function StageQCSelector({
             disabled={!isProductionReady}
             title={
               !isProductionReady
-                ? `Belum dikerjakan oleh Produksi (${prodCompletedQty}/${prodTotalQty})`
-                : `Telah dikerjakan Produksi (${prodCompletedQty}/${prodTotalQty}) - Siap Di-QC`
+                ? `Belum selesai dikerjakan tim Produksi (${prodCompletedQty}/${prodTotalQty})`
+                : status === "PASS"
+                ? `Lolos QC (${prodCompletedQty}/${prodTotalQty}) - Klik untuk ubah`
+                : status === "FAIL"
+                ? `Temuan NCR (${prodCompletedQty}/${prodTotalQty}) - Klik untuk ubah`
+                : status === "ON_HOLD"
+                ? `Drawing Revision Hold (${prodCompletedQty}/${prodTotalQty}) - Klik untuk ubah`
+                : `Produksi Selesai (${prodCompletedQty}/${prodTotalQty}) - Siap Di-QC! Klik untuk inspeksi`
             }
-            className={`flex items-center justify-between gap-1 px-2.5 py-1 rounded-lg text-xs font-bold border transition-all shadow-2xs ${
+            className={cn(
+              "w-full inline-flex items-center justify-center gap-1 py-1 px-1 rounded-lg text-xs font-bold transition-all select-none",
               !isProductionReady
-                ? "opacity-45 cursor-not-allowed bg-muted/20 border-border/40 text-muted-foreground/60"
-                : "cursor-pointer bg-background/10 hover:bg-background/20"
-            }`}
+                ? "cursor-not-allowed bg-muted/20 text-muted-foreground/50 border border-border/30"
+                : "cursor-pointer hover:shadow-2xs active:scale-95"
+            )}
           >
-            <span className="text-xs font-semibold text-muted-foreground">
-              {stageName.slice(0, 4)}:
-            </span>
+            {showStageName && (
+              <span className="text-[11px] font-semibold text-muted-foreground mr-1">
+                {stageName.slice(0, 4)}:
+              </span>
+            )}
             {status === "PASS" ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Pass
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-500/15 px-1.5 py-0.5 rounded-md border border-emerald-500/40 w-full justify-center">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                <span>PASS</span>
               </span>
             ) : status === "FAIL" ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-700 dark:text-red-300 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/30 animate-pulse">
-                <XCircle className="w-3 h-3 text-red-600" /> Revisi
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-red-700 dark:text-red-300 bg-red-500/15 px-1.5 py-0.5 rounded-md border border-red-500/40 w-full justify-center animate-pulse">
+                <XCircle className="w-3 h-3 text-red-600 shrink-0" />
+                <span>REVISI</span>
               </span>
             ) : status === "ON_HOLD" ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30 animate-pulse">
-                <PauseCircle className="w-3 h-3 text-amber-600" /> DR
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded-md border border-amber-500/40 w-full justify-center animate-pulse">
+                <PauseCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                <span>DR</span>
               </span>
             ) : !isProductionReady ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/60 bg-muted/30 px-1.5 py-0.5 rounded border border-border/30">
-                <Lock className="w-2.5 h-2.5 text-muted-foreground/50" /> Belum
-                Siap
+              <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-muted-foreground/60 bg-muted/30 px-1 py-0.5 rounded-md border border-border/30 w-full justify-center">
+                <Lock className="w-2.5 h-2.5 text-muted-foreground/40 shrink-0" />
+                <span>Belum</span>
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/60 bg-muted/30 px-1.5 py-0.5 rounded border border-border/40">
-                <Clock className="w-3 h-3 text-muted-foreground" /> Pilih ▾
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 dark:text-blue-300 bg-blue-500/15 hover:bg-blue-500/25 px-1.5 py-0.5 rounded-md border border-blue-500/40 w-full justify-center shadow-2xs">
+                <Clock className="w-3 h-3 text-blue-600 shrink-0" />
+                <span>Siap QC ▾</span>
               </span>
             )}
           </button>
         }
       />
       {isProductionReady && (
-        <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuContent align="end" className="w-56">
+          <div className="px-2 py-1.5 border-b border-border/60 text-[11px] font-bold text-muted-foreground">
+            Status QC Tahap {stageName}
+          </div>
           <DropdownMenuItem
             onClick={onPass}
             className="text-xs font-semibold text-emerald-600 focus:text-emerald-700 focus:bg-emerald-50 dark:focus:bg-emerald-950/20 gap-2 cursor-pointer p-2"
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            Lolos QC
+            Lolos QC (PASS)
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={onReset}
             className="text-xs font-semibold text-slate-600 focus:text-slate-700 focus:bg-slate-100 dark:focus:bg-slate-900/40 gap-2 cursor-pointer p-2"
           >
-            <RotateCcw className="w-4 h-4 text-slate-500" />⚪ Reset Status
+            <RotateCcw className="w-4 h-4 text-slate-500" /> Reset Status
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -232,14 +270,14 @@ function StageQCSelector({
             className="text-xs font-semibold text-red-600 focus:text-red-700 focus:bg-red-50 dark:focus:bg-red-950/20 gap-2 cursor-pointer p-2"
           >
             <XCircle className="w-4 h-4 text-red-600" />
-            Revisi Produksi
+            Catat Temuan Kesalahan (NCR)
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={onDR}
             className="text-xs font-semibold text-amber-600 focus:text-amber-700 focus:bg-amber-50 dark:focus:bg-amber-950/20 gap-2 cursor-pointer p-2"
           >
             <PauseCircle className="w-4 h-4 text-amber-600" />
-            Revisi Drawing
+            Ajukan Revisi Drawing (DR)
           </DropdownMenuItem>
         </DropdownMenuContent>
       )}
@@ -262,8 +300,106 @@ export function QCNCRManagerPanel({
   const [activeTab, setActiveTab] = useState<
     "STRUCTURE" | "MECHANICAL" | "NCRS" | "DRS"
   >("STRUCTURE");
+  const [viewMode, setViewMode] = useState<"PER_UNIT" | "GROUPED_BY_COMPONENT">(
+    "PER_UNIT",
+  );
   const [qcData, setQcData] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Grouping Structure Items by Name across all units
+  const groupedStructureItems = React.useMemo(() => {
+    if (!qcData?.units) return [];
+    const map = new Map<
+      string,
+      {
+        name: string;
+        totalQty: number;
+        satuan: string;
+        unitInstances: Array<{
+          unitId: string;
+          unitName: string;
+          unitVolume: number;
+          unitSatuan: string;
+          item: any;
+        }>;
+      }
+    >();
+
+    qcData.units.forEach((unit: any) => {
+      (unit.structureItems || []).forEach((item: any) => {
+        const trimmedName = (item.name || "").trim();
+        if (!map.has(trimmedName)) {
+          map.set(trimmedName, {
+            name: trimmedName,
+            totalQty: 0,
+            satuan: item.satuan || "set",
+            unitInstances: [],
+          });
+        }
+        const group = map.get(trimmedName)!;
+        group.totalQty += Number(item.qty) || 0;
+        group.unitInstances.push({
+          unitId: unit.id,
+          unitName: unit.name,
+          unitVolume: unit.volume,
+          unitSatuan: unit.satuan,
+          item,
+        });
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }, [qcData]);
+
+  // Grouping Mechanical Items by Name across all units
+  const groupedMechanicalItems = React.useMemo(() => {
+    if (!qcData?.units) return [];
+    const map = new Map<
+      string,
+      {
+        name: string;
+        totalQty: number;
+        satuan: string;
+        unitInstances: Array<{
+          unitId: string;
+          unitName: string;
+          unitVolume: number;
+          unitSatuan: string;
+          item: any;
+        }>;
+      }
+    >();
+
+    qcData.units.forEach((unit: any) => {
+      (unit.mechanicalItems || []).forEach((item: any) => {
+        const trimmedName = (item.name || "").trim();
+        if (!map.has(trimmedName)) {
+          map.set(trimmedName, {
+            name: trimmedName,
+            totalQty: 0,
+            satuan: item.satuan || "unit",
+            unitInstances: [],
+          });
+        }
+        const group = map.get(trimmedName)!;
+        group.totalQty += Number(item.qty) || 0;
+        group.unitInstances.push({
+          unitId: unit.id,
+          unitName: unit.name,
+          unitVolume: unit.volume,
+          unitSatuan: unit.satuan,
+          item,
+        });
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }, [qcData]);
 
   // Form Raise NCR state
   const [selectedItemForNCR, setSelectedItemForNCR] = useState<{
@@ -273,6 +409,15 @@ export function QCNCRManagerPanel({
     itemId: string;
     itemName: string;
     stage: string;
+  } | null>(null);
+
+  // Sub Component Dialog State
+  const [selectedSubCompData, setSelectedSubCompData] = useState<{
+    open: boolean;
+    componentId: string;
+    componentName: string;
+    unitName?: string;
+    type: "STRUCTURE" | "MECHANICAL";
   } | null>(null);
 
   const [ncrCategory, setNcrCategory] = useState<string>("DIMENSI");
@@ -391,6 +536,31 @@ export function QCNCRManagerPanel({
         fetchQCData();
       } else {
         toast.error(res.error || "Gagal mereset status inspeksi");
+      }
+    });
+  };
+
+  // Toggle Sub-Component Complete directly from QC Inspection Table
+  const handleToggleSubItem = (
+    subId: string,
+    type: "STRUCTURE" | "MECHANICAL",
+    currentCompleted: boolean,
+  ) => {
+    startTransition(async () => {
+      const res = await toggleSubComponentComplete(
+        subId,
+        type,
+        !currentCompleted,
+      );
+      if (res.success) {
+        toast.success(
+          !currentCompleted
+            ? "Sub-part ditandai selesai"
+            : "Status selesai sub-part dibatalkan",
+        );
+        fetchQCData();
+      } else {
+        toast.error(res.error || "Gagal memperbarui status sub-part");
       }
     });
   };
@@ -608,6 +778,166 @@ export function QCNCRManagerPanel({
     (r: any) => r.revisionType === "DRAWING_REVISION",
   );
 
+  // Filtered collections based on searchQuery
+  const filteredStructureUnits = React.useMemo(() => {
+    if (!qcData?.units) return [];
+    if (!searchQuery.trim()) return qcData.units;
+    const q = searchQuery.toLowerCase().trim();
+    return qcData.units
+      .map((unit: any) => {
+        const unitMatches =
+          (unit.name || "").toLowerCase().includes(q) ||
+          (unit.markingCode || "").toLowerCase().includes(q) ||
+          (unit.bundleTag || "").toLowerCase().includes(q);
+        const matchingItems = (unit.structureItems || []).filter(
+          (item: any) => {
+            const nameMatch = (item.name || "").toLowerCase().includes(q);
+            const markingMatch = (item.markingCode || "")
+              .toLowerCase()
+              .includes(q);
+            const bundleMatch = (item.bundleTag || "")
+              .toLowerCase()
+              .includes(q);
+            const subMatch = (item.subItems || []).some(
+              (s: any) =>
+                (s.name || "").toLowerCase().includes(q) ||
+                (s.markingCode || "").toLowerCase().includes(q) ||
+                (s.dimension || "").toLowerCase().includes(q),
+            );
+            return nameMatch || markingMatch || bundleMatch || subMatch;
+          },
+        );
+
+        if (unitMatches) {
+          return unit;
+        } else if (matchingItems.length > 0) {
+          return {
+            ...unit,
+            structureItems: matchingItems,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }, [qcData, searchQuery]);
+
+  const filteredGroupedStructureItems = React.useMemo(() => {
+    if (!groupedStructureItems) return [];
+    if (!searchQuery.trim()) return groupedStructureItems;
+    const q = searchQuery.toLowerCase().trim();
+    return groupedStructureItems.filter((group) => {
+      const groupNameMatch = group.name.toLowerCase().includes(q);
+      const anyUnitMatch = group.unitInstances.some(({ unitName, item }) => {
+        const unitNameMatch = unitName.toLowerCase().includes(q);
+        const markingMatch = (item.markingCode || "").toLowerCase().includes(q);
+        const bundleMatch = (item.bundleTag || "").toLowerCase().includes(q);
+        const subMatch = (item.subItems || []).some(
+          (s: any) =>
+            (s.name || "").toLowerCase().includes(q) ||
+            (s.markingCode || "").toLowerCase().includes(q) ||
+            (s.dimension || "").toLowerCase().includes(q),
+        );
+        return unitNameMatch || markingMatch || bundleMatch || subMatch;
+      });
+      return groupNameMatch || anyUnitMatch;
+    });
+  }, [groupedStructureItems, searchQuery]);
+
+  const filteredMechanicalUnits = React.useMemo(() => {
+    if (!qcData?.units) return [];
+    if (!searchQuery.trim()) return qcData.units;
+    const q = searchQuery.toLowerCase().trim();
+    return qcData.units
+      .map((unit: any) => {
+        const unitMatches =
+          (unit.name || "").toLowerCase().includes(q) ||
+          (unit.markingCode || "").toLowerCase().includes(q) ||
+          (unit.bundleTag || "").toLowerCase().includes(q);
+        const matchingItems = (unit.mechanicalItems || []).filter(
+          (item: any) => {
+            const nameMatch = (item.name || "").toLowerCase().includes(q);
+            const markingMatch = (item.markingCode || "")
+              .toLowerCase()
+              .includes(q);
+            const bundleMatch = (item.bundleTag || "")
+              .toLowerCase()
+              .includes(q);
+            const subMatch = (item.subItems || []).some(
+              (s: any) =>
+                (s.name || "").toLowerCase().includes(q) ||
+                (s.markingCode || "").toLowerCase().includes(q) ||
+                (s.spec || "").toLowerCase().includes(q),
+            );
+            return nameMatch || markingMatch || bundleMatch || subMatch;
+          },
+        );
+
+        if (unitMatches) {
+          return unit;
+        } else if (matchingItems.length > 0) {
+          return {
+            ...unit,
+            mechanicalItems: matchingItems,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }, [qcData, searchQuery]);
+
+  const filteredGroupedMechanicalItems = React.useMemo(() => {
+    if (!groupedMechanicalItems) return [];
+    if (!searchQuery.trim()) return groupedMechanicalItems;
+    const q = searchQuery.toLowerCase().trim();
+    return groupedMechanicalItems.filter((group) => {
+      const groupNameMatch = group.name.toLowerCase().includes(q);
+      const anyUnitMatch = group.unitInstances.some(({ unitName, item }) => {
+        const unitNameMatch = unitName.toLowerCase().includes(q);
+        const markingMatch = (item.markingCode || "").toLowerCase().includes(q);
+        const bundleMatch = (item.bundleTag || "").toLowerCase().includes(q);
+        const subMatch = (item.subItems || []).some(
+          (s: any) =>
+            (s.name || "").toLowerCase().includes(q) ||
+            (s.markingCode || "").toLowerCase().includes(q) ||
+            (s.spec || "").toLowerCase().includes(q),
+        );
+        return unitNameMatch || markingMatch || bundleMatch || subMatch;
+      });
+      return groupNameMatch || anyUnitMatch;
+    });
+  }, [groupedMechanicalItems, searchQuery]);
+
+  const filteredNCRs = React.useMemo(() => {
+    if (!allNCRs) return [];
+    if (!searchQuery.trim()) return allNCRs;
+    const q = searchQuery.toLowerCase().trim();
+    return allNCRs.filter((ncr: any) => {
+      return (
+        (ncr.ncrNumber || "").toLowerCase().includes(q) ||
+        (ncr.ncrCategory || "").toLowerCase().includes(q) ||
+        (ncr.ncrDescription || "").toLowerCase().includes(q) ||
+        (ncr.unit?.name || "").toLowerCase().includes(q) ||
+        (ncr.raisedBy || "").toLowerCase().includes(q)
+      );
+    });
+  }, [allNCRs, searchQuery]);
+
+  const filteredDRs = React.useMemo(() => {
+    if (!allDRs) return [];
+    if (!searchQuery.trim()) return allDRs;
+    const q = searchQuery.toLowerCase().trim();
+    return allDRs.filter((dr: any) => {
+      return (
+        (dr.drNumber || "").toLowerCase().includes(q) ||
+        (dr.drawingRef || "").toLowerCase().includes(q) ||
+        (dr.fieldCondition || "").toLowerCase().includes(q) ||
+        (dr.requestedChange || "").toLowerCase().includes(q) ||
+        (dr.unit?.name || "").toLowerCase().includes(q) ||
+        (dr.raisedBy || "").toLowerCase().includes(q)
+      );
+    });
+  }, [allDRs, searchQuery]);
+
   // P2: Calculate QC Masterplan Metrics
   let totalCheckpoints = 0;
   let passCount = 0;
@@ -633,10 +963,34 @@ export function QCNCRManagerPanel({
       ? Number(((passCount / totalCheckpoints) * 100).toFixed(1))
       : 0;
 
+  const [isQCReportOpen, setIsQCReportOpen] = useState<boolean>(false);
+  const [selectedUnitForReport, setSelectedUnitForReport] = useState<
+    string | undefined
+  >("ALL");
+  const [reportLevelTarget, setReportLevelTarget] = useState<
+    "UNIT" | "COMPONENT"
+  >("UNIT");
+  const [selectedComponentIdForReport, setSelectedComponentIdForReport] =
+    useState<string | undefined>(undefined);
+  const [selectedComponentIdsForReport, setSelectedComponentIdsForReport] =
+    useState<string[] | undefined>(undefined);
+
+  // 1. Direct Component Production Photo Dialog (Read-Only for QC to check fabrication results)
+  const [selectedProdPhotoTarget, setSelectedProdPhotoTarget] = useState<{
+    unit: { id: string; name: string };
+    component: {
+      id: string;
+      name: string;
+      type: "STRUCTURE" | "MECHANICAL" | "PHASE" | "GENERAL";
+      satuan?: string;
+      qty?: number | string;
+    };
+  } | null>(null);
+
   return (
     <div className="bg-card border rounded-2xl p-4 sm:p-5 shadow-2xs space-y-5 text-foreground">
       {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-border/60">
+      <div className="flex items-center justify-between pb-3 border-b border-border/60 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-xl bg-red-500/10 text-red-600 border border-red-500/20">
             <ShieldCheck className="w-5 h-5" />
@@ -648,18 +1002,20 @@ export function QCNCRManagerPanel({
           </div>
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={fetchQCData}
-          disabled={loading || isPending}
-          className="gap-1.5 text-xs h-8 cursor-pointer"
-        >
-          <RefreshCw
-            className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`}
-          />
-          Refresh Data
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchQCData}
+            disabled={loading || isPending}
+            className="gap-1.5 text-xs h-8 cursor-pointer"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`}
+            />
+            Refresh Data
+          </Button>
+        </div>
       </div>
 
       {/* P2: QC Masterplan Dashboard Metrics Bar */}
@@ -712,11 +1068,11 @@ export function QCNCRManagerPanel({
         </div>
       )}
 
-      {/* Navigation Dropdown Selector */}
-      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-border/50">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-muted-foreground">
-            Tampilan:
+      {/* Navigation Dropdown Selector, Search Bar & View Mode Switcher */}
+      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-border/50 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-1 min-w-[280px]">
+          <span className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+            Kategori:
           </span>
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -724,7 +1080,7 @@ export function QCNCRManagerPanel({
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-9 gap-2 text-xs font-semibold bg-background shadow-2xs border-border hover:bg-accent cursor-pointer min-w-60 justify-between"
+                  className="h-9 gap-2 text-xs font-semibold bg-background shadow-2xs border-border hover:bg-accent cursor-pointer min-w-56 justify-between"
                 >
                   <span className="flex items-center gap-2 text-foreground">
                     {activeTab === "STRUCTURE" && (
@@ -800,7 +1156,65 @@ export function QCNCRManagerPanel({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Search Bar */}
+          <div className="relative flex-1 min-w-[180px] max-w-xs">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              type="search"
+              placeholder="Cari komponen, unit, marking..."
+              className="pl-8.5 pr-3 h-9 text-xs bg-background rounded-xl border-border/80 shadow-2xs focus-visible:ring-1 focus-visible:ring-primary w-full"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
+
+        {/* View Mode Switcher (Per Unit vs Per Komponen) */}
+        {(activeTab === "STRUCTURE" || activeTab === "MECHANICAL") && (
+          <div className="flex items-center gap-1.5 p-1 bg-muted/30 rounded-xl border border-border/60">
+            <Button
+              type="button"
+              variant={viewMode === "PER_UNIT" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("PER_UNIT")}
+              className={cn(
+                "h-7.5 px-2.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5",
+                viewMode === "PER_UNIT"
+                  ? "bg-background text-foreground shadow-2xs border border-border/60 font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-transparent",
+              )}
+            >
+              <Boxes className="w-3.5 h-3.5 text-primary" />
+              <span>Per Unit Conveyor</span>
+            </Button>
+            <Button
+              type="button"
+              variant={
+                viewMode === "GROUPED_BY_COMPONENT" ? "default" : "ghost"
+              }
+              size="sm"
+              onClick={() => setViewMode("GROUPED_BY_COMPONENT")}
+              className={cn(
+                "h-7.5 px-2.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5",
+                viewMode === "GROUPED_BY_COMPONENT"
+                  ? "bg-background text-foreground shadow-2xs border border-border/60 font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-transparent",
+              )}
+            >
+              <Layers className="w-3.5 h-3.5 text-primary" />
+              <span>Per Komponen</span>
+              <Badge
+                variant="secondary"
+                className="text-[9px] px-1.5 py-0 h-4 bg-primary/10 text-primary font-bold rounded-full ml-0.5"
+              >
+                {activeTab === "STRUCTURE"
+                  ? filteredGroupedStructureItems.length
+                  : filteredGroupedMechanicalItems.length}
+              </Badge>
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Content Body */}
@@ -824,144 +1238,775 @@ export function QCNCRManagerPanel({
                   Masterplan Produksi terlebih dahulu.
                 </p>
               </div>
-            ) : (
-              qcData.units.map((unit: any) => (
-                <div
-                  key={unit.id}
-                  className="border rounded-2xl bg-card overflow-hidden shadow-xs space-y-3"
-                >
-                  {/* Unit Header */}
-                  <div className="bg-primary/5 p-3 px-4 border-b flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <span className="font-semibold text-sm text-foreground">
-                        {unit.name}
-                      </span>
-                      <span className="text-xs text-muted-foreground font-medium">
-                        ({unit.volume} {unit.satuan})
-                      </span>
+            ) : viewMode === "PER_UNIT" ? (
+              filteredStructureUnits.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground border rounded-xl bg-muted/10">
+                  <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p className="font-semibold">
+                    {searchQuery
+                      ? "Tidak Ada Unit / Komponen Struktur yang Cocok"
+                      : "Belum Ada Unit Pengerjaan"}
+                  </p>
+                  <p className="text-xs">
+                    {searchQuery
+                      ? `Tidak ditemukan unit, komponen, atau marking dengan kata kunci "${searchQuery}".`
+                      : "Unit conveyor & item produksi perlu didefinisikan di Masterplan Produksi terlebih dahulu."}
+                  </p>
+                </div>
+              ) : (
+                filteredStructureUnits.map((unit: any) => (
+                  <div
+                    key={unit.id}
+                    className="border rounded-2xl bg-card overflow-hidden shadow-xs space-y-3"
+                  >
+                    {/* Unit Header */}
+                    <div className="bg-primary/5 p-3 px-4 border-b flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-semibold text-sm text-foreground">
+                          {unit.name}
+                        </span>
+                        <span className="text-xs text-muted-foreground font-medium">
+                          ({unit.volume} {unit.satuan})
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setSelectedUnitForReport(unit.id);
+                            setReportLevelTarget("UNIT");
+                            setSelectedComponentIdForReport(undefined);
+                            setSelectedComponentIdsForReport(undefined);
+                            setIsQCReportOpen(true);
+                          }}
+                          className="h-7 px-2.5 rounded-lg text-xs font-semibold gap-1 border-primary/30 text-primary hover:bg-primary/10 cursor-pointer shadow-2xs"
+                        >
+                          <Download className="w-3 h-3" />
+                          QC Report PDF
+                        </Button>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="p-4 space-y-3">
-                    <div className="text-sm font-semibold text-foreground flex items-center gap-2 pb-1 border-b border-border/40">
-                      <Hammer className="w-4 h-4" />
-                      Komponen Fabrikasi Struktur (
-                      {unit.structureItems?.length || 0})
-                    </div>
-
-                    {!unit.structureItems ||
-                    unit.structureItems.length === 0 ? (
-                      <p className="text-xs text-muted-foreground p-3 italic">
-                        Tidak ada komponen fabrikasi struktur di unit ini.
-                      </p>
-                    ) : (
-                      <div className="grid grid-cols-1 gap-2.5">
-                        {unit.structureItems.map((item: any, idx: number) => (
-                          <div
-                            key={item.id}
-                            className="p-3.5 rounded-xl border border-border/80 bg-background hover:border-primary/40 transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-2xs"
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <Badge
-                                variant="outline"
-                                className="bg-muted text-foreground text-xs px-1.5"
-                              >
-                                {idx + 1}
-                              </Badge>
-                              <div>
-                                <span className="font-semibold text-foreground text-sm">
-                                  {item.name}
-                                </span>
-                                <span className="text-xs text-muted-foreground font-medium ml-2">
-                                  ({item.qty} {item.satuan})
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* 6 Stages Dropdowns */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {[
-                                "CUTTING",
-                                "SETTING",
-                                "WELDING",
-                                "FINISHING",
-                                "PAINTING",
-                                "PACKAGING",
-                              ].map((stg) => {
-                                const status = getCheckpointStatus(
-                                  unit.id,
-                                  "STRUCTURE",
-                                  item.id,
-                                  stg,
-                                );
-                                const { completedQty, isDone, totalQty } =
-                                  getProductionStageProgress(
-                                    item,
+                    <div className="p-0">
+                      {!unit.structureItems ||
+                      unit.structureItems.length === 0 ? (
+                        <p className="text-xs text-muted-foreground p-4 italic">
+                          Tidak ada komponen fabrikasi struktur di unit ini.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <Table className="w-full text-xs">
+                            <TableHeader className="bg-muted/40">
+                              <TableRow className="border-b">
+                                <TableHead className="w-9 text-center text-xs font-bold">No</TableHead>
+                                <TableHead className="min-w-45 text-xs font-bold">Deskripsi Komponen & Sub-Part</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Dokumentasi</TableHead>
+                                <TableHead className="w-16 text-center text-xs font-bold">Qty</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Cutting</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Setting</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Welding</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Finishing</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Painting</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Packaging</TableHead>
+                                <TableHead className="w-24 text-center text-xs font-bold">Status QC</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {unit.structureItems.map((item: any, idx: number) => {
+                                const stages = [
+                                  "CUTTING",
+                                  "SETTING",
+                                  "WELDING",
+                                  "FINISHING",
+                                  "PAINTING",
+                                  "PACKAGING",
+                                ];
+                                let passStages = 0;
+                                let hasFail = false;
+                                let hasHold = false;
+                                stages.forEach((stg) => {
+                                  const st = getCheckpointStatus(
+                                    unit.id,
                                     "STRUCTURE",
-                                    stg,
+                                    item.id,
+                                    stg
                                   );
-                                const isProductionReady =
-                                  completedQty > 0 || isDone;
+                                  if (st === "PASS") passStages++;
+                                  else if (st === "FAIL") hasFail = true;
+                                  else if (st === "ON_HOLD") hasHold = true;
+                                });
 
                                 return (
-                                  <StageQCSelector
-                                    key={stg}
-                                    stageName={stg}
-                                    status={status}
-                                    isProductionReady={isProductionReady}
-                                    prodCompletedQty={completedQty}
-                                    prodTotalQty={totalQty}
-                                    onPass={() =>
-                                      handleInspectPass(
-                                        unit.id,
-                                        unit.name,
-                                        "STRUCTURE",
-                                        item.id,
-                                        item.name,
-                                        stg,
-                                      )
-                                    }
-                                    onReset={() =>
-                                      handleInspectReset(
-                                        unit.id,
-                                        unit.name,
-                                        "STRUCTURE",
-                                        item.id,
-                                        item.name,
-                                        stg,
-                                      )
-                                    }
-                                    onNCR={() =>
-                                      setSelectedItemForNCR({
-                                        unitId: unit.id,
-                                        unitName: unit.name,
-                                        itemType: "STRUCTURE",
-                                        itemId: item.id,
-                                        itemName: item.name,
-                                        stage: stg,
-                                      })
-                                    }
-                                    onDR={() =>
-                                      setSelectedItemForDR({
-                                        unitId: unit.id,
-                                        unitName: unit.name,
-                                        itemType: "STRUCTURE",
-                                        itemId: item.id,
-                                        itemName: item.name,
-                                        stage: stg,
-                                      })
-                                    }
-                                  />
+                                  <React.Fragment key={item.id}>
+                                    {/* Baris Komponen Utama */}
+                                    <TableRow className="hover:bg-muted/30 border-b transition-colors">
+                                      <TableCell className="text-center font-bold text-xs text-muted-foreground">
+                                        {idx + 1}
+                                      </TableCell>
+                                      {/* Deskripsi 2 Baris: Baris 1 Nama, Baris 2 Kode Marking */}
+                                      <TableCell className="py-2 px-3">
+                                        <div className="flex flex-col gap-1">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span className="font-bold text-foreground text-xs">
+                                              {item.name}
+                                            </span>
+                                            {item.subItems && item.subItems.length > 0 && (
+                                              <Badge
+                                                variant="secondary"
+                                                className="text-[9px] font-mono px-1.5 py-0 h-4 bg-muted text-muted-foreground font-semibold"
+                                                title="Progres Sub-Part Selesai di Produksi"
+                                              >
+                                                {item.subItems.filter((s: any) => s.isCompleted).length}/{item.subItems.length} Sub-Part
+                                              </Badge>
+                                            )}
+                                            {item.bundleTag && (
+                                              <Badge
+                                                variant="secondary"
+                                                className="text-[9px] px-1 py-0 h-4 bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-medium"
+                                                title={`Bundel/Palet: ${item.bundleTag}`}
+                                              >
+                                                📦 {item.bundleTag}
+                                              </Badge>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-1.5">
+                                            {item.markingCode ? (
+                                              <Badge
+                                                variant="outline"
+                                                className="text-[9px] font-mono px-1.5 py-0 h-4 bg-background border-primary/40 text-primary font-bold shadow-2xs"
+                                                title={`Kode Marking: ${item.markingCode}`}
+                                              >
+                                                {item.markingCode}
+                                              </Badge>
+                                            ) : (
+                                              <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </TableCell>
+                                      {/* Kolom Dokumentasi dengan Tombol Foto */}
+                                      <TableCell className="p-1.5 text-center">
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() =>
+                                            setSelectedProdPhotoTarget({
+                                              unit: {
+                                                id: unit.id,
+                                                name: unit.name,
+                                              },
+                                              component: {
+                                                id: item.id,
+                                                name: item.name,
+                                                type: "STRUCTURE",
+                                                satuan: item.satuan,
+                                                qty: item.qty,
+                                              },
+                                            })
+                                          }
+                                          className="h-7 px-2 rounded-lg text-[11px] font-semibold gap-1.5 border-border/80 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer shadow-2xs"
+                                          title={`Dokumentasi Foto Terpadu (Produksi & QC): ${item.name}`}
+                                        >
+                                          <Camera className="w-3.5 h-3.5 text-primary" />
+                                          <span>Foto</span>
+                                        </Button>
+                                      </TableCell>
+                                      <TableCell className="text-center font-bold text-xs text-foreground">
+                                        {item.qty} {item.satuan}
+                                      </TableCell>
+
+                                      {/* 6 Tahapan QC */}
+                                      {stages.map((stg) => {
+                                        const status = getCheckpointStatus(
+                                          unit.id,
+                                          "STRUCTURE",
+                                          item.id,
+                                          stg
+                                        );
+                                        const { completedQty, isDone, totalQty } =
+                                          getProductionStageProgress(
+                                            item,
+                                            "STRUCTURE",
+                                            stg
+                                          );
+                                        const isProductionReady =
+                                          completedQty > 0 || isDone;
+
+                                        return (
+                                          <TableCell
+                                            key={stg}
+                                            className="p-1 text-center"
+                                          >
+                                            <StageQCSelector
+                                              stageName={stg}
+                                              status={status}
+                                              isProductionReady={
+                                                isProductionReady
+                                              }
+                                              prodCompletedQty={completedQty}
+                                              prodTotalQty={totalQty}
+                                              showStageName={false}
+                                              onPass={() =>
+                                                handleInspectPass(
+                                                  unit.id,
+                                                  unit.name,
+                                                  "STRUCTURE",
+                                                  item.id,
+                                                  item.name,
+                                                  stg
+                                                )
+                                              }
+                                              onReset={() =>
+                                                handleInspectReset(
+                                                  unit.id,
+                                                  unit.name,
+                                                  "STRUCTURE",
+                                                  item.id,
+                                                  item.name,
+                                                  stg
+                                                )
+                                              }
+                                              onNCR={() =>
+                                                setSelectedItemForNCR({
+                                                  unitId: unit.id,
+                                                  unitName: unit.name,
+                                                  itemType: "STRUCTURE",
+                                                  itemId: item.id,
+                                                  itemName: item.name,
+                                                  stage: stg,
+                                                })
+                                              }
+                                              onDR={() =>
+                                                setSelectedItemForDR({
+                                                  unitId: unit.id,
+                                                  unitName: unit.name,
+                                                  itemType: "STRUCTURE",
+                                                  itemId: item.id,
+                                                  itemName: item.name,
+                                                  stage: stg,
+                                                })
+                                              }
+                                            />
+                                          </TableCell>
+                                        );
+                                      })}
+
+                                      {/* Status Ringkasan QC */}
+                                      <TableCell className="text-center p-1">
+                                        {passStages === 6 ? (
+                                          <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[10px] font-bold">
+                                            ✓ 6/6 Lolos
+                                          </Badge>
+                                        ) : hasFail ? (
+                                          <Badge className="bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30 text-[10px] font-bold">
+                                            ✕ Ada NCR
+                                          </Badge>
+                                        ) : hasHold ? (
+                                          <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] font-bold">
+                                            ⚠ Ada DR
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-[11px] font-semibold text-muted-foreground">
+                                            {passStages}/6 Lolos
+                                          </span>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+
+                                    {/* Inline Sub-Komponen Sub-List (Tanpa Checklist) */}
+                                    {item.subItems &&
+                                      item.subItems.length > 0 &&
+                                      item.subItems.map(
+                                        (sub: any, subIdx: number) => (
+                                          <TableRow
+                                            key={
+                                              sub.id ||
+                                              `${item.id}-sub-${subIdx}`
+                                            }
+                                            className="bg-muted/15 border-b border-border/40 hover:bg-muted/25 transition-colors"
+                                          >
+                                            <TableCell className="text-center font-semibold text-muted-foreground/70 p-1 text-[11px]">
+                                              <span className="font-mono text-muted-foreground/40 mr-0.5 select-none">
+                                                └─
+                                              </span>
+                                              {idx + 1}.{subIdx + 1}
+                                            </TableCell>
+                                            {/* Sub-Part Deskripsi 2 Baris: Baris 1 Nama & Spek, Baris 2 Marking */}
+                                            <TableCell className="py-1.5 px-3">
+                                              <div className="flex flex-col gap-0.5">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <Badge
+                                                    variant="outline"
+                                                    className="text-[9px] px-1 py-0 h-3.5 bg-background text-muted-foreground font-semibold border-border/80"
+                                                  >
+                                                    Sub-Part
+                                                  </Badge>
+                                                  <span className="text-xs text-foreground font-medium">
+                                                    {sub.name}
+                                                  </span>
+                                                  {sub.dimension && (
+                                                    <span className="text-[10px] text-muted-foreground bg-background/80 border border-border/60 px-1 py-0.5 rounded font-mono">
+                                                      {sub.dimension}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                  {sub.markingCode ? (
+                                                    <span className="text-[10px] font-mono text-primary font-bold">
+                                                      {sub.markingCode}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </TableCell>
+                                            {/* Kolom Dokumentasi Kosong untuk Sub-Part */}
+                                            <TableCell className="p-1 text-center text-muted-foreground/40 text-xs">-</TableCell>
+                                            <TableCell className="text-center text-muted-foreground text-xs font-medium">
+                                              {sub.qty || 1}{" "}
+                                              {sub.satuan || "pcs"}
+                                            </TableCell>
+                                            {/* Empty cells for stages */}
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            {/* Status Produksi Sub-Part */}
+                                            <TableCell className="p-1 text-center">
+                                              {sub.isCompleted ? (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="text-[9px] px-1.5 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 font-bold inline-flex items-center gap-1 shadow-2xs whitespace-nowrap"
+                                                  title={sub.completedBy ? `Ditandai selesai produksi oleh ${sub.completedBy}` : "Selesai di produksi"}
+                                                >
+                                                  ✓ Selesai Produksi
+                                                </Badge>
+                                              ) : (
+                                                <span className="text-[10px] text-muted-foreground/40 italic">-</span>
+                                              )}
+                                            </TableCell>
+                                          </TableRow>
+                                        )
+                                      )}
+                                  </React.Fragment>
                                 );
                               })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                ))
+              )
+            ) : filteredGroupedStructureItems.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground border rounded-xl bg-muted/10">
+                <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p className="font-semibold">
+                  {searchQuery
+                    ? "Tidak Ada Komponen Struktur yang Cocok"
+                    : "Tidak Ada Komponen Fabrikasi Struktur"}
+                </p>
+                <p className="text-xs">
+                  {searchQuery
+                    ? `Tidak ditemukan komponen struktur dengan kata kunci "${searchQuery}".`
+                    : "Belum ada komponen struktur yang terdaftar di unit conveyor proyek ini."}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredGroupedStructureItems.map((group, gIdx) => (
+                  <div
+                    key={group.name}
+                    className="border rounded-2xl bg-card overflow-hidden shadow-xs space-y-3 border-border/80"
+                  >
+                    {/* Group Header */}
+                    <div className="bg-primary/5 p-3 px-4 border-b flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <Badge
+                          variant="outline"
+                          className="bg-muted text-foreground text-xs px-2 py-0.5 font-bold"
+                        >
+                          #{gIdx + 1}
+                        </Badge>
+                        <span className="font-bold text-sm text-foreground">
+                          {group.name}
+                        </span>
+                        <Badge className="bg-primary/15 text-primary font-bold text-xs px-2.5 py-0.5 border border-primary/30">
+                          Total: {group.totalQty} {group.satuan}
+                        </Badge>
+                        <Badge
+                          variant="secondary"
+                          className="text-[11px] font-medium text-muted-foreground bg-muted/60"
+                        >
+                          Digunakan di {group.unitInstances.length} Unit
+                          Conveyor
+                        </Badge>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const firstInst = group.unitInstances[0];
+                          setSelectedUnitForReport(firstInst ? firstInst.unitId : "ALL");
+                          setReportLevelTarget("COMPONENT");
+                          setSelectedComponentIdForReport(firstInst ? firstInst.item.id : undefined);
+                          setSelectedComponentIdsForReport(group.unitInstances.map((u) => u.item.id));
+                          setIsQCReportOpen(true);
+                        }}
+                        className="h-7 px-2.5 rounded-lg text-xs font-semibold gap-1.5 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer shadow-2xs"
+                        title={`Buka QC Report PDF level komponen untuk seluruh unit ${group.name}`}
+                      >
+                        <FileText className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                        <span>QC Report PDF</span>
+                      </Button>
+                    </div>
+
+                    {/* Table of Units for this Component */}
+                    <div className="overflow-x-auto">
+                      <Table className="w-full text-xs">
+                        <TableHeader className="bg-muted/40">
+                          <TableRow className="border-b">
+                            <TableHead className="w-9 text-center text-xs font-bold">No</TableHead>
+                            <TableHead className="min-w-[130px] text-xs font-bold">Unit Conveyor</TableHead>
+                            <TableHead className="min-w-[170px] text-xs font-bold">Detail Komponen & Sub-Part</TableHead>
+                            <TableHead className="min-w-[135px] text-center text-xs font-bold">Dokumentasi & Report</TableHead>
+                            <TableHead className="w-16 text-center text-xs font-bold">Qty</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Cutting</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Setting</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Welding</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Finishing</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Painting</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Packaging</TableHead>
+                            <TableHead className="w-24 text-center text-xs font-bold">Status QC</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {group.unitInstances.map(({ unitId, unitName, item }, uIdx) => {
+                            const stages = [
+                              "CUTTING",
+                              "SETTING",
+                              "WELDING",
+                              "FINISHING",
+                              "PAINTING",
+                              "PACKAGING",
+                            ];
+                            let passStages = 0;
+                            let hasFail = false;
+                            let hasHold = false;
+                            stages.forEach((stg) => {
+                              const st = getCheckpointStatus(
+                                unitId,
+                                "STRUCTURE",
+                                item.id,
+                                stg
+                              );
+                              if (st === "PASS") passStages++;
+                              else if (st === "FAIL") hasFail = true;
+                              else if (st === "ON_HOLD") hasHold = true;
+                            });
+
+                            return (
+                              <React.Fragment key={`${unitId}-${item.id}`}>
+                                <TableRow className="hover:bg-muted/30 border-b transition-colors">
+                                  <TableCell className="text-center font-bold text-xs text-muted-foreground">
+                                    {uIdx + 1}
+                                  </TableCell>
+                                  <TableCell className="py-2 px-3">
+                                    <Badge
+                                      variant="outline"
+                                      className="bg-muted/50 text-foreground text-xs font-semibold px-2 py-0.5 border-border gap-1"
+                                    >
+                                      <Boxes className="w-3 h-3 text-primary" />
+                                      <span>{unitName}</span>
+                                    </Badge>
+                                  </TableCell>
+                                  {/* Deskripsi 2 Baris: Baris 1 Nama, Baris 2 Kode Marking */}
+                                  <TableCell className="py-2 px-3">
+                                    <div className="flex flex-col gap-1">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-bold text-foreground text-xs">
+                                          {item.name}
+                                        </span>
+                                        {item.subItems && item.subItems.length > 0 && (
+                                          <Badge
+                                            variant="secondary"
+                                            className="text-[9px] font-mono px-1.5 py-0 h-4 bg-muted text-muted-foreground font-semibold"
+                                            title="Progres Sub-Part Selesai di Produksi"
+                                          >
+                                            {item.subItems.filter((s: any) => s.isCompleted).length}/{item.subItems.length} Sub-Part
+                                          </Badge>
+                                        )}
+                                        {item.bundleTag && (
+                                          <Badge
+                                            variant="secondary"
+                                            className="text-[9px] px-1 py-0 h-4 bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-medium"
+                                            title={`Bundel/Palet: ${item.bundleTag}`}
+                                          >
+                                            📦 {item.bundleTag}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        {item.markingCode ? (
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[9px] font-mono px-1.5 py-0 h-4 bg-background border-primary/40 text-primary font-bold shadow-2xs"
+                                            title={`Kode Marking: ${item.markingCode}`}
+                                          >
+                                            {item.markingCode}
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </TableCell>
+                                  {/* Kolom Dokumentasi dengan Tombol Foto & Report */}
+                                  <TableCell className="p-1.5 text-center">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() =>
+                                          setSelectedProdPhotoTarget({
+                                            unit: { id: unitId, name: unitName },
+                                            component: {
+                                              id: item.id,
+                                              name: item.name,
+                                              type: "STRUCTURE",
+                                              satuan: item.satuan,
+                                              qty: item.qty,
+                                            },
+                                          })
+                                        }
+                                        className="h-7 px-2 rounded-lg text-[11px] font-semibold gap-1 border-border/80 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer shadow-2xs"
+                                        title={`Dokumentasi Foto Terpadu (Produksi & QC): ${item.name} (${unitName})`}
+                                      >
+                                        <Camera className="w-3.5 h-3.5 text-primary" />
+                                        <span>Foto</span>
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          setSelectedUnitForReport(unitId);
+                                          setReportLevelTarget("COMPONENT");
+                                          setSelectedComponentIdForReport(item.id);
+                                          setSelectedComponentIdsForReport([item.id]);
+                                          setIsQCReportOpen(true);
+                                        }}
+                                        className="h-7 px-2 rounded-lg text-[11px] font-semibold gap-1 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer shadow-2xs"
+                                        title={`Buka QC Report PDF: ${item.name} (${unitName})`}
+                                      >
+                                        <FileText className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                                        <span>Report</span>
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-center font-bold text-xs text-foreground">
+                                    {item.qty} {item.satuan}
+                                  </TableCell>
+
+                                  {/* 6 Tahapan QC */}
+                                  {stages.map((stg) => {
+                                    const status = getCheckpointStatus(
+                                      unitId,
+                                      "STRUCTURE",
+                                      item.id,
+                                      stg
+                                    );
+                                    const { completedQty, isDone, totalQty } =
+                                      getProductionStageProgress(
+                                        item,
+                                        "STRUCTURE",
+                                        stg
+                                      );
+                                    const isProductionReady =
+                                      completedQty > 0 || isDone;
+
+                                    return (
+                                      <TableCell
+                                        key={stg}
+                                        className="p-1 text-center"
+                                      >
+                                        <StageQCSelector
+                                          stageName={stg}
+                                          status={status}
+                                          isProductionReady={isProductionReady}
+                                          prodCompletedQty={completedQty}
+                                          prodTotalQty={totalQty}
+                                          showStageName={false}
+                                          onPass={() =>
+                                            handleInspectPass(
+                                              unitId,
+                                              unitName,
+                                              "STRUCTURE",
+                                              item.id,
+                                              item.name,
+                                              stg
+                                            )
+                                          }
+                                          onReset={() =>
+                                            handleInspectReset(
+                                              unitId,
+                                              unitName,
+                                              "STRUCTURE",
+                                              item.id,
+                                              item.name,
+                                              stg
+                                            )
+                                          }
+                                          onNCR={() =>
+                                            setSelectedItemForNCR({
+                                              unitId: unitId,
+                                              unitName: unitName,
+                                              itemType: "STRUCTURE",
+                                              itemId: item.id,
+                                              itemName: item.name,
+                                              stage: stg,
+                                            })
+                                          }
+                                          onDR={() =>
+                                            setSelectedItemForDR({
+                                              unitId: unitId,
+                                              unitName: unitName,
+                                              itemType: "STRUCTURE",
+                                              itemId: item.id,
+                                              itemName: item.name,
+                                              stage: stg,
+                                            })
+                                          }
+                                        />
+                                      </TableCell>
+                                    );
+                                  })}
+
+                                  {/* Status QC */}
+                                  <TableCell className="text-center p-1">
+                                    {passStages === 6 ? (
+                                      <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[10px] font-bold">
+                                        ✓ 6/6 Lolos
+                                      </Badge>
+                                    ) : hasFail ? (
+                                      <Badge className="bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30 text-[10px] font-bold">
+                                        ✕ Ada NCR
+                                      </Badge>
+                                    ) : hasHold ? (
+                                      <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] font-bold">
+                                        ⚠ Ada DR
+                                      </Badge>
+                                    ) : (
+                                      <span className="text-[11px] font-semibold text-muted-foreground">
+                                        {passStages}/6 Lolos
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+
+                                {/* Inline Sub-Komponen Sub-List (Tanpa Checklist) */}
+                                {item.subItems &&
+                                  item.subItems.length > 0 &&
+                                  item.subItems.map(
+                                    (sub: any, subIdx: number) => (
+                                      <TableRow
+                                        key={
+                                          sub.id ||
+                                          `${item.id}-sub-${subIdx}`
+                                        }
+                                        className="bg-muted/15 border-b border-border/40 hover:bg-muted/25 transition-colors"
+                                      >
+                                        <TableCell className="text-center font-semibold text-muted-foreground/70 p-1 text-[11px]">
+                                          <span className="font-mono text-muted-foreground/40 mr-0.5 select-none">
+                                            └─
+                                          </span>
+                                          {uIdx + 1}.{subIdx + 1}
+                                        </TableCell>
+                                        <TableCell className="py-1 px-3 text-muted-foreground text-xs">
+                                          {unitName}
+                                        </TableCell>
+                                        {/* Sub-Part Deskripsi 2 Baris: Baris 1 Nama & Spek, Baris 2 Marking */}
+                                        <TableCell className="py-1.5 px-3">
+                                          <div className="flex flex-col gap-0.5">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <Badge
+                                                variant="outline"
+                                                className="text-[9px] px-1 py-0 h-3.5 bg-background text-muted-foreground font-semibold border-border/80"
+                                              >
+                                                Sub-Part
+                                              </Badge>
+                                              <span className="text-xs text-foreground font-medium">
+                                                {sub.name}
+                                              </span>
+                                              {sub.dimension && (
+                                                <span className="text-[10px] text-muted-foreground bg-background/80 border border-border/60 px-1 py-0.5 rounded font-mono">
+                                                  {sub.dimension}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                              {sub.markingCode ? (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="text-[9px] font-mono px-1 py-0 h-3.5 border-primary/30 text-primary font-bold bg-background"
+                                                >
+                                                  {sub.markingCode}
+                                                </Badge>
+                                              ) : (
+                                                <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </TableCell>
+                                        {/* Kolom Dokumentasi Kosong untuk Sub-Part */}
+                                        <TableCell className="p-1 text-center text-muted-foreground/40 text-xs">-</TableCell>
+                                        <TableCell className="text-center text-muted-foreground text-xs font-medium">
+                                          {sub.qty || 1}{" "}
+                                          {sub.satuan || "pcs"}
+                                        </TableCell>
+                                        {/* Empty cells for stages */}
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        {/* Status Produksi Sub-Part */}
+                                        <TableCell className="p-1 text-center">
+                                          {sub.isCompleted ? (
+                                            <Badge
+                                              variant="outline"
+                                              className="text-[9px] px-1.5 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 font-bold inline-flex items-center gap-1 shadow-2xs whitespace-nowrap"
+                                              title={sub.completedBy ? `Ditandai selesai produksi oleh ${sub.completedBy}` : "Selesai di produksi"}
+                                            >
+                                              ✓ Selesai Produksi
+                                            </Badge>
+                                          ) : (
+                                            <span className="text-[10px] text-muted-foreground/40 italic">-</span>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    )
+                                  )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         ) : activeTab === "MECHANICAL" ? (
@@ -976,160 +2021,790 @@ export function QCNCRManagerPanel({
                   Masterplan Produksi terlebih dahulu.
                 </p>
               </div>
-            ) : (
-              qcData.units.map((unit: any) => (
-                <div
-                  key={unit.id}
-                  className="border rounded-2xl bg-card overflow-hidden shadow-xs space-y-3"
-                >
-                  {/* Unit Header */}
-                  <div className="bg-primary/5 p-3 px-4 border-b flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <span className="font-semibold text-sm text-foreground">
-                        {unit.name}
-                      </span>
-                      <span className="text-xs text-foreground font-medium">
-                        ({unit.volume} {unit.satuan})
-                      </span>
+            ) : viewMode === "PER_UNIT" ? (
+              filteredMechanicalUnits.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground border rounded-xl bg-muted/10">
+                  <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p className="font-semibold">
+                    {searchQuery
+                      ? "Tidak Ada Unit / Komponen Mekanikal yang Cocok"
+                      : "Belum Ada Unit Pengerjaan"}
+                  </p>
+                  <p className="text-xs">
+                    {searchQuery
+                      ? `Tidak ditemukan unit, komponen, atau marking mekanikal dengan kata kunci "${searchQuery}".`
+                      : "Unit conveyor & item produksi perlu didefinisikan di Masterplan Produksi terlebih dahulu."}
+                  </p>
+                </div>
+              ) : (
+                filteredMechanicalUnits.map((unit: any) => (
+                  <div
+                    key={unit.id}
+                    className="border rounded-2xl bg-card overflow-hidden shadow-xs space-y-3"
+                  >
+                    {/* Unit Header */}
+                    <div className="bg-primary/5 p-3 px-4 border-b flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-semibold text-sm text-foreground">
+                          {unit.name}
+                        </span>
+                        <span className="text-xs text-foreground font-medium">
+                          ({unit.volume} {unit.satuan})
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setSelectedUnitForReport(unit.id);
+                            setReportLevelTarget("UNIT");
+                            setSelectedComponentIdForReport(undefined);
+                            setSelectedComponentIdsForReport(undefined);
+                            setIsQCReportOpen(true);
+                          }}
+                          className="h-7 px-2.5 rounded-lg text-xs font-semibold gap-1 border-primary/30 text-primary hover:bg-primary/10 cursor-pointer shadow-2xs"
+                        >
+                          <Download className="w-3 h-3" />
+                          QC Report PDF
+                        </Button>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="p-4 space-y-3">
-                    <div className="text-sm font-semibold flex items-center gap-2 pb-1 border-b border-border/40">
-                      <Wrench className="w-4 h-4" />
-                      Komponen Mekanikal ({unit.mechanicalItems?.length || 0})
-                    </div>
-
-                    {!unit.mechanicalItems ||
-                    unit.mechanicalItems.length === 0 ? (
-                      <p className="text-xs text-muted-foreground p-3 italic">
-                        Tidak ada komponen mekanikal di unit ini.
-                      </p>
-                    ) : (
-                      <div className="grid grid-cols-1 gap-2.5">
-                        {unit.mechanicalItems.map((item: any, idx: number) => (
-                          <div
-                            key={item.id}
-                            className="p-3.5 rounded-xl border border-border/80 bg-background hover:border-primary/40 transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-2xs"
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <Badge
-                                variant="outline"
-                                className="bg-muted text-foreground-foreground text-xs px-1.5"
-                              >
-                                {idx + 1}
-                              </Badge>
-                              <div>
-                                <span className="font-semibold text-foreground text-sm">
-                                  {item.name}
-                                </span>
-                                <span className="text-xs text-muted-foreground font-medium ml-2">
-                                  ({item.qty} {item.satuan})
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Stages Dropdowns */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {[
-                                "PROCUREMENT",
-                                "PO",
-                                "FABRICATION",
-                                "PACKAGING",
-                              ].map((stg) => {
-                                const status = getCheckpointStatus(
-                                  unit.id,
-                                  "MECHANICAL",
-                                  item.id,
-                                  stg,
-                                );
-                                const { completedQty, isDone, totalQty } =
-                                  getProductionStageProgress(
-                                    item,
+                    <div className="p-0">
+                      {!unit.mechanicalItems ||
+                      unit.mechanicalItems.length === 0 ? (
+                        <p className="text-xs text-muted-foreground p-4 italic">
+                          Tidak ada komponen mekanikal di unit ini.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <Table className="w-full text-xs">
+                            <TableHeader className="bg-muted/40">
+                              <TableRow className="border-b">
+                                <TableHead className="w-10 text-center text-xs font-bold">No</TableHead>
+                                <TableHead className="min-w-[200px] text-xs font-bold">Deskripsi Komponen & Sub-Part</TableHead>
+                                <TableHead className="w-24 text-center text-xs font-bold">Dokumentasi</TableHead>
+                                <TableHead className="w-20 text-center text-xs font-bold">Qty</TableHead>
+                                <TableHead className="w-28 text-center text-xs font-bold">Procurement</TableHead>
+                                <TableHead className="w-28 text-center text-xs font-bold">Purchase Order</TableHead>
+                                <TableHead className="w-28 text-center text-xs font-bold">Fabrikasi</TableHead>
+                                <TableHead className="w-28 text-center text-xs font-bold">Packaging</TableHead>
+                                <TableHead className="w-28 text-center text-xs font-bold">Status QC</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {unit.mechanicalItems.map((item: any, idx: number) => {
+                                const stages = [
+                                  "PROCUREMENT",
+                                  "PO",
+                                  "FABRICATION",
+                                  "PACKAGING",
+                                ];
+                                let passStages = 0;
+                                let hasFail = false;
+                                let hasHold = false;
+                                stages.forEach((stg) => {
+                                  const st = getCheckpointStatus(
+                                    unit.id,
                                     "MECHANICAL",
-                                    stg,
+                                    item.id,
+                                    stg
                                   );
-                                const isProductionReady =
-                                  completedQty > 0 || isDone;
+                                  if (st === "PASS") passStages++;
+                                  else if (st === "FAIL") hasFail = true;
+                                  else if (st === "ON_HOLD") hasHold = true;
+                                });
 
                                 return (
-                                  <StageQCSelector
-                                    key={stg}
-                                    stageName={stg}
-                                    status={status}
-                                    isProductionReady={isProductionReady}
-                                    prodCompletedQty={completedQty}
-                                    prodTotalQty={totalQty}
-                                    onPass={() =>
-                                      handleInspectPass(
-                                        unit.id,
-                                        unit.name,
-                                        "MECHANICAL",
-                                        item.id,
-                                        item.name,
-                                        stg,
-                                      )
-                                    }
-                                    onReset={() =>
-                                      handleInspectReset(
-                                        unit.id,
-                                        unit.name,
-                                        "MECHANICAL",
-                                        item.id,
-                                        item.name,
-                                        stg,
-                                      )
-                                    }
-                                    onNCR={() =>
-                                      setSelectedItemForNCR({
-                                        unitId: unit.id,
-                                        unitName: unit.name,
-                                        itemType: "MECHANICAL",
-                                        itemId: item.id,
-                                        itemName: item.name,
-                                        stage: stg,
-                                      })
-                                    }
-                                    onDR={() =>
-                                      setSelectedItemForDR({
-                                        unitId: unit.id,
-                                        unitName: unit.name,
-                                        itemType: "MECHANICAL",
-                                        itemId: item.id,
-                                        itemName: item.name,
-                                        stage: stg,
-                                      })
-                                    }
-                                  />
+                                  <React.Fragment key={item.id}>
+                                    {/* Baris Komponen Utama */}
+                                    <TableRow className="hover:bg-muted/30 border-b transition-colors">
+                                      <TableCell className="text-center font-bold text-xs text-muted-foreground">
+                                        {idx + 1}
+                                      </TableCell>
+                                      {/* Deskripsi 2 Baris: Baris 1 Nama, Baris 2 Kode Marking */}
+                                      <TableCell className="py-2 px-3">
+                                        <div className="flex flex-col gap-1">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span className="font-bold text-foreground text-xs">
+                                              {item.name}
+                                            </span>
+                                            {item.subItems && item.subItems.length > 0 && (
+                                              <Badge
+                                                variant="secondary"
+                                                className="text-[9px] font-mono px-1.5 py-0 h-4 bg-muted text-muted-foreground font-semibold"
+                                                title="Progres Sub-Part Selesai di Produksi"
+                                              >
+                                                {item.subItems.filter((s: any) => s.isCompleted).length}/{item.subItems.length} Sub-Part
+                                              </Badge>
+                                            )}
+                                            {item.bundleTag && (
+                                              <Badge
+                                                variant="secondary"
+                                                className="text-[9px] px-1 py-0 h-4 bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-medium"
+                                                title={`Bundel/Palet: ${item.bundleTag}`}
+                                              >
+                                                📦 {item.bundleTag}
+                                              </Badge>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-1.5">
+                                            {item.markingCode ? (
+                                              <Badge
+                                                variant="outline"
+                                                className="text-[9px] font-mono px-1.5 py-0 h-4 bg-background border-purple-400 text-purple-600 font-bold shadow-2xs"
+                                                title={`Kode Marking: ${item.markingCode}`}
+                                              >
+                                                {item.markingCode}
+                                              </Badge>
+                                            ) : (
+                                              <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </TableCell>
+                                      {/* Kolom Dokumentasi dengan Tombol Foto */}
+                                      <TableCell className="p-1.5 text-center">
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() =>
+                                            setSelectedProdPhotoTarget({
+                                              unit: {
+                                                id: unit.id,
+                                                name: unit.name,
+                                              },
+                                              component: {
+                                                id: item.id,
+                                                name: item.name,
+                                                type: "MECHANICAL",
+                                                satuan: item.satuan,
+                                                qty: item.qty,
+                                              },
+                                            })
+                                          }
+                                          className="h-7 px-2 rounded-lg text-[11px] font-semibold gap-1.5 border-border/80 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer shadow-2xs"
+                                          title={`Dokumentasi Foto Terpadu (Produksi & QC): ${item.name}`}
+                                        >
+                                          <Camera className="w-3.5 h-3.5 text-primary" />
+                                          <span>Foto</span>
+                                        </Button>
+                                      </TableCell>
+                                      <TableCell className="text-center font-bold text-xs text-foreground">
+                                        {item.qty} {item.satuan}
+                                      </TableCell>
+
+                                      {/* 4 Tahapan QC */}
+                                      {stages.map((stg) => {
+                                        const status = getCheckpointStatus(
+                                          unit.id,
+                                          "MECHANICAL",
+                                          item.id,
+                                          stg
+                                        );
+                                        const { completedQty, isDone, totalQty } =
+                                          getProductionStageProgress(
+                                            item,
+                                            "MECHANICAL",
+                                            stg
+                                          );
+                                        const isProductionReady =
+                                          completedQty > 0 || isDone;
+
+                                        return (
+                                          <TableCell
+                                            key={stg}
+                                            className="p-1 text-center"
+                                          >
+                                            <StageQCSelector
+                                              stageName={stg}
+                                              status={status}
+                                              isProductionReady={
+                                                isProductionReady
+                                              }
+                                              prodCompletedQty={completedQty}
+                                              prodTotalQty={totalQty}
+                                              showStageName={false}
+                                              onPass={() =>
+                                                handleInspectPass(
+                                                  unit.id,
+                                                  unit.name,
+                                                  "MECHANICAL",
+                                                  item.id,
+                                                  item.name,
+                                                  stg
+                                                )
+                                              }
+                                              onReset={() =>
+                                                handleInspectReset(
+                                                  unit.id,
+                                                  unit.name,
+                                                  "MECHANICAL",
+                                                  item.id,
+                                                  item.name,
+                                                  stg
+                                                )
+                                              }
+                                              onNCR={() =>
+                                                setSelectedItemForNCR({
+                                                  unitId: unit.id,
+                                                  unitName: unit.name,
+                                                  itemType: "MECHANICAL",
+                                                  itemId: item.id,
+                                                  itemName: item.name,
+                                                  stage: stg,
+                                                })
+                                              }
+                                              onDR={() =>
+                                                setSelectedItemForDR({
+                                                  unitId: unit.id,
+                                                  unitName: unit.name,
+                                                  itemType: "MECHANICAL",
+                                                  itemId: item.id,
+                                                  itemName: item.name,
+                                                  stage: stg,
+                                                })
+                                              }
+                                            />
+                                          </TableCell>
+                                        );
+                                      })}
+
+                                      {/* Status Ringkasan QC */}
+                                      <TableCell className="text-center p-1">
+                                        {passStages === 4 ? (
+                                          <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[10px] font-bold">
+                                            ✓ 4/4 Lolos
+                                          </Badge>
+                                        ) : hasFail ? (
+                                          <Badge className="bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30 text-[10px] font-bold">
+                                            ✕ Ada NCR
+                                          </Badge>
+                                        ) : hasHold ? (
+                                          <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] font-bold">
+                                            ⚠ Ada DR
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-[11px] font-semibold text-muted-foreground">
+                                            {passStages}/4 Lolos
+                                          </span>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+
+                                    {/* Inline Sub-Komponen Sub-List (Tanpa Checklist) */}
+                                    {item.subItems &&
+                                      item.subItems.length > 0 &&
+                                      item.subItems.map(
+                                        (sub: any, subIdx: number) => (
+                                          <TableRow
+                                            key={
+                                              sub.id ||
+                                              `${item.id}-sub-${subIdx}`
+                                            }
+                                            className="bg-muted/15 border-b border-border/40 hover:bg-muted/25 transition-colors"
+                                          >
+                                            <TableCell className="text-center font-semibold text-muted-foreground/70 p-1 text-[11px]">
+                                              <span className="font-mono text-muted-foreground/40 mr-0.5 select-none">
+                                                └─
+                                              </span>
+                                              {idx + 1}.{subIdx + 1}
+                                            </TableCell>
+                                            {/* Sub-Part Deskripsi 2 Baris: Baris 1 Nama & Spek, Baris 2 Marking */}
+                                            <TableCell className="py-1.5 px-3">
+                                              <div className="flex flex-col gap-0.5">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <Badge
+                                                    variant="outline"
+                                                    className="text-[9px] px-1 py-0 h-3.5 bg-background text-purple-700 dark:text-purple-300 font-semibold border-purple-300/40"
+                                                  >
+                                                    Sub-Part
+                                                  </Badge>
+                                                  <span className="text-xs text-foreground font-medium">
+                                                    {sub.name}
+                                                  </span>
+                                                  {(sub.dimension ||
+                                                    sub.spec) && (
+                                                    <span className="text-[10px] text-muted-foreground bg-background/80 border border-border/60 px-1 py-0.5 rounded font-mono">
+                                                      {sub.dimension || sub.spec}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                  {sub.markingCode ? (
+                                                    <Badge
+                                                      variant="outline"
+                                                      className="text-[9px] font-mono px-1 py-0 h-3.5 border-purple-400 text-purple-600 font-bold bg-background"
+                                                    >
+                                                      {sub.markingCode}
+                                                    </Badge>
+                                                  ) : (
+                                                    <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </TableCell>
+                                            {/* Kolom Dokumentasi Kosong untuk Sub-Part */}
+                                            <TableCell className="p-1 text-center text-muted-foreground/40 text-xs">-</TableCell>
+                                            <TableCell className="text-center text-muted-foreground text-xs font-medium">
+                                              {sub.qty || 1}{" "}
+                                              {sub.satuan || "pcs"}
+                                            </TableCell>
+                                            {/* Empty cells for stages */}
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            <TableCell className="p-1" />
+                                            {/* Status Produksi Sub-Part */}
+                                            <TableCell className="p-1 text-center">
+                                              {sub.isCompleted ? (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="text-[9px] px-1.5 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 font-bold inline-flex items-center gap-1 shadow-2xs whitespace-nowrap"
+                                                  title={sub.completedBy ? `Ditandai selesai produksi oleh ${sub.completedBy}` : "Selesai di produksi"}
+                                                >
+                                                  ✓ Selesai Produksi
+                                                </Badge>
+                                              ) : (
+                                                <span className="text-[10px] text-muted-foreground/40 italic">-</span>
+                                              )}
+                                            </TableCell>
+                                          </TableRow>
+                                        )
+                                      )}
+                                  </React.Fragment>
                                 );
                               })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                ))
+              )
+            ) : filteredGroupedMechanicalItems.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground border rounded-xl bg-muted/10">
+                <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p className="font-semibold">
+                  {searchQuery
+                    ? "Tidak Ada Komponen Mekanikal yang Cocok"
+                    : "Tidak Ada Komponen Mekanikal"}
+                </p>
+                <p className="text-xs">
+                  {searchQuery
+                    ? `Tidak ditemukan komponen mekanikal dengan kata kunci "${searchQuery}".`
+                    : "Belum ada komponen mekanikal yang terdaftar di unit conveyor proyek ini."}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredGroupedMechanicalItems.map((group, gIdx) => (
+                  <div
+                    key={group.name}
+                    className="border rounded-2xl bg-card overflow-hidden shadow-xs space-y-3 border-border/80"
+                  >
+                    {/* Group Header */}
+                    <div className="bg-purple-500/5 p-3 px-4 border-b flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <Badge
+                          variant="outline"
+                          className="bg-muted text-foreground text-xs px-2 py-0.5 font-bold"
+                        >
+                          #{gIdx + 1}
+                        </Badge>
+                        <span className="font-bold text-sm text-foreground">
+                          {group.name}
+                        </span>
+                        <Badge className="bg-purple-500/15 text-purple-700 dark:text-purple-300 font-bold text-xs px-2.5 py-0.5 border border-purple-400/30">
+                          Total: {group.totalQty} {group.satuan}
+                        </Badge>
+                        <Badge
+                          variant="secondary"
+                          className="text-[11px] font-medium text-muted-foreground bg-muted/60"
+                        >
+                          Digunakan di {group.unitInstances.length} Unit
+                          Conveyor
+                        </Badge>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const firstInst = group.unitInstances[0];
+                          setSelectedUnitForReport(firstInst ? firstInst.unitId : "ALL");
+                          setReportLevelTarget("COMPONENT");
+                          setSelectedComponentIdForReport(firstInst ? firstInst.item.id : undefined);
+                          setSelectedComponentIdsForReport(group.unitInstances.map((u) => u.item.id));
+                          setIsQCReportOpen(true);
+                        }}
+                        className="h-7 px-2.5 rounded-lg text-xs font-semibold gap-1.5 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer shadow-2xs"
+                        title={`Buka QC Report PDF level komponen untuk seluruh unit ${group.name}`}
+                      >
+                        <FileText className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                        <span>QC Report PDF</span>
+                      </Button>
+                    </div>
+
+                    {/* Table of Units for this Mechanical Component */}
+                    <div className="overflow-x-auto">
+                      <Table className="w-full text-xs">
+                        <TableHeader className="bg-muted/40">
+                          <TableRow className="border-b">
+                            <TableHead className="w-10 text-center text-xs font-bold">No</TableHead>
+                            <TableHead className="min-w-[140px] text-xs font-bold">Unit Conveyor</TableHead>
+                            <TableHead className="min-w-[180px] text-xs font-bold">Detail Komponen & Sub-Part</TableHead>
+                            <TableHead className="min-w-[135px] text-center text-xs font-bold">Dokumentasi & Report</TableHead>
+                            <TableHead className="w-20 text-center text-xs font-bold">Qty</TableHead>
+                            <TableHead className="w-28 text-center text-xs font-bold">Procurement</TableHead>
+                            <TableHead className="w-28 text-center text-xs font-bold">Purchase Order</TableHead>
+                            <TableHead className="w-28 text-center text-xs font-bold">Fabrikasi</TableHead>
+                            <TableHead className="w-28 text-center text-xs font-bold">Packaging</TableHead>
+                            <TableHead className="w-28 text-center text-xs font-bold">Status QC</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {group.unitInstances.map(({ unitId, unitName, item }, uIdx) => {
+                            const stages = [
+                              "PROCUREMENT",
+                              "PO",
+                              "FABRICATION",
+                              "PACKAGING",
+                            ];
+                            let passStages = 0;
+                            let hasFail = false;
+                            let hasHold = false;
+                            stages.forEach((stg) => {
+                              const st = getCheckpointStatus(
+                                unitId,
+                                "MECHANICAL",
+                                item.id,
+                                stg
+                              );
+                              if (st === "PASS") passStages++;
+                              else if (st === "FAIL") hasFail = true;
+                              else if (st === "ON_HOLD") hasHold = true;
+                            });
+
+                            return (
+                              <React.Fragment key={`${unitId}-${item.id}`}>
+                                <TableRow className="hover:bg-muted/30 border-b transition-colors">
+                                  <TableCell className="text-center font-bold text-xs text-muted-foreground">
+                                    {uIdx + 1}
+                                  </TableCell>
+                                  <TableCell className="py-2 px-3">
+                                    <Badge
+                                      variant="outline"
+                                      className="bg-muted/50 text-foreground text-xs font-semibold px-2 py-0.5 border-border gap-1"
+                                    >
+                                      <Boxes className="w-3 h-3 text-purple-600" />
+                                      <span>{unitName}</span>
+                                    </Badge>
+                                  </TableCell>
+                                  {/* Deskripsi 2 Baris: Baris 1 Nama, Baris 2 Kode Marking */}
+                                  <TableCell className="py-2 px-3">
+                                    <div className="flex flex-col gap-1">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-bold text-foreground text-xs">
+                                          {item.name}
+                                        </span>
+                                        {item.subItems && item.subItems.length > 0 && (
+                                          <Badge
+                                            variant="secondary"
+                                            className="text-[9px] font-mono px-1.5 py-0 h-4 bg-muted text-muted-foreground font-semibold"
+                                            title="Progres Sub-Part Selesai di Produksi"
+                                          >
+                                            {item.subItems.filter((s: any) => s.isCompleted).length}/{item.subItems.length} Sub-Part
+                                          </Badge>
+                                        )}
+                                        {item.bundleTag && (
+                                          <Badge
+                                            variant="secondary"
+                                            className="text-[9px] px-1 py-0 h-4 bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-medium"
+                                            title={`Bundel/Palet: ${item.bundleTag}`}
+                                          >
+                                            📦 {item.bundleTag}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        {item.markingCode ? (
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[9px] font-mono px-1.5 py-0 h-4 bg-background border-purple-400 text-purple-600 font-bold shadow-2xs"
+                                            title={`Kode Marking: ${item.markingCode}`}
+                                          >
+                                            {item.markingCode}
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </TableCell>
+                                  {/* Kolom Dokumentasi dengan Tombol Foto & Report */}
+                                  <TableCell className="p-1.5 text-center">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() =>
+                                          setSelectedProdPhotoTarget({
+                                            unit: { id: unitId, name: unitName },
+                                            component: {
+                                              id: item.id,
+                                              name: item.name,
+                                              type: "MECHANICAL",
+                                              satuan: item.satuan,
+                                              qty: item.qty,
+                                            },
+                                          })
+                                        }
+                                        className="h-7 px-2 rounded-lg text-[11px] font-semibold gap-1 border-border/80 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer shadow-2xs"
+                                        title={`Dokumentasi Foto Terpadu (Produksi & QC): ${item.name} (${unitName})`}
+                                      >
+                                        <Camera className="w-3.5 h-3.5 text-primary" />
+                                        <span>Foto</span>
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          setSelectedUnitForReport(unitId);
+                                          setReportLevelTarget("COMPONENT");
+                                          setSelectedComponentIdForReport(item.id);
+                                          setSelectedComponentIdsForReport([item.id]);
+                                          setIsQCReportOpen(true);
+                                        }}
+                                        className="h-7 px-2 rounded-lg text-[11px] font-semibold gap-1 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 cursor-pointer shadow-2xs"
+                                        title={`Buka QC Report PDF: ${item.name} (${unitName})`}
+                                      >
+                                        <FileText className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                                        <span>Report</span>
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-center font-bold text-xs text-foreground">
+                                    {item.qty} {item.satuan}
+                                  </TableCell>
+
+                                  {/* 4 Tahapan QC */}
+                                  {stages.map((stg) => {
+                                    const status = getCheckpointStatus(
+                                      unitId,
+                                      "MECHANICAL",
+                                      item.id,
+                                      stg
+                                    );
+                                    const { completedQty, isDone, totalQty } =
+                                      getProductionStageProgress(
+                                        item,
+                                        "MECHANICAL",
+                                        stg
+                                      );
+                                    const isProductionReady =
+                                      completedQty > 0 || isDone;
+
+                                    return (
+                                      <TableCell
+                                        key={stg}
+                                        className="p-1 text-center"
+                                      >
+                                        <StageQCSelector
+                                          stageName={stg}
+                                          status={status}
+                                          isProductionReady={isProductionReady}
+                                          prodCompletedQty={completedQty}
+                                          prodTotalQty={totalQty}
+                                          showStageName={false}
+                                          onPass={() =>
+                                            handleInspectPass(
+                                              unitId,
+                                              unitName,
+                                              "MECHANICAL",
+                                              item.id,
+                                              item.name,
+                                              stg
+                                            )
+                                          }
+                                          onReset={() =>
+                                            handleInspectReset(
+                                              unitId,
+                                              unitName,
+                                              "MECHANICAL",
+                                              item.id,
+                                              item.name,
+                                              stg
+                                            )
+                                          }
+                                          onNCR={() =>
+                                            setSelectedItemForNCR({
+                                              unitId: unitId,
+                                              unitName: unitName,
+                                              itemType: "MECHANICAL",
+                                              itemId: item.id,
+                                              itemName: item.name,
+                                              stage: stg,
+                                            })
+                                          }
+                                          onDR={() =>
+                                            setSelectedItemForDR({
+                                              unitId: unitId,
+                                              unitName: unitName,
+                                              itemType: "MECHANICAL",
+                                              itemId: item.id,
+                                              itemName: item.name,
+                                              stage: stg,
+                                            })
+                                          }
+                                        />
+                                      </TableCell>
+                                    );
+                                  })}
+
+                                  {/* Status QC */}
+                                  <TableCell className="text-center p-1">
+                                    {passStages === 4 ? (
+                                      <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[10px] font-bold">
+                                        ✓ 4/4 Lolos
+                                      </Badge>
+                                    ) : hasFail ? (
+                                      <Badge className="bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30 text-[10px] font-bold">
+                                        ✕ Ada NCR
+                                      </Badge>
+                                    ) : hasHold ? (
+                                      <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px] font-bold">
+                                        ⚠ Ada DR
+                                      </Badge>
+                                    ) : (
+                                      <span className="text-[11px] font-semibold text-muted-foreground">
+                                        {passStages}/4 Lolos
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+
+                                {/* Inline Sub-Komponen Sub-List (Tanpa Checklist) */}
+                                {item.subItems &&
+                                  item.subItems.length > 0 &&
+                                  item.subItems.map(
+                                    (sub: any, subIdx: number) => (
+                                      <TableRow
+                                        key={
+                                          sub.id ||
+                                          `${item.id}-sub-${subIdx}`
+                                        }
+                                        className="bg-muted/15 border-b border-border/40 hover:bg-muted/25 transition-colors"
+                                      >
+                                        <TableCell className="text-center font-semibold text-muted-foreground/70 p-1 text-[11px]">
+                                          <span className="font-mono text-muted-foreground/40 mr-0.5 select-none">
+                                            └─
+                                          </span>
+                                          {uIdx + 1}.{subIdx + 1}
+                                        </TableCell>
+                                        <TableCell className="py-1 px-3 text-muted-foreground text-xs">
+                                          {unitName}
+                                        </TableCell>
+                                        {/* Sub-Part Deskripsi 2 Baris: Baris 1 Nama & Spek, Baris 2 Marking */}
+                                        <TableCell className="py-1.5 px-3">
+                                          <div className="flex flex-col gap-0.5">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <Badge
+                                                variant="outline"
+                                                className="text-[9px] px-1 py-0 h-3.5 bg-background text-purple-700 dark:text-purple-300 font-semibold border-purple-300/40"
+                                              >
+                                                Sub-Part
+                                              </Badge>
+                                              <span className="text-xs text-foreground font-medium">
+                                                {sub.name}
+                                              </span>
+                                              {(sub.dimension ||
+                                                sub.spec) && (
+                                                <span className="text-[10px] text-muted-foreground bg-background/80 border border-border/60 px-1 py-0.5 rounded font-mono">
+                                                  {sub.dimension || sub.spec}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                              {sub.markingCode ? (
+                                                <Badge
+                                                  variant="outline"
+                                                  className="text-[9px] font-mono px-1 py-0 h-3.5 border-purple-400 text-purple-600 font-bold bg-background"
+                                                >
+                                                  {sub.markingCode}
+                                                </Badge>
+                                              ) : (
+                                                <span className="text-[10px] text-muted-foreground/60 italic">-</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </TableCell>
+                                        {/* Kolom Dokumentasi Kosong untuk Sub-Part */}
+                                        <TableCell className="p-1 text-center text-muted-foreground/40 text-xs">-</TableCell>
+                                        <TableCell className="text-center text-muted-foreground text-xs font-medium">
+                                          {sub.qty || 1}{" "}
+                                          {sub.satuan || "pcs"}
+                                        </TableCell>
+                                        {/* Empty cells for stages */}
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        <TableCell className="p-1" />
+                                        {/* Status Produksi Sub-Part */}
+                                        <TableCell className="p-1 text-center">
+                                          {sub.isCompleted ? (
+                                            <Badge
+                                              variant="outline"
+                                              className="text-[9px] px-1.5 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 font-bold inline-flex items-center gap-1 shadow-2xs whitespace-nowrap"
+                                              title={sub.completedBy ? `Ditandai selesai produksi oleh ${sub.completedBy}` : "Selesai di produksi"}
+                                            >
+                                              ✓ Selesai Produksi
+                                            </Badge>
+                                          ) : (
+                                            <span className="text-[10px] text-muted-foreground/40 italic">-</span>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    )
+                                  )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         ) : activeTab === "NCRS" ? (
           /* TAB 2: NCR TRACKER LIST */
           <div className="space-y-4">
-            {allNCRs.length === 0 ? (
+            {filteredNCRs.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground border rounded-xl bg-muted/10">
                 <CheckCircle2 className="w-10 h-10 mx-auto mb-2 text-emerald-500 opacity-60" />
                 <p className="font-semibold">
-                  Tidak Ada Laporan Revisi Produksi
+                  {searchQuery
+                    ? "Tidak Ada Laporan Revisi Produksi yang Cocok"
+                    : "Tidak Ada Laporan Revisi Produksi"}
                 </p>
                 <p className="text-xs">
-                  Seluruh hasil inspeksi pengerjaan produksi berjalan dengan
-                  baik.
+                  {searchQuery
+                    ? `Tidak ditemukan revisi produksi dengan kata kunci "${searchQuery}".`
+                    : "Seluruh hasil inspeksi pengerjaan produksi berjalan dengan baik."}
                 </p>
               </div>
             ) : (
               <div className="space-y-3 divide-y border rounded-xl p-4 bg-background">
-                {allNCRs.map((ncr: any) => (
+                {filteredNCRs.map((ncr: any) => (
                   <div key={ncr.id} className="pt-3 first:pt-0 space-y-2">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -1265,20 +2940,23 @@ export function QCNCRManagerPanel({
         ) : (
           /* TAB 3: DRAWING REVISION (DR) LIST */
           <div className="space-y-4">
-            {allDRs.length === 0 ? (
+            {filteredDRs.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground border rounded-xl bg-muted/10">
                 <PauseCircle className="w-10 h-10 mx-auto mb-2 text-amber-500 opacity-60" />
                 <p className="font-semibold">
-                  Tidak Ada Request Revisi Drawing (DR)
+                  {searchQuery
+                    ? "Tidak Ada Request Revisi Drawing yang Cocok"
+                    : "Tidak Ada Request Revisi Drawing (DR)"}
                 </p>
                 <p className="text-xs">
-                  Tidak ada pengerjaan yang sedang di-hold akibat kendala
-                  drawing.
+                  {searchQuery
+                    ? `Tidak ditemukan drawing revision dengan kata kunci "${searchQuery}".`
+                    : "Tidak ada pengerjaan yang sedang di-hold akibat kendala drawing."}
                 </p>
               </div>
             ) : (
               <div className="space-y-3 divide-y border rounded-xl p-4 bg-background">
-                {allDRs.map((dr: any) => (
+                {filteredDRs.map((dr: any) => (
                   <div key={dr.id} className="pt-3 first:pt-0 space-y-2">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -1978,6 +3656,45 @@ export function QCNCRManagerPanel({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      )}
+      {/* QC Report Export Dialog */}
+      <QCReportDialog
+        project={{ id: projectId, projectName, projectNumber }}
+        open={isQCReportOpen}
+        onOpenChange={setIsQCReportOpen}
+        defaultUnitId={selectedUnitForReport}
+        defaultLevel={reportLevelTarget}
+        defaultComponentId={selectedComponentIdForReport}
+        defaultComponentIds={selectedComponentIdsForReport}
+      />
+
+      {/* 1. Component Photo Dialog (Integrated QC & Production Photos with QC upload context) */}
+      {selectedProdPhotoTarget && (
+        <ProgressPhotoDialog
+          isOpen={!!selectedProdPhotoTarget}
+          onOpenChange={(open) => !open && setSelectedProdPhotoTarget(null)}
+          projectId={projectId}
+          projectName={projectName}
+          category="ALL"
+          currentSource="QC"
+          readOnly={false}
+          initialUnit={selectedProdPhotoTarget.unit}
+          initialComponent={selectedProdPhotoTarget.component}
+        />
+      )}
+
+      {/* 2. Sub Component Checklist Dialog for QC (Mode Checklist Progres) */}
+      {selectedSubCompData && (
+        <SubComponentDialog
+          open={selectedSubCompData.open}
+          onOpenChange={(open) => !open && setSelectedSubCompData(null)}
+          componentId={selectedSubCompData.componentId}
+          componentName={selectedSubCompData.componentName}
+          unitName={selectedSubCompData.unitName}
+          type={selectedSubCompData.type}
+          mode="PROGRESS"
+          readOnly={false}
+        />
       )}
     </div>
   );

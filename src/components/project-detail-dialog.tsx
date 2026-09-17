@@ -22,6 +22,7 @@ import {
   User as UserIcon,
   FileText,
   Clock,
+  MapPin,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn, formatRupiah } from "@/lib/utils";
@@ -160,21 +161,34 @@ export function ProjectDetailDialog({
               </div>
             )}
 
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-muted-foreground">
-                Status
-              </Label>
-              <div className="block pt-0.5">
-                <Badge
-                  className={cn(
-                    "px-2 py-0.5 text-[10px] font-bold shadow-none",
-                    getStatusColor(resolvedStatus),
-                  )}
-                >
-                  {resolvedStatus}
-                </Badge>
+            {type === "PROJECT" ? (
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-muted-foreground">
+                  Nomor Project
+                </Label>
+                <div className="flex items-center gap-2 pt-0.5">
+                  <span className="text-sm font-bold text-primary">
+                    {data.projectNumber || "-"}
+                  </span>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-muted-foreground">
+                  Status
+                </Label>
+                <div className="block pt-0.5">
+                  <Badge
+                    className={cn(
+                      "px-2 py-0.5 text-[10px] font-bold shadow-none",
+                      getStatusColor(resolvedStatus),
+                    )}
+                  >
+                    {resolvedStatus}
+                  </Badge>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-muted-foreground">
@@ -223,6 +237,19 @@ export function ProjectDetailDialog({
               <p className="text-xs text-muted-foreground">
                 Contact: {data.customer?.name}
               </p>
+              {(data.customer?.city || data.customer?.province || data.customer?.address) && (
+                <div className="mt-1.5 text-xs text-muted-foreground flex flex-col gap-0.5">
+                  {(data.customer.city || data.customer.province) && (
+                    <span className="font-semibold text-foreground/90 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      <span>{[data.customer.city, data.customer.province].filter(Boolean).join(", ")}</span>
+                    </span>
+                  )}
+                  {data.customer.address && (
+                    <span className="text-[11px] opacity-80">{data.customer.address}</span>
+                  )}
+                </div>
+              )}
               {(data.customer?.phone || data.customer?.email) && (
                 <div className="mt-2 pt-2 border-t border-border/10 text-[10px] text-muted-foreground flex flex-col gap-0.5">
                   {data.customer?.phone && (

@@ -48,9 +48,9 @@ import {
   X,
   XCircle,
   Eye,
+  Package,
 } from "lucide-react";
 import { formatJakartaDate } from "@/lib/date-utils";
-import { getDocumentDownloadUrl } from "@/app/actions/documents";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,6 +88,8 @@ import {
   QCNCRManagerPanel,
 } from "@/components/trackers/qc-revision-manager";
 import { QCReceiptDialog } from "@/components/trackers/qc-receipt-dialog";
+import { QCReportDialog } from "@/components/trackers/qc-report-dialog";
+import { QCReceiptReportPreviewDialog } from "@/components/trackers/qc-receipt-report-preview-dialog";
 import { ShieldCheck, Calendar, PackageCheck } from "lucide-react";
 import {
   updateStageQCStatus,
@@ -276,10 +278,13 @@ export function QCTable({
   const [inspectReceipt, setInspectReceipt] = useState<any | null>(null);
   const [isReceiptDialogOpen, setIsReceiptDialogOpen] =
     useState<boolean>(false);
+  const [previewPOReceipt, setPreviewPOReceipt] = useState<any | null>(null);
+  const [poSortOrder, setPoSortOrder] = useState<"desc" | "asc">("desc");
+  const [quickViewPO, setQuickViewPO] = useState<any | null>(null);
 
   useEffect(() => {
     setPoPage(1);
-  }, [poFilterStatus, poSearchQuery]);
+  }, [poFilterStatus, poSearchQuery, poSortOrder]);
 
   // Search parameters from URL
   const currentPage = Number(searchParams.get("page")) || 1;
@@ -322,34 +327,12 @@ export function QCTable({
   const [viewDetailProject, setViewDetailProject] = useState<any | null>(null);
   const [historyProject, setHistoryProject] = useState<any | null>(null);
   const [ncrProject, setNcrProject] = useState<any | null>(null);
+  const [qcReportProject, setQcReportProject] = useState<any | null>(null);
 
   // Revision request states
   const [revisionProject, setRevisionProject] = useState<any | null>(null);
   const [revisionNotes, setRevisionNotes] = useState("");
   const [isPendingRevision, startRevisionTransition] = useTransition();
-
-  const handleViewDocument = async (doc: any) => {
-    if (doc.isExternal && doc.url) {
-      window.open(doc.url, "_blank");
-      return;
-    }
-    const toastId = toast.loading(`Membuka berkas ${doc.name || "dokumen"}...`);
-    try {
-      const res = await getDocumentDownloadUrl(doc.id, false);
-      if (res.success && res.url) {
-        toast.dismiss(toastId);
-        window.open(res.url, "_blank");
-      } else {
-        toast.error(res.error || "Gagal membuka berkas dokumen", {
-          id: toastId,
-        });
-      }
-    } catch (err: any) {
-      toast.error(err?.message || "Terjadi kesalahan saat membuka berkas", {
-        id: toastId,
-      });
-    }
-  };
 
   // Component QC states
   const [editComponentQCData, setEditComponentQCData] = useState<{
@@ -621,12 +604,16 @@ export function QCTable({
       ) {
         matchesStatus =
           r.qcStatus === "PENDING_INSPECTION" ||
+          r.qcStatus === "PENDING" ||
+          r.qcStatus === "NONE" ||
           items.some(
             (i: any) =>
               i.qcStatus === "PENDING_INSPECTION" ||
               i.qcStatus === "NONE" ||
               ((Number(i.qtyPassed) || 0) === 0 && (Number(i.qtyFailed) || 0) === 0),
           );
+      } else if (poFilterStatus === "PENDING_APPROVAL") {
+        matchesStatus = r.qcStatus === "PENDING_APPROVAL";
       } else if (poFilterStatus === "APPROVED") {
         matchesStatus =
           r.qcStatus === "APPROVED" ||
@@ -670,9 +657,15 @@ export function QCTable({
     );
   });
 
-  const totalPoItems = filteredPOReceipts.length;
+  const sortedPOReceipts = [...filteredPOReceipts].sort((a: any, b: any) => {
+    const dateA = new Date(a.qcRequestedAt || a.createdAt).getTime();
+    const dateB = new Date(b.qcRequestedAt || b.createdAt).getTime();
+    return poSortOrder === "desc" ? dateB - dateA : dateA - dateB;
+  });
+
+  const totalPoItems = sortedPOReceipts.length;
   const totalPoPages = Math.ceil(totalPoItems / poLimit) || 1;
-  const paginatedPOReceipts = filteredPOReceipts.slice(
+  const paginatedPOReceipts = sortedPOReceipts.slice(
     (poPage - 1) * poLimit,
     poPage * poLimit,
   );
@@ -1115,12 +1108,13 @@ export function QCTable({
                               ownerId={project.id}
                               ownerType="PROJECT"
                               leadId={project.leadId}
+                              projectData={project}
+                              readOnly={true}
                               categories={[
                                 "BRIEF",
                                 "DRAWING",
                                 "MECH_PART_LIST",
-                                "PRODUCTION",
-                                "QC",
+                                "ASSEMBLY_LIST",
                                 "OTHER",
                               ]}
                               globalDriveUrl={project.globalDriveUrl}
@@ -1208,6 +1202,13 @@ export function QCTable({
                                     <History className="w-4 h-4 mr-2" /> View
                                     Logs
                                   </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="text-xs font-semibold text-primary focus:text-primary focus:bg-primary/5 cursor-pointer"
+                                    onClick={() => setQcReportProject(project)}
+                                  >
+                                    <FileText className="w-4 h-4 mr-2 text-primary" />
+                                    Export QC Report (PDF)
+                                  </DropdownMenuItem>
 
                                   <DropdownMenuSeparator />
 
@@ -1265,7 +1266,7 @@ export function QCTable({
                                   defaultValue="qc_manager"
                                   className="w-full"
                                 >
-                                  <TabsList className="bg-background border p-1 rounded-xl h-11 w-full max-w-2xl grid grid-cols-3 shadow-xs">
+                                  <TabsList className="bg-background border p-1 rounded-xl h-11 w-full max-w-md grid grid-cols-2 shadow-xs">
                                     <TabsTrigger
                                       value="qc_manager"
                                       className="rounded-lg text-xs font-bold gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
@@ -1279,13 +1280,6 @@ export function QCTable({
                                     >
                                       <History className="w-4 h-4" />
                                       <span>2. Log Riwayat QC</span>
-                                    </TabsTrigger>
-                                    <TabsTrigger
-                                      value="documents"
-                                      className="rounded-lg text-xs font-bold gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-                                    >
-                                      <FolderOpen className="w-4 h-4" />
-                                      <span>3. Dokumen</span>
                                     </TabsTrigger>
                                   </TabsList>
 
@@ -1372,7 +1366,7 @@ export function QCTable({
                                                   key={log.id}
                                                   className="p-3 text-xs flex justify-between items-start gap-4 hover:bg-muted/20"
                                                 >
-                                                  <div className="min-w-0 flex-1 space-y-1 wrap-break-word [overflow-wrap:anywhere]">
+                                                  <div className="min-w-0 flex-1 space-y-1 wrap-break-word">
                                                     <div className="flex items-center gap-2 flex-wrap">
                                                       <Badge
                                                         variant="outline"
@@ -1386,7 +1380,7 @@ export function QCTable({
                                                           "QC Activity"}
                                                       </span>
                                                     </div>
-                                                    <p className="text-muted-foreground text-xs leading-relaxed break-words whitespace-normal mt-1 [overflow-wrap:anywhere]">
+                                                    <p className="text-muted-foreground text-xs leading-relaxed wrap-break-word whitespace-normal mt-1">
                                                       {(log.notes || "")
                                                         .replace(
                                                           /\.?\s*Engineering KPI diselesaikan\.?/gi,
@@ -1416,7 +1410,7 @@ export function QCTable({
                                                 key={log.id || lIdx}
                                                 className="p-3 text-xs flex justify-between items-start gap-4 hover:bg-muted/20"
                                               >
-                                                <div className="min-w-0 flex-1 space-y-1 break-words [overflow-wrap:anywhere]">
+                                                <div className="min-w-0 flex-1 space-y-1 wrap-break-word">
                                                   <p className="font-semibold text-foreground">
                                                     Tahap:{" "}
                                                     <span className="text-primary font-bold">
@@ -1446,7 +1440,7 @@ export function QCTable({
                                                     </Badge>
                                                   </p>
                                                   {log.notes && (
-                                                    <p className="text-muted-foreground italic text-[11px] bg-muted/10 px-2 py-0.5 rounded-sm border border-border/20 mt-1 inline-block break-words [overflow-wrap:anywhere]">
+                                                    <p className="text-muted-foreground italic text-[11px] bg-muted/10 px-2 py-0.5 rounded-sm border border-border/20 mt-1 inline-block wrap-break-word">
                                                       Catatan: "{log.notes}"
                                                     </p>
                                                   )}
@@ -1469,300 +1463,6 @@ export function QCTable({
                                         })()}
                                       </div>
                                     </div>
-                                  </TabsContent>
-
-                                  {/* TAB 3: SHORTCUT DOCUMENT DRAWING & DOCUMENT HUB */}
-                                  <TabsContent
-                                    value="documents"
-                                    className="mt-4 space-y-4"
-                                  >
-                                    {/* Header Bar with Document Hub Access Button */}
-                                    <div className="bg-card rounded-2xl border border-border/60 p-4 shadow-xs space-y-3">
-                                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                                        <div>
-                                          <h4 className="font-bold text-sm text-foreground flex items-center gap-2">
-                                            <FolderOpen className="w-4 h-4 text-primary" />
-                                            Shortcut Dokumen & Document Hub
-                                          </h4>
-                                          <p className="text-xs text-muted-foreground mt-0.5">
-                                            Akses cepat ke arsip gambar kerja
-                                            (Engineering) dan dokumen QC proyek
-                                            ini.
-                                          </p>
-                                        </div>
-
-                                        <div className="flex items-center gap-2 flex-wrap shrink-0">
-                                          <DocumentManagerDialog
-                                            ownerId={project.id}
-                                            ownerType="PROJECT"
-                                            leadId={project.leadId}
-                                            categories={[
-                                              "DRAWING",
-                                              "MECH_PART_LIST",
-                                              "PRODUCTION",
-                                              "QC",
-                                            ]}
-                                            globalDriveUrl={
-                                              project.globalDriveUrl
-                                            }
-                                            onUploadSuccess={() =>
-                                              router.refresh()
-                                            }
-                                            trigger={
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="h-9 px-3.5 text-xs font-semibold rounded-xl border-primary/30 text-primary hover:bg-primary/10 cursor-pointer gap-2"
-                                              >
-                                                <FolderOpen className="w-4 h-4 text-primary" />
-                                                <span>Buka Document Hub</span>
-                                              </Button>
-                                            }
-                                          />
-
-                                          {project.globalDriveUrl && (
-                                            <a
-                                              href={project.globalDriveUrl}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                              className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-semibold rounded-xl border border-border/60 bg-muted/20 hover:bg-muted/40 text-foreground transition-all"
-                                            >
-                                              <span>Google Drive ↗</span>
-                                            </a>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Drawing & Mechanical Part List Cards */}
-                                    {(() => {
-                                      const allProjectDocs = [
-                                        ...((project.documents as any[]) || []),
-                                        ...((project.lead as any)?.documents ||
-                                          []),
-                                      ];
-
-                                      const drawingDocsMap = new Map();
-                                      allProjectDocs.forEach((d: any) => {
-                                        const cat = (
-                                          d.category || ""
-                                        ).toUpperCase();
-                                        if (
-                                          (cat === "DRAWING" ||
-                                            cat === "DRAWINGS") &&
-                                          !drawingDocsMap.has(d.id)
-                                        ) {
-                                          drawingDocsMap.set(d.id, d);
-                                        }
-                                      });
-                                      const drawingDocs = Array.from(
-                                        drawingDocsMap.values(),
-                                      );
-
-                                      const mechDocsMap = new Map();
-                                      allProjectDocs.forEach((d: any) => {
-                                        const cat = (
-                                          d.category || ""
-                                        ).toUpperCase();
-                                        if (
-                                          (cat === "MECH_PART_LIST" ||
-                                            cat === "MECHANICAL_PART_LIST" ||
-                                            cat === "MECH_PART" ||
-                                            cat === "PART_LIST" ||
-                                            cat === "MECHANICAL") &&
-                                          !mechDocsMap.has(d.id)
-                                        ) {
-                                          mechDocsMap.set(d.id, d);
-                                        }
-                                      });
-                                      const mechDocs = Array.from(
-                                        mechDocsMap.values(),
-                                      );
-
-                                      return (
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start w-full">
-                                          {/* Card 1: Drawing (Gambar Kerja) */}
-                                          <div className="bg-card rounded-2xl border border-border/60 p-4 sm:p-5 shadow-xs flex flex-col space-y-3">
-                                            {/* Header */}
-                                            <div className="flex items-center justify-between border-b border-border/40 pb-3">
-                                              <h4 className="font-bold text-sm sm:text-base text-primary">
-                                                Dokumen Drawing
-                                              </h4>
-                                              <Badge
-                                                variant="secondary"
-                                                className="font-bold text-xs px-3 py-1 rounded-full border border-border/40 bg-muted/60 text-foreground shrink-0"
-                                              >
-                                                {drawingDocs.length} Berkas
-                                              </Badge>
-                                            </div>
-
-                                            {/* Scrollable File List Container */}
-                                            <div className="max-h-72 overflow-y-auto pr-1">
-                                              {drawingDocs.length === 0 ? (
-                                                <div className="py-8 text-center text-xs text-muted-foreground italic">
-                                                  Belum ada berkas drawing
-                                                  (gambar kerja) yang diupload
-                                                  untuk proyek ini.
-                                                </div>
-                                              ) : (
-                                                <div className="divide-y divide-border/30">
-                                                  {drawingDocs.map(
-                                                    (
-                                                      doc: any,
-                                                      docIdx: number,
-                                                    ) => (
-                                                      <div
-                                                        key={doc.id || docIdx}
-                                                        className="py-2 flex items-center justify-between gap-3 group"
-                                                      >
-                                                        <div
-                                                          className="min-w-0 flex-1 space-y-0.5 cursor-pointer"
-                                                          onClick={() =>
-                                                            handleViewDocument(
-                                                              doc,
-                                                            )
-                                                          }
-                                                        >
-                                                          <p className="font-semibold text-xs text-foreground group-hover:text-primary transition-colors truncate">
-                                                            {docIdx + 1}.{" "}
-                                                            {doc.name ||
-                                                              doc.fileName ||
-                                                              "Drawing File"}
-                                                          </p>
-                                                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
-                                                            <Badge
-                                                              variant="outline"
-                                                              className="text-[9px] font-bold text-amber-600 bg-amber-500/10 border-amber-300 px-1 py-0 rounded h-4"
-                                                            >
-                                                              V
-                                                              {doc.version || 1}
-                                                            </Badge>
-                                                            <span>•</span>
-                                                            <span>
-                                                              Oleh:{" "}
-                                                              <strong className="font-medium text-foreground/80">
-                                                                {doc.uploadedBy ||
-                                                                  doc.createdBy ||
-                                                                  "Super Admin"}
-                                                              </strong>
-                                                            </span>
-                                                          </div>
-                                                        </div>
-
-                                                        <Button
-                                                          type="button"
-                                                          variant="outline"
-                                                          size="icon"
-                                                          onClick={() =>
-                                                            handleViewDocument(
-                                                              doc,
-                                                            )
-                                                          }
-                                                          className="h-7 w-7 rounded-full border-primary/40 text-primary hover:bg-primary/10 cursor-pointer shrink-0 transition-all"
-                                                          title="Lihat Gambar Kerja"
-                                                        >
-                                                          <Eye className="w-3.5 h-3.5 text-primary" />
-                                                        </Button>
-                                                      </div>
-                                                    ),
-                                                  )}
-                                                </div>
-                                              )}
-                                            </div>
-                                          </div>
-
-                                          {/* Card 2: Mechanical Part List */}
-                                          <div className="bg-card rounded-2xl border border-border/60 p-4 sm:p-5 shadow-xs flex flex-col space-y-3">
-                                            {/* Header */}
-                                            <div className="flex items-center justify-between border-b border-border/40 pb-3">
-                                              <h4 className="font-bold text-sm sm:text-base text-amber-600">
-                                                Dokumen Mechanical Part List
-                                              </h4>
-                                              <Badge
-                                                variant="secondary"
-                                                className="font-bold text-xs px-3 py-1 rounded-full border border-border/40 bg-muted/60 text-foreground shrink-0"
-                                              >
-                                                {mechDocs.length} Berkas
-                                              </Badge>
-                                            </div>
-
-                                            {/* Scrollable File List Container */}
-                                            <div className="max-h-72 overflow-y-auto pr-1">
-                                              {mechDocs.length === 0 ? (
-                                                <div className="py-8 text-center text-xs text-muted-foreground italic">
-                                                  Belum ada berkas Mechanical
-                                                  Part List yang diupload untuk
-                                                  proyek ini.
-                                                </div>
-                                              ) : (
-                                                <div className="divide-y divide-border/30">
-                                                  {mechDocs.map(
-                                                    (
-                                                      doc: any,
-                                                      docIdx: number,
-                                                    ) => (
-                                                      <div
-                                                        key={doc.id || docIdx}
-                                                        className="py-2 flex items-center justify-between gap-3 group"
-                                                      >
-                                                        <div
-                                                          className="min-w-0 flex-1 space-y-0.5 cursor-pointer"
-                                                          onClick={() =>
-                                                            handleViewDocument(
-                                                              doc,
-                                                            )
-                                                          }
-                                                        >
-                                                          <p className="font-semibold text-xs text-foreground group-hover:text-amber-600 transition-colors truncate">
-                                                            {docIdx + 1}.{" "}
-                                                            {doc.name ||
-                                                              doc.fileName ||
-                                                              "Mechanical Part List File"}
-                                                          </p>
-                                                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
-                                                            <Badge
-                                                              variant="outline"
-                                                              className="text-[9px] font-bold text-amber-600 bg-amber-500/10 border-amber-300 px-1 py-0 rounded h-4"
-                                                            >
-                                                              V
-                                                              {doc.version || 1}
-                                                            </Badge>
-                                                            <span>•</span>
-                                                            <span>
-                                                              Oleh:{" "}
-                                                              <strong className="font-medium text-foreground/80">
-                                                                {doc.uploadedBy ||
-                                                                  doc.createdBy ||
-                                                                  "Super Admin"}
-                                                              </strong>
-                                                            </span>
-                                                          </div>
-                                                        </div>
-
-                                                        <Button
-                                                          type="button"
-                                                          variant="outline"
-                                                          size="icon"
-                                                          onClick={() =>
-                                                            handleViewDocument(
-                                                              doc,
-                                                            )
-                                                          }
-                                                          className="h-7 w-7 rounded-full border-amber-500/40 text-amber-600 hover:bg-amber-500/10 cursor-pointer shrink-0 transition-all"
-                                                          title="Lihat Mechanical Part List"
-                                                        >
-                                                          <Eye className="w-3.5 h-3.5 text-amber-600" />
-                                                        </Button>
-                                                      </div>
-                                                    ),
-                                                  )}
-                                                </div>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      );
-                                    })()}
                                   </TabsContent>
                                 </Tabs>
                               </div>
@@ -2457,52 +2157,131 @@ export function QCTable({
 
         {/* Tab 2: QC Penerimaan Barang PO (Gudang) */}
         <TabsContent value="po_receipts" className="space-y-3 pt-1">
-          {/* Top Bar: Search Bar (Pojok Kiri) & Filter Badges (Pojok Kanan) */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            {/* Search Bar (Pojok Kiri) */}
-            <div className="relative w-full sm:w-72 shrink-0">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Cari No. PO, Supplier, Proyek..."
-                value={poSearchQuery}
-                onChange={(e) => setPoSearchQuery(e.target.value)}
-                className="pl-9 pr-8 h-9 text-xs rounded-xl bg-card border-border/80 focus-visible:ring-indigo-500 shadow-2xs"
-              />
-              {poSearchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setPoSearchQuery("")}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
+          {/* Top Bar: Search Bar & Filter Popover */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-1 md:max-w-md">
+              {/* Search Bar (Kiri) */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-muted-foreground" />
+                <Input
+                  type="search"
+                  placeholder="Cari No. PO, Supplier, Proyek..."
+                  value={poSearchQuery}
+                  onChange={(e) => setPoSearchQuery(e.target.value)}
+                  className="pl-9 pr-8 w-full shadow-none bg-background rounded-md border-border h-9 text-sm"
+                />
+                {poSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setPoSearchQuery("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
 
-            {/* Filter Badges (Kanan) */}
-            <div className="flex items-center gap-1.5 flex-wrap justify-start sm:justify-end">
-              {[
-                { id: "ALL", label: "Semua" },
-                { id: "PENDING_INSPECTION", label: "Menunggu QC" },
-                { id: "APPROVED", label: "Approved (Lolos)" },
-                { id: "PARTIAL", label: "Partial (Sebagian)" },
-                { id: "REJECTED", label: "Rejected (Ditolak)" },
-              ].map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setPoFilterStatus(f.id)}
-                  className={cn(
-                    "px-2.5 py-1 rounded-xl text-xs font-semibold border transition-all cursor-pointer",
-                    poFilterStatus === f.id
-                      ? "bg-primary text-primary-foreground border-primary font-bold shadow-2xs"
-                      : "bg-card hover:bg-muted/70 text-muted-foreground border-border/60",
-                  )}
+              {/* Filter Popover (Tepat di Sebelah Kanan Search Bar) */}
+              <Popover>
+                <PopoverTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground transition-all active:scale-95 text-xs font-semibold rounded-md border-border"
+                    >
+                      <Filter className="w-4 h-4 text-muted-foreground" />
+                      <span>Filter</span>
+                      {(poFilterStatus !== "ALL" || poSortOrder !== "desc") && (
+                        <Badge
+                          variant="secondary"
+                          className="ml-1 px-1 h-5 min-w-5 justify-center rounded-full bg-primary text-primary-foreground text-[10px]"
+                        >
+                          !
+                        </Badge>
+                      )}
+                    </Button>
+                  }
+                />
+                <PopoverContent
+                  className="w-80 p-4 space-y-4 rounded-2xl shadow-lg border-border"
+                  align="end"
                 >
-                  {f.label}
-                </button>
-              ))}
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Status QC
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { id: "ALL", label: "Semua" },
+                        { id: "PENDING_INSPECTION", label: "Belum QC" },
+                        { id: "PENDING_APPROVAL", label: "Menunggu Persetujuan" },
+                        { id: "APPROVED", label: "Lolos QC" },
+                        { id: "PARTIAL", label: "Sebagian" },
+                        { id: "REJECTED", label: "Ditolak" },
+                      ].map((f) => (
+                        <Button
+                          key={f.id}
+                          variant={poFilterStatus === f.id ? "default" : "outline"}
+                          size="sm"
+                          className="h-7 text-xs px-2.5 rounded-lg cursor-pointer font-medium"
+                          onClick={() => {
+                            setPoFilterStatus(f.id);
+                            setPoPage(1);
+                          }}
+                        >
+                          {f.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-muted-foreground">
+                      Urutan
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-between h-9 cursor-pointer font-medium rounded-xl text-xs"
+                      onClick={() =>
+                        setPoSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))
+                      }
+                    >
+                      <span className="flex items-center gap-2">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-muted-foreground" />
+                        {poSortOrder === "desc"
+                          ? "Terbaru Dahulu"
+                          : "Terlama Dahulu"}
+                      </span>
+                    </Button>
+                  </div>
+
+                  <Button
+                    size="sm"
+                    className="w-full text-xs bg-primary hover:bg-primary/90 text-primary-foreground h-8.5 rounded-xl cursor-pointer font-bold shadow-2xs"
+                    onClick={() => {
+                      setPoFilterStatus("ALL");
+                      setPoSearchQuery("");
+                      setPoSortOrder("desc");
+                      setPoPage(1);
+                    }}
+                  >
+                    Reset Filters
+                  </Button>
+                </PopoverContent>
+              </Popover>
+
+              {/* Total Hasil PO (Tepat di Sebelah Kanan Filter) */}
+              <div className="flex items-center gap-2 text-muted-foreground ml-1 shrink-0">
+                <span className="text-xs">
+                  Hasil:{" "}
+                  <span className="font-semibold text-muted-foreground">
+                    {totalPoItems}
+                  </span>{" "}
+                  PO
+                </span>
+              </div>
             </div>
           </div>
 
@@ -2597,6 +2376,13 @@ export function QCTable({
                         <XCircle className="w-3 h-3 mr-1 text-rose-600" /> QC REJECTED
                       </Badge>
                     );
+                  } else if (status === "PENDING_APPROVAL") {
+                    statusBadge = (
+                      <Badge variant="outline" className="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-400 font-bold text-[10px] px-2 py-0.5 animate-pulse">
+                        <Clock className="w-3 h-3 mr-1 text-indigo-600" />
+                        {po.qcApprovedByEngineering ? "MENUNGGU PM" : "MENUNGGU APPROVAL"}
+                      </Badge>
+                    );
                   } else {
                     statusBadge = (
                       <Badge variant="outline" className="bg-amber-500/20 text-amber-900 dark:text-amber-200 border-amber-400 font-bold text-[10px] px-2 py-0.5 animate-pulse">
@@ -2604,6 +2390,18 @@ export function QCTable({
                       </Badge>
                     );
                   }
+
+                  const passedCount = (po.items || []).filter(
+                    (i: any) => i.qcStatus === "PASSED" || (Number(i.qtyPassed) || 0) > 0
+                  ).length;
+                  const useAsIsCount = (po.items || []).filter(
+                    (i: any) => i.qcDisposition === "USE_AS_IS"
+                  ).length;
+                  const returCount = (po.items || []).filter(
+                    (i: any) =>
+                      (Number(i.qtyFailed) || 0) > 0 &&
+                      i.qcDisposition !== "USE_AS_IS"
+                  ).length;
 
                   return (
                     <div key={po.id} className="p-3.5 rounded-2xl bg-card border border-border/80 shadow-2xs space-y-2.5">
@@ -2613,6 +2411,11 @@ export function QCTable({
                           <div className="font-bold text-xs text-primary flex items-center gap-1.5 mt-0.5">
                             <FileText className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                             <span>{po.nomorPO}</span>
+                            {po.qcReportNumber && (
+                              <span className="text-[10px] text-muted-foreground font-mono">
+                                ({po.qcReportNumber})
+                              </span>
+                            )}
                           </div>
                         </div>
                         {statusBadge}
@@ -2622,20 +2425,46 @@ export function QCTable({
                         <div className="flex justify-between"><span className="text-muted-foreground">Supplier:</span> <strong className="text-foreground">{po.kepada || "-"}</strong></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Proyek:</span> <strong className="text-foreground">{po.projek || "Gudang"}</strong></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Pemohon:</span> <span className="text-foreground font-medium">{po.user?.name || "Staf Gudang"} ({formatJakartaDate(po.qcRequestedAt || po.createdAt, "date")})</span></div>
-                        <div className="flex justify-between border-t border-border/30 pt-1 mt-1"><span className="text-muted-foreground">Jumlah Barang:</span> <strong className="text-indigo-600 font-bold">{po.items?.length || 0} Item</strong></div>
+                        <div className="flex items-center justify-between border-t border-border/30 pt-1.5 mt-1">
+                          <span className="text-muted-foreground">Jumlah Item:</span>
+                          <div className="flex items-center gap-2">
+                            <strong className="text-foreground font-bold">{po.items?.length || 0} Jenis Item</strong>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setQuickViewPO(po)}
+                              className="h-6 px-2 text-[10px] font-bold rounded-lg cursor-pointer flex items-center gap-1 text-primary hover:bg-primary/10 hover:text-primary border-primary/30"
+                            >
+                              <Eye className="w-3 h-3 text-primary" />
+                              Lihat Item
+                            </Button>
+                          </div>
+                        </div>
                       </div>
 
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setInspectReceipt(po);
-                          setIsReceiptDialogOpen(true);
-                        }}
-                        className="w-full h-8.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl cursor-pointer shadow-2xs"
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
-                        Inspeksi QC PO
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPreviewPOReceipt(po)}
+                          className="h-8.5 text-xs font-semibold rounded-xl cursor-pointer gap-1.5 hover:bg-indigo-50 hover:text-indigo-600"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                          PDF
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setInspectReceipt(po);
+                            setIsReceiptDialogOpen(true);
+                          }}
+                          className="flex-1 h-8.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl cursor-pointer shadow-2xs"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
+                          Inspeksi QC PO
+                        </Button>
+                      </div>
                     </div>
                   );
                 })}
@@ -2647,14 +2476,14 @@ export function QCTable({
                   <TableHeader className="bg-muted/20 border-b">
                     <TableRow className="border-border hover:bg-transparent text-xs font-bold">
                       <TableHead className="w-12 text-center">No.</TableHead>
-                      <TableHead>Nomor PO</TableHead>
+                      <TableHead>Nomor PO & Laporan</TableHead>
                       <TableHead>Supplier & Proyek</TableHead>
                       <TableHead>Pemohon / Tanggal</TableHead>
                       <TableHead className="text-center">Jumlah Item</TableHead>
                       <TableHead className="text-center">
                         Status QC Kedatangan
                       </TableHead>
-                      <TableHead className="text-right w-36">Aksi</TableHead>
+                      <TableHead className="text-right w-44">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2692,6 +2521,16 @@ export function QCTable({
                             REJECTED
                           </Badge>
                         );
+                      } else if (status === "PENDING_APPROVAL") {
+                        statusBadge = (
+                          <Badge
+                            variant="outline"
+                            className="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-400 font-bold text-[10px] px-2 py-0.5 animate-pulse"
+                          >
+                            <Clock className="w-3 h-3 mr-1 text-indigo-600" />
+                            {po.qcApprovedByEngineering ? "MENUNGGU PM" : "MENUNGGU APPROVAL"}
+                          </Badge>
+                        );
                       } else {
                         statusBadge = (
                           <Badge
@@ -2703,6 +2542,18 @@ export function QCTable({
                           </Badge>
                         );
                       }
+
+                      const passedCount = (po.items || []).filter(
+                        (i: any) => i.qcStatus === "PASSED" || (Number(i.qtyPassed) || 0) > 0
+                      ).length;
+                      const useAsIsCount = (po.items || []).filter(
+                        (i: any) => i.qcDisposition === "USE_AS_IS"
+                      ).length;
+                      const returCount = (po.items || []).filter(
+                        (i: any) =>
+                          (Number(i.qtyFailed) || 0) > 0 &&
+                          i.qcDisposition !== "USE_AS_IS"
+                      ).length;
 
                       return (
                         <TableRow
@@ -2719,6 +2570,11 @@ export function QCTable({
                                 <FileText className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                                 PO: {po.nomorPO}
                               </span>
+                              {po.qcReportNumber && (
+                                <span className="text-[10px] text-muted-foreground font-mono">
+                                  No: {po.qcReportNumber}
+                                </span>
+                              )}
                             </div>
                           </TableCell>
 
@@ -2748,27 +2604,20 @@ export function QCTable({
                           </TableCell>
 
                           <TableCell className="text-center">
-                            <div className="flex flex-col items-center gap-1">
-                              <Badge
-                                variant="secondary"
-                                className="text-[10px] font-bold"
+                            <div className="flex flex-col items-center justify-center gap-1">
+                              <span className="text-xs font-bold text-foreground whitespace-nowrap">
+                                {po.items?.length || 0} Jenis Item
+                              </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setQuickViewPO(po)}
+                                className="h-6 px-2 text-[10px] font-bold text-primary border-primary/30 bg-primary/5 hover:bg-primary/15 hover:text-primary rounded-lg cursor-pointer flex items-center gap-1 shadow-2xs transition-all active:scale-95"
                               >
-                                {po.items?.length || 0} Item
-                              </Badge>
-                              {po.items && po.items.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap justify-center text-[9px]">
-                                  {po.items.filter((i: any) => i.qcStatus === 'PASSED' || (Number(i.qtyPassed) || 0) > 0).length > 0 && (
-                                    <span className="px-1.5 py-0.2 bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 font-bold rounded-md">
-                                      {po.items.filter((i: any) => i.qcStatus === 'PASSED' || (Number(i.qtyPassed) || 0) > 0).length} Lolos
-                                    </span>
-                                  )}
-                                  {po.items.filter((i: any) => i.qcStatus === 'FAILED' || (Number(i.qtyFailed) || 0) > 0).length > 0 && (
-                                    <span className="px-1.5 py-0.2 bg-rose-500/15 text-rose-800 dark:text-rose-300 font-bold rounded-md">
-                                      {po.items.filter((i: any) => i.qcStatus === 'FAILED' || (Number(i.qtyFailed) || 0) > 0).length} Reject
-                                    </span>
-                                  )}
-                                </div>
-                              )}
+                                <Eye className="w-3 h-3 text-primary" />
+                                <span>Lihat Item</span>
+                              </Button>
                             </div>
                           </TableCell>
 
@@ -2776,23 +2625,47 @@ export function QCTable({
                             {statusBadge}
                             {po.qcApprovedBy && (
                               <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                                By: {po.qcApprovedBy}
+                                Inspector: {po.qcApprovedBy}
+                              </div>
+                            )}
+                            {po.qcApprovedByEngineering && (
+                              <div className="text-[9px] text-emerald-600 font-medium">
+                                ✓ Eng: {po.qcApprovedByEngineeringName || "Verified"}
+                              </div>
+                            )}
+                            {po.qcApprovedByPm && (
+                              <div className="text-[9px] text-indigo-600 font-medium">
+                                ✓ PM: {po.qcApprovedByPmName || "Approved"}
                               </div>
                             )}
                           </TableCell>
 
                           <TableCell className="text-right">
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                setInspectReceipt(po);
-                                setIsReceiptDialogOpen(true);
-                              }}
-                              className="rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer h-8 px-2.5 shadow-2xs"
-                            >
-                              <ShieldCheck className="w-3.5 h-3.5 mr-1" />
-                              Inspeksi QC
-                            </Button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setPreviewPOReceipt(po)}
+                                className="h-8 px-2 text-xs font-semibold rounded-lg cursor-pointer hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-950/40"
+                                title="Pratinjau Dokumen PDF QC"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                <span className="hidden lg:inline ml-1">PDF</span>
+                              </Button>
+
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  setInspectReceipt(po);
+                                  setIsReceiptDialogOpen(true);
+                                }}
+                                className="rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer h-8 px-2.5 shadow-2xs"
+                              >
+                                <ShieldCheck className="w-3.5 h-3.5 mr-1" />
+                                Inspeksi QC
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -2812,6 +2685,225 @@ export function QCTable({
         purchaseOrder={inspectReceipt}
         onSuccess={() => router.refresh()}
       />
+
+      {/* QC Report Export Dialog */}
+      {qcReportProject && (
+        <QCReportDialog
+          project={qcReportProject}
+          open={!!qcReportProject}
+          onOpenChange={(open) => !open && setQcReportProject(null)}
+        />
+      )}
+
+      {/* QC Receipt Report PDF Preview Dialog */}
+      {previewPOReceipt && (
+        <QCReceiptReportPreviewDialog
+          open={!!previewPOReceipt}
+          onOpenChange={(open) => !open && setPreviewPOReceipt(null)}
+          purchaseOrder={previewPOReceipt}
+        />
+      )}
+
+      {/* Quick Access Dialog Rincian Item PO */}
+      <Dialog
+        open={!!quickViewPO}
+        onOpenChange={(open) => !open && setQuickViewPO(null)}
+      >
+        <DialogContent className="w-[96vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-4 sm:p-5 space-y-3">
+          <DialogHeader className="space-y-1 pb-2 border-b border-border/60">
+            <DialogTitle className="text-sm sm:text-base font-semibold flex items-center justify-between gap-2 text-foreground">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Package className="w-4 h-4 sm:w-5 sm:h-5 text-primary shrink-0" />
+                <span className="truncate">
+                  Rincian Item PO:{" "}
+                  <span className="font-bold text-primary font-mono">
+                    {quickViewPO?.nomorPO}
+                  </span>
+                </span>
+              </div>
+              {quickViewPO?.qcReportNumber && (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] font-mono font-bold border-primary/30 text-primary bg-primary/5 shrink-0"
+                >
+                  {quickViewPO.qcReportNumber}
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription className="text-[11px] sm:text-xs text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span>
+                Supplier:{" "}
+                <strong className="text-foreground font-semibold">
+                  {quickViewPO?.kepada || "-"}
+                </strong>
+              </span>
+              <span>•</span>
+              <span>
+                Proyek:{" "}
+                <strong className="text-foreground font-semibold">
+                  {quickViewPO?.projek || "Persediaan Gudang"}
+                </strong>
+              </span>
+              <span>•</span>
+              <span>
+                Total:{" "}
+                <strong className="text-primary font-bold">
+                  {quickViewPO?.items?.length || 0} Jenis Item
+                </strong>
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Ringkas Table Item Barang */}
+          <div className="rounded-xl border border-border/80 overflow-hidden bg-background shadow-2xs">
+            <Table>
+              <TableHeader className="bg-muted/30">
+                <TableRow className="h-8 text-[11px] font-bold border-b border-border/60">
+                  <TableHead className="w-8 text-center">No</TableHead>
+                  <TableHead>Nama Barang & Spesifikasi</TableHead>
+                  <TableHead className="w-20 text-center">Qty PO</TableHead>
+                  <TableHead className="w-20 text-center text-emerald-600 font-bold">
+                    Lolos
+                  </TableHead>
+                  <TableHead className="w-20 text-center text-rose-600 font-bold">
+                    Reject
+                  </TableHead>
+                  <TableHead className="w-28 text-center">
+                    Status / Disposisi
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {!quickViewPO?.items || quickViewPO.items.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={6}
+                      className="text-center py-6 text-xs text-muted-foreground"
+                    >
+                      Tidak ada item barang dalam PO ini
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  (quickViewPO.items || []).map((item: any, iIdx: number) => {
+                    const pQty = Number(item.qtyPassed) || 0;
+                    const rQty = Number(item.qtyFailed) || 0;
+                    const isUseAsIs = item.qcDisposition === "USE_AS_IS";
+                    const isReturn = item.qcDisposition === "RETURN_TO_VENDOR";
+
+                    return (
+                      <TableRow
+                        key={item.id || iIdx}
+                        className="text-xs border-b border-border/40 hover:bg-muted/20"
+                      >
+                        <TableCell className="text-center font-mono text-muted-foreground text-[11px]">
+                          {iIdx + 1}
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-foreground block">
+                              {item.namaBarang}
+                            </span>
+                            {item.ukuran && (
+                              <span className="text-[11px] text-muted-foreground block">
+                                Spek: {item.ukuran}
+                              </span>
+                            )}
+                            {item.noticeMerkJenis && (
+                              <span className="text-[10px] text-muted-foreground block">
+                                Merk: {item.noticeMerkJenis}
+                              </span>
+                            )}
+                            {item.qcDefectReason && (
+                              <span className="text-[10px] text-rose-600 font-semibold block">
+                                Cacat: {item.qcDefectReason}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center font-semibold">
+                          {item.qty} {item.satuan || "pcs"}
+                        </TableCell>
+                        <TableCell className="text-center font-bold text-emerald-600">
+                          {pQty > 0 ? `${pQty} ${item.satuan || "pcs"}` : "-"}
+                        </TableCell>
+                        <TableCell className="text-center font-bold text-rose-600">
+                          {rQty > 0 ? `${rQty} ${item.satuan || "pcs"}` : "-"}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {pQty > 0 && rQty === 0 ? (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-400"
+                            >
+                              Lolos
+                            </Badge>
+                          ) : rQty > 0 ? (
+                            isUseAsIs ? (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-200 border-amber-400"
+                              >
+                                ⚠️ Use As-Is
+                              </Badge>
+                            ) : isReturn ? (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] font-bold bg-rose-500/15 text-rose-800 dark:text-rose-300 border-rose-400"
+                              >
+                                ✕ Retur
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] font-bold bg-rose-500/15 text-rose-800 dark:text-rose-300 border-rose-400"
+                              >
+                                Reject
+                              </Badge>
+                            )
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] text-muted-foreground border-border"
+                            >
+                              Belum Diuji
+                            </Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <DialogFooter className="pt-2 border-t border-border/40 flex items-center justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setQuickViewPO(null)}
+              className="h-8 text-xs font-semibold rounded-lg cursor-pointer"
+            >
+              Tutup
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                const targetPO = quickViewPO;
+                setQuickViewPO(null);
+                setInspectReceipt(targetPO);
+                setIsReceiptDialogOpen(true);
+              }}
+              className="h-8 text-xs font-bold rounded-lg cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5 shadow-2xs"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Buka Form Inspeksi QC
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -29,11 +29,14 @@ import {
   X,
   Save,
   Check,
+  Send,
 } from "lucide-react";
 import {
   submitSingleItemQCValidation,
   uploadQCAttachmentAction,
 } from "@/app/actions/qc-receipt";
+import { submitQCReceiptForApproval } from "@/app/actions/qc-receipt-approval";
+import { QCReceiptReportPreviewDialog } from "./qc-receipt-report-preview-dialog";
 import { compressImage } from "@/lib/image-compressor";
 import { formatJakartaDate } from "@/lib/date-utils";
 
@@ -69,6 +72,8 @@ export function QCReceiptDialog({
   onSuccess,
 }: QCReceiptDialogProps) {
   const [itemsState, setItemsState] = useState<ItemState[]>([]);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
 
   useEffect(() => {
     if (purchaseOrder && purchaseOrder.items) {
@@ -113,6 +118,103 @@ export function QCReceiptDialog({
       setItemsState(initialItems);
     }
   }, [purchaseOrder]);
+
+  const previewPurchaseOrder = useMemo(() => {
+    if (!purchaseOrder) return null;
+    const mergedItems = (purchaseOrder.items || []).map(
+      (dbItem: any, idx: number) => {
+        const stateItem =
+          itemsState.find((s) => s.itemId === dbItem.id) || itemsState[idx];
+        if (!stateItem) return dbItem;
+
+        const pQty = Number(stateItem.qtyPassed) || 0;
+        const rQty = Number(stateItem.qtyReject) || 0;
+        let calculatedStatus = dbItem.qcStatus;
+        if (pQty > 0 || rQty > 0) {
+          if (pQty === stateItem.qtyTotal && rQty === 0)
+            calculatedStatus = "PASSED";
+          else if (rQty === stateItem.qtyTotal && pQty === 0)
+            calculatedStatus = "FAILED";
+          else calculatedStatus = "PARTIAL";
+        }
+
+        return {
+          ...dbItem,
+          qtyPassed: pQty,
+          qtyFailed: rQty,
+          qcNotes: stateItem.qcNotes || dbItem.qcNotes,
+          qcDefectReason: stateItem.qcDefectReason || dbItem.qcDefectReason,
+          qcAttachments: stateItem.qcAttachments || dbItem.qcAttachments,
+          qcStatus: calculatedStatus,
+        };
+      },
+    );
+
+    return {
+      ...purchaseOrder,
+      items: mergedItems,
+    };
+  }, [purchaseOrder, itemsState]);
+
+  const handleSubmitApproval = async () => {
+    if (!purchaseOrder?.id) return;
+
+    // 1. Validasi batas kuantitas dan alasan defect untuk semua item
+    for (const item of itemsState) {
+      const pQty = Number(item.qtyPassed) || 0;
+      const rQty = Number(item.qtyReject) || 0;
+      if (pQty + rQty > item.qtyTotal) {
+        toast.error(
+          `Jumlah Qty Passed (${pQty}) + Qty Reject (${rQty}) pada "${item.namaBarang}" melebihi Qty PO (${item.qtyTotal} ${item.satuan})!`,
+        );
+        return;
+      }
+      if (rQty > 0 && !item.qcDefectReason.trim()) {
+        toast.error(
+          `Alasan kerusakan (Defect) wajib diisi untuk item "${item.namaBarang}" karena ada Qty Reject!`,
+        );
+        return;
+      }
+    }
+
+    setIsSubmittingApproval(true);
+    const toastId = toast.loading("Menyimpan hasil pengujian dan mengajukan approval...");
+
+    try {
+      // 2. Auto-save seluruh item ke database
+      for (let i = 0; i < itemsState.length; i++) {
+        const item = itemsState[i];
+        const pQty = Number(item.qtyPassed) || 0;
+        const rQty = Number(item.qtyReject) || 0;
+
+        await submitSingleItemQCValidation({
+          poId: purchaseOrder.id,
+          itemId: item.itemId,
+          qtyPassed: pQty,
+          qtyFailed: rQty,
+          qcNotes: item.qcNotes.trim() || null,
+          qcDefectReason: item.qcDefectReason.trim() || null,
+          qcAttachments: item.qcAttachments || [],
+        });
+      }
+
+      // 3. Ajukan PO ke alur approval bertingkat
+      const res = await submitQCReceiptForApproval(purchaseOrder.id);
+      if (res.success) {
+        toast.success(res.message || "Laporan QC berhasil diajukan untuk approval", {
+          id: toastId,
+        });
+        if (onSuccess) onSuccess();
+        onOpenChange(false);
+      } else {
+        toast.error(res.error || "Gagal mengajukan approval", { id: toastId });
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "Terjadi kesalahan sistem", { id: toastId });
+    } finally {
+      setIsSubmittingApproval(false);
+    }
+  };
 
   if (!purchaseOrder) return null;
 
@@ -202,70 +304,6 @@ export function QCReceiptDialog({
       };
       return updated;
     });
-  };
-
-  // Submit MANDIRI per-item barang
-  const handleSubmitSingleItem = async (index: number) => {
-    const item = itemsState[index];
-    const pQty = Number(item.qtyPassed) || 0;
-    const rQty = Number(item.qtyReject) || 0;
-    const sum = pQty + rQty;
-
-    if (sum > item.qtyTotal) {
-      toast.error(
-        `Jumlah Qty Passed (${pQty}) + Qty Reject (${rQty}) pada "${item.namaBarang}" melebihi Qty PO (${item.qtyTotal} ${item.satuan})!`,
-      );
-      return;
-    }
-
-    if (rQty > 0 && !item.qcDefectReason.trim()) {
-      toast.error(
-        `Alasan kerusakan (Defect) wajib diisi untuk item "${item.namaBarang}" karena ada Qty Reject!`,
-      );
-      return;
-    }
-
-    setItemsState((prev) => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], isSubmitting: true };
-      return updated;
-    });
-
-    const toastId = toast.loading(`Menyimpan QC item "${item.namaBarang}"...`);
-
-    const res = await submitSingleItemQCValidation({
-      poId: purchaseOrder.id,
-      itemId: item.itemId,
-      qtyPassed: pQty,
-      qtyFailed: rQty,
-      qcNotes: item.qcNotes.trim() || null,
-      qcDefectReason: item.qcDefectReason.trim() || null,
-      qcAttachments: item.qcAttachments || [],
-    });
-
-    setItemsState((prev) => {
-      const updated = [...prev];
-      const newItemStatus =
-        res.success && res.data?.qcStatus
-          ? res.data.qcStatus
-          : updated[index].itemStatus;
-      updated[index] = {
-        ...updated[index],
-        itemStatus: newItemStatus,
-        isSubmitting: false,
-        isSavedSuccess: res.success,
-      };
-      return updated;
-    });
-
-    if (res.success) {
-      toast.success(res.message, { id: toastId });
-      onSuccess?.();
-    } else {
-      toast.error(res.error || "Gagal menyimpan hasil QC item", {
-        id: toastId,
-      });
-    }
   };
 
   return (
@@ -582,59 +620,62 @@ export function QCReceiptDialog({
                       </label>
                     </div>
                   </div>
-
-                  {/* Tombol Submit Mandiri PER-ITEM BARANG */}
-                  <div className="pt-2 border-t border-border/40 flex items-center justify-between">
-                    <span className="text-[10px] text-muted-foreground font-medium">
-                      {item.isSavedSuccess ? (
-                        <span className="text-emerald-600 font-bold flex items-center gap-1">
-                          <Check className="w-3 h-3" /> Tersimpan
-                        </span>
-                      ) : (
-                        "Belum disimpan"
-                      )}
-                    </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => handleSubmitSingleItem(idx)}
-                      disabled={item.isSubmitting || item.isUploadingFile}
-                      className={cn(
-                        "h-7 text-[11px] font-bold rounded-lg cursor-pointer transition-all flex items-center gap-1 px-3 shadow-2xs",
-                        item.isSavedSuccess
-                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                          : "bg-indigo-600 hover:bg-indigo-700 text-white",
-                      )}
-                    >
-                      {item.isSubmitting ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : item.isSavedSuccess ? (
-                        <Check className="w-3.5 h-3.5" />
-                      ) : (
-                        <Save className="w-3.5 h-3.5" />
-                      )}
-                      <span>
-                        {item.isSavedSuccess ? "Submit Ulang" : "Submit QC"}
-                      </span>
-                    </Button>
-                  </div>
                 </div>
               );
             })}
           </div>
         </div>
 
-        <DialogFooter className="mt-2 flex flex-col sm:flex-row justify-end">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            className="rounded-lg text-xs cursor-pointer h-8 font-semibold"
-          >
-            Tutup Dialog
-          </Button>
+        <DialogFooter className="mt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-2 border-t border-border/40">
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsPreviewOpen(true)}
+              className="rounded-lg text-xs cursor-pointer h-8 font-semibold gap-1.5 hover:bg-primary/10 hover:text-primary"
+            >
+              <FileText className="w-3.5 h-3.5 text-primary" />
+              Pratinjau Laporan PDF
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-2 justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              className="rounded-lg text-xs cursor-pointer h-8 font-semibold"
+            >
+              Tutup
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={isSubmittingApproval}
+              onClick={handleSubmitApproval}
+              className="rounded-lg text-xs font-bold cursor-pointer h-8 px-3.5 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs gap-1.5"
+            >
+              {isSubmittingApproval ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
+              Ajukan Hasil Inspeksi (Engineering & PM)
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
+
+      {/* QC PDF Report Preview Dialog */}
+      {isPreviewOpen && (
+        <QCReceiptReportPreviewDialog
+          open={isPreviewOpen}
+          onOpenChange={setIsPreviewOpen}
+          purchaseOrder={previewPurchaseOrder || purchaseOrder}
+        />
+      )}
     </Dialog>
   );
 }

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 const DEFAULT_STAGES_CONFIG = [
   {
@@ -191,7 +192,7 @@ export async function startProduction(
 
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Failed to start production" };
+    return { error: sanitizeErrorMessage(error, "Gagal memulai persiapan produksi.") };
   }
 }
 
@@ -334,7 +335,7 @@ export async function updateProductionStage(
     revalidatePath("/trackers/production");
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Failed to update production stage" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui progress tahapan produksi.") };
   }
 }
 
@@ -442,7 +443,7 @@ export async function handoverProductionToQC(projectId: string, notes: string) {
 
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Failed to handover project to QC" };
+    return { error: sanitizeErrorMessage(error, "Gagal melakukan serah terima ke QC.") };
   }
 }
 
@@ -576,7 +577,7 @@ export async function handoverProjectStagesToLogistics(
 
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Gagal melakukan serah terima logistik." };
+    return { error: sanitizeErrorMessage(error, "Gagal melakukan serah terima logistik.") };
   }
 }
 
@@ -705,7 +706,7 @@ export async function updateStageQCStatus(
 
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Failed to update stage QC status" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui status QC tahapan.") };
   }
 }
 
@@ -925,7 +926,7 @@ export async function addComponentToProject(
     revalidatePath("/trackers/quality-control");
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Gagal menambahkan komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal menambahkan komponen.") };
   }
 }
 
@@ -1020,7 +1021,7 @@ export async function updateComponentStage(
     revalidatePath("/trackers/quality-control");
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Gagal memperbarui progress komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui progress komponen.") };
   }
 }
 
@@ -1098,7 +1099,7 @@ export async function updateComponentStageQC(
     revalidatePath("/trackers/quality-control");
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Gagal memperbarui status QC komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui status QC komponen.") };
   }
 }
 
@@ -1147,7 +1148,7 @@ export async function renameComponent(componentId: string, newName: string) {
     revalidatePath("/trackers/quality-control");
     return { success: true };
   } catch (error: any) {
-    return { error: error.message || "Gagal mengubah nama komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengubah nama komponen.") };
   }
 }
 
@@ -1199,7 +1200,7 @@ export async function deleteComponent(componentId: string) {
     revalidatePath("/trackers/quality-control");
     return { success: true };
   } catch (error: any) {
-    return { error: error.message || "Gagal menghapus komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal menghapus komponen.") };
   }
 }
 
@@ -1314,7 +1315,7 @@ export async function excludeComponentStage(componentStageId: string) {
     revalidatePath("/trackers/quality-control");
     return { success: true };
   } catch (error: any) {
-    return { error: error.message || "Gagal mengexclude tahapan komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengecualikan tahapan komponen.") };
   }
 }
 
@@ -1490,7 +1491,7 @@ export async function handoverComponentsToLogistics(
 
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Gagal menyerahkan komponen ke divisi Logistik." };
+    return { error: sanitizeErrorMessage(error, "Gagal menyerahkan komponen ke divisi Logistik.") };
   }
 }
 
@@ -1554,8 +1555,233 @@ export async function includeComponentStage(componentId: string, stageName: stri
     revalidatePath("/trackers/quality-control");
     return { success: true, data: result };
   } catch (error: any) {
-    return { error: error.message || "Gagal mengaktifkan tahapan komponen" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengaktifkan tahapan komponen.") };
   }
 }
+
+/**
+ * Update / Tambah / Hapus Instruksi & Catatan Proyek (Production Setup Memo)
+ */
+export async function updateProjectInstructionMemo(
+  projectId: string,
+  instructionMemo: string
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: { productionSetup: true },
+    });
+    if (!project) throw new Error("Project tidak ditemukan");
+
+    if (project.productionSetup) {
+      await prisma.productionSetup.update({
+        where: { id: project.productionSetup.id },
+        data: {
+          instructionMemo: instructionMemo.trim(),
+        },
+      });
+    } else {
+      await prisma.productionSetup.create({
+        data: {
+          projectId,
+          instructionMemo: instructionMemo.trim(),
+          leader: "-",
+          team: "-",
+          startedBy: userBy,
+        },
+      });
+    }
+
+    await prisma.productionLog.create({
+      data: {
+        projectId,
+        message: instructionMemo.trim()
+          ? `Instruksi & Catatan Proyek diperbarui.`
+          : `Instruksi & Catatan Proyek dihapus/direset.`,
+        user: userBy,
+      },
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui instruksi proyek.") };
+  }
+}
+
+/**
+ * Tambah Leader Divisi untuk Masterplan Proyek
+ */
+export async function addDivisionLeaderAction(
+  projectId: string,
+  data: {
+    divisionName: string;
+    leaderName: string;
+    leaderUserId?: string;
+  }
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    let masterplan = await prisma.masterplan.findUnique({
+      where: { projectId },
+    });
+
+    if (!masterplan) {
+      masterplan = await prisma.masterplan.create({
+        data: {
+          projectId,
+          totalWeeks: 30,
+          startDate: new Date(),
+        },
+      });
+    }
+
+    const divisionName = data.divisionName.trim().toUpperCase();
+    const leaderName = data.leaderName.trim();
+    if (!divisionName || !leaderName) {
+      throw new Error("Nama divisi dan nama leader wajib diisi.");
+    }
+
+    const existing = await prisma.divisionLeader.findUnique({
+      where: {
+        masterplanId_divisionName: {
+          masterplanId: masterplan.id,
+          divisionName,
+        },
+      },
+    });
+
+    let result;
+    if (existing) {
+      result = await prisma.divisionLeader.update({
+        where: { id: existing.id },
+        data: {
+          leaderName,
+          leaderUserId: data.leaderUserId || null,
+        },
+      });
+    } else {
+      result = await prisma.divisionLeader.create({
+        data: {
+          masterplanId: masterplan.id,
+          divisionName,
+          leaderName,
+          leaderUserId: data.leaderUserId || null,
+        },
+      });
+    }
+
+    await prisma.productionLog.create({
+      data: {
+        projectId,
+        message: `Leader Divisi "${divisionName}" ditetapkan: "${leaderName}".`,
+        user: userBy,
+      },
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: result };
+  } catch (error: any) {
+    return { error: sanitizeErrorMessage(error, "Gagal menambahkan leader divisi.") };
+  }
+}
+
+/**
+ * Edit / Update Leader Divisi
+ */
+export async function updateDivisionLeaderAction(
+  divisionLeaderId: string,
+  data: {
+    divisionName: string;
+    leaderName: string;
+    leaderUserId?: string;
+  }
+) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const existing = await prisma.divisionLeader.findUnique({
+      where: { id: divisionLeaderId },
+      include: { masterplan: true },
+    });
+    if (!existing) throw new Error("Leader divisi tidak ditemukan.");
+
+    const divisionName = data.divisionName.trim().toUpperCase();
+    const leaderName = data.leaderName.trim();
+    if (!divisionName || !leaderName) {
+      throw new Error("Nama divisi dan nama leader wajib diisi.");
+    }
+
+    const result = await prisma.divisionLeader.update({
+      where: { id: divisionLeaderId },
+      data: {
+        divisionName,
+        leaderName,
+        leaderUserId: data.leaderUserId || null,
+      },
+    });
+
+    if (existing.masterplan?.projectId) {
+      await prisma.productionLog.create({
+        data: {
+          projectId: existing.masterplan.projectId,
+          message: `Leader Divisi diperbarui: "${divisionName}" -> "${leaderName}".`,
+          user: userBy,
+        },
+      });
+    }
+
+    revalidatePath("/trackers/production");
+    return { success: true, data: result };
+  } catch (error: any) {
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui leader divisi.") };
+  }
+}
+
+/**
+ * Hapus Leader Divisi
+ */
+export async function deleteDivisionLeaderAction(divisionLeaderId: string) {
+  try {
+    await requireAuth();
+    const session = await auth();
+    const userBy = session?.user?.name || "System";
+
+    const existing = await prisma.divisionLeader.findUnique({
+      where: { id: divisionLeaderId },
+      include: { masterplan: true },
+    });
+    if (!existing) throw new Error("Leader divisi tidak ditemukan.");
+
+    await prisma.divisionLeader.delete({
+      where: { id: divisionLeaderId },
+    });
+
+    if (existing.masterplan?.projectId) {
+      await prisma.productionLog.create({
+        data: {
+          projectId: existing.masterplan.projectId,
+          message: `Leader Divisi "${existing.divisionName}" (${existing.leaderName}) dihapus.`,
+          user: userBy,
+        },
+      });
+    }
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    return { error: sanitizeErrorMessage(error, "Gagal menghapus leader divisi.") };
+  }
+}
+
 
 

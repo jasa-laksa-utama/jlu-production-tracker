@@ -123,10 +123,19 @@
     @apply border-border outline-ring/50;
   }
   html {
+    @apply bg-background text-foreground;
+    scrollbar-gutter: stable;
     font-family: var(--font-poppins), ui-sans-serif, system-ui, -apple-system, sans-serif;
   }
   body {
     @apply bg-background text-foreground;
+    width: 100% !important;
+    margin-right: 0 !important;
     font-family: var(--font-poppins), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+
+  /* Kunci scroll halaman saat dialog modal terbuka tanpa pergeseran tata letak */
+  html:has([data-slot="dialog-content"][data-open]) {
+    overflow: hidden;
   }
 }

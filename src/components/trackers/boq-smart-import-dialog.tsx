@@ -441,6 +441,11 @@ export function BoQSmartImportDialog({
                                     <CommandGroup heading="Seluruh Master Data Barang">
                                       {masterItems
                                         .filter((m) => {
+                                          const isCatA =
+                                            (m.category || "A").toUpperCase() ===
+                                            "A";
+                                          if (!isCatA) return false;
+
                                           if (!searchQuery) return true;
                                           const q = searchQuery.toLowerCase();
                                           return (

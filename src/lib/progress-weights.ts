@@ -40,3 +40,39 @@ export const DEFAULT_CONVEYOR_PHASES: ConveyorPhaseConfig[] = [
   { code: "ELECTRICAL", name: "Electrical System", weight: 13.00, startWeek: 13, endWeek: 29, orderIndex: 8 },
   { code: "COMMISSIONING", name: "Commissioning", weight: 0.95, startWeek: 29, endWeek: 30, orderIndex: 9 },
 ];
+
+/**
+ * Menghasilkan konfigurasi tahapan default yang disesuaikan secara proporsional
+ * dengan total durasi pengerjaan proyek (totalWeeks).
+ */
+export function getDefaultPhasesForDuration(totalWeeks: number): ConveyorPhaseConfig[] {
+  const weeks = Math.max(1, Math.round(totalWeeks || 30));
+  const baselineWeeks = 30;
+
+  return DEFAULT_CONVEYOR_PHASES.map((p, idx, arr) => {
+    if (weeks === baselineWeeks) {
+      return { ...p };
+    }
+
+    let scaledStart =
+      p.startWeek === 1
+        ? 1
+        : Math.max(1, Math.min(weeks, Math.round((p.startWeek / baselineWeeks) * weeks)));
+
+    let scaledEnd =
+      idx === arr.length - 1 || p.endWeek >= baselineWeeks
+        ? weeks
+        : Math.max(scaledStart, Math.min(weeks, Math.round((p.endWeek / baselineWeeks) * weeks)));
+
+    if (scaledStart > scaledEnd) {
+      scaledStart = scaledEnd;
+    }
+
+    return {
+      ...p,
+      startWeek: scaledStart,
+      endWeek: scaledEnd,
+    };
+  });
+}
+

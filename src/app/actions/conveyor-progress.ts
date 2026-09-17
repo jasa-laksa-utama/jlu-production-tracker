@@ -3,6 +3,7 @@
 import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 import { auth } from "@/auth";
 import {
   calcStructureItemProgress,
@@ -233,7 +234,7 @@ export async function updateStructureItemChecklist(
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error updating structure item progress:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui progress komponen struktur.") };
   }
 }
 
@@ -413,7 +414,7 @@ export async function updateStructureItemDetails(
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error updating structure item details:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui detail komponen struktur.") };
   }
 }
 
@@ -607,7 +608,7 @@ export async function updateMechanicalItemChecklist(
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error updating mechanical item progress:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui progress komponen mekanikal.") };
   }
 }
 
@@ -777,7 +778,7 @@ export async function updateMechanicalItemDetails(
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error updating mechanical item details:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui detail komponen mekanikal.") };
   }
 }
 
@@ -870,7 +871,7 @@ export async function togglePhaseSubStep(subStepId: string, checked: boolean) {
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error toggling phase sub step:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal mengubah status sub-step tahapan.") };
   }
 }
 
@@ -967,7 +968,7 @@ export async function updatePhaseProgressDirect(
     console.error("Error updating phase progress direct:", error);
     return {
       success: false,
-      error: error.message || "Gagal memperbarui progress tahapan",
+      error: sanitizeErrorMessage(error, "Gagal memperbarui progress tahapan."),
     };
   }
 }
@@ -1142,7 +1143,7 @@ export async function addConveyorUnitAfter(
     return { success: true, data: result };
   } catch (error: any) {
     console.error("Error adding conveyor unit:", error);
-    return { success: false, error: error.message || "Gagal menambah unit conveyor" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menambah unit conveyor.") };
   }
 }
 
@@ -1298,7 +1299,7 @@ export async function addStructureItemsToUnit(
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error adding structure items:", error);
-    return { success: false, error: error.message || "Gagal menambah komponen struktur" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menambah komponen struktur.") };
   }
 }
 
@@ -1448,7 +1449,7 @@ export async function addMechanicalItemsToUnit(
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error adding mechanical items:", error);
-    return { success: false, error: error.message || "Gagal menambah komponen mekanikal" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menambah komponen mekanikal.") };
   }
 }
 
@@ -1560,7 +1561,7 @@ export async function deleteStructureItem(itemId: string) {
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error deleting structure item:", error);
-    return { success: false, error: error.message || "Gagal menghapus komponen struktur" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghapus komponen struktur.") };
   }
 }
 
@@ -1672,7 +1673,7 @@ export async function deleteMechanicalItem(itemId: string) {
     return { success: true, data: JSON.parse(JSON.stringify(result)) };
   } catch (error: any) {
     console.error("Error deleting mechanical item:", error);
-    return { success: false, error: error.message || "Gagal menghapus komponen mekanikal" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghapus komponen mekanikal.") };
   }
 }
 
@@ -1695,7 +1696,7 @@ export async function reorderStructureItems(
     return { success: true };
   } catch (error: any) {
     console.error("Error reordering structure items:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyusun urutan komponen struktur.") };
   }
 }
 
@@ -1718,6 +1719,271 @@ export async function reorderMechanicalItems(
     return { success: true };
   } catch (error: any) {
     console.error("Error reordering mechanical items:", error);
-    return { success: false, error: error.message };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyusun urutan komponen mekanikal.") };
   }
 }
+
+export async function updateConveyorUnitDetails(
+  unitId: string,
+  dataInput: {
+    name: string;
+    unitType: "STRUCTURE" | "MECHANICAL" | "BOTH";
+    satuan?: string;
+    volume?: number;
+  }
+) {
+  try {
+    await requireAuth();
+    await prisma.conveyorUnit.update({
+      where: { id: unitId },
+      data: {
+        name: dataInput.name.trim(),
+        unitType: dataInput.unitType,
+        satuan: dataInput.satuan?.trim() || "unit",
+        volume: Number(dataInput.volume) || 1,
+      },
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error updating conveyor unit details:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui detail unit conveyor.") };
+  }
+}
+
+export async function updateAllUnitWeights(
+  projectId: string,
+  weights: Array<{ unitId: string; weightPercent: number }>
+) {
+  try {
+    await requireAuth();
+
+    await prisma.$transaction(async (tx) => {
+      for (const item of weights) {
+        await tx.unitProgress.updateMany({
+          where: { unitId: item.unitId },
+          data: { weightPercent: Number(item.weightPercent) },
+        });
+      }
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error updating unit weights:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui bobot unit.") };
+  }
+}
+
+export async function deleteConveyorUnit(unitId: string) {
+  try {
+    await requireAuth();
+    const unit = await prisma.conveyorUnit.findUnique({
+      where: { id: unitId },
+    });
+    if (!unit) throw new Error("Unit conveyor tidak ditemukan.");
+
+    await prisma.$transaction(async (tx) => {
+      await tx.structureItem.deleteMany({ where: { unitId } });
+      await tx.mechanicalItem.deleteMany({ where: { unitId } });
+      await tx.unitProgress.deleteMany({ where: { unitId } });
+      await tx.conveyorUnit.delete({ where: { id: unitId } });
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error deleting conveyor unit:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghapus unit conveyor.") };
+  }
+}
+
+export async function reorderConveyorUnits(
+  projectId: string,
+  orderedUnitIds: string[]
+) {
+  try {
+    await requireAuth();
+    await prisma.$transaction(
+      orderedUnitIds.map((id, index) =>
+        prisma.conveyorUnit.update({
+          where: { id },
+          data: { orderIndex: index },
+        })
+      )
+    );
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error reordering conveyor units:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyusun urutan unit conveyor.") };
+  }
+}
+
+export async function bulkUpdateStructureStage(
+  unitId: string,
+  stage: "CUTTING" | "SETTING" | "WELDING" | "FINISHING" | "PAINTING" | "PACKAGING" | "RESET" | "ALL",
+  isDone: boolean
+) {
+  try {
+    await requireAuth();
+
+    await prisma.$transaction(async (tx) => {
+      const items = await tx.structureItem.findMany({
+        where: { unitId },
+      });
+
+      for (const item of items) {
+        const qty = Math.max(1, item.qty || 1);
+        let cuttingQty = item.cuttingQty ?? (item.cuttingDone ? qty : 0);
+        let settingQty = item.settingQty ?? (item.settingDone ? qty : 0);
+        let weldingQty = item.weldingQty ?? (item.weldingDone ? qty : 0);
+        let finishingQty = item.finishingQty ?? (item.finishingDone ? qty : 0);
+        let paintingQty = item.paintingQty ?? (item.paintingDone ? qty : 0);
+        let packagingQty = item.packagingQty ?? (item.packagingDone ? qty : 0);
+
+        if (stage === "ALL") {
+          cuttingQty = isDone ? qty : 0;
+          settingQty = isDone ? qty : 0;
+          weldingQty = isDone ? qty : 0;
+          finishingQty = isDone ? qty : 0;
+          paintingQty = isDone ? qty : 0;
+          packagingQty = isDone ? qty : 0;
+        } else if (stage === "RESET") {
+          cuttingQty = 0;
+          settingQty = 0;
+          weldingQty = 0;
+          finishingQty = 0;
+          paintingQty = 0;
+          packagingQty = 0;
+        } else if (stage === "CUTTING") {
+          cuttingQty = isDone ? qty : 0;
+        } else if (stage === "SETTING") {
+          settingQty = isDone ? qty : 0;
+        } else if (stage === "WELDING") {
+          weldingQty = isDone ? qty : 0;
+        } else if (stage === "FINISHING") {
+          finishingQty = isDone ? qty : 0;
+        } else if (stage === "PAINTING") {
+          paintingQty = isDone ? qty : 0;
+        } else if (stage === "PACKAGING") {
+          packagingQty = isDone ? qty : 0;
+        }
+
+        const merged = {
+          ...item,
+          cuttingQty,
+          settingQty,
+          weldingQty,
+          finishingQty,
+          paintingQty,
+          packagingQty,
+        };
+        const newProgress = calcStructureItemProgress(merged);
+
+        await tx.structureItem.update({
+          where: { id: item.id },
+          data: {
+            cuttingQty,
+            settingQty,
+            weldingQty,
+            finishingQty,
+            paintingQty,
+            packagingQty,
+            cuttingDone: cuttingQty >= qty,
+            settingDone: settingQty >= qty,
+            weldingDone: weldingQty >= qty,
+            finishingDone: finishingQty >= qty,
+            paintingDone: paintingQty >= qty,
+            packagingDone: packagingQty >= qty,
+            progressPercent: newProgress,
+          },
+        });
+      }
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (err: any) {
+    console.error("Error bulk updating structure stage:", err);
+    return { success: false, error: sanitizeErrorMessage(err, "Gagal memperbarui tahapan struktur secara massal.") };
+  }
+}
+
+export async function bulkUpdateMechanicalStage(
+  unitId: string,
+  stage: "PROCUREMENT" | "PO" | "FABRICATION" | "PACKAGING" | "RESET" | "ALL",
+  isDone: boolean
+) {
+  try {
+    await requireAuth();
+
+    await prisma.$transaction(async (tx) => {
+      const items = await tx.mechanicalItem.findMany({
+        where: { unitId },
+      });
+
+      for (const item of items) {
+        const qty = Math.max(1, item.qty || 1);
+        let procurementQty = item.procurementQty ?? (item.procurementDone ? qty : 0);
+        let poQty = item.poQty ?? (item.poDone ? qty : 0);
+        let fabricationQty = item.fabricationQty ?? (item.fabricationDone ? qty : 0);
+        let packagingQty = item.packagingQty ?? (item.packagingDone ? qty : 0);
+
+        if (stage === "ALL") {
+          procurementQty = isDone ? qty : 0;
+          poQty = isDone ? qty : 0;
+          fabricationQty = isDone ? qty : 0;
+          packagingQty = isDone ? qty : 0;
+        } else if (stage === "RESET") {
+          procurementQty = 0;
+          poQty = 0;
+          fabricationQty = 0;
+          packagingQty = 0;
+        } else if (stage === "PROCUREMENT") {
+          procurementQty = isDone ? qty : 0;
+        } else if (stage === "PO") {
+          poQty = isDone ? qty : 0;
+        } else if (stage === "FABRICATION") {
+          fabricationQty = isDone ? qty : 0;
+        } else if (stage === "PACKAGING") {
+          packagingQty = isDone ? qty : 0;
+        }
+
+        const merged = {
+          ...item,
+          procurementQty,
+          poQty,
+          fabricationQty,
+          packagingQty,
+        };
+        const newProgress = calcMechanicalItemProgress(merged);
+
+        await tx.mechanicalItem.update({
+          where: { id: item.id },
+          data: {
+            procurementQty,
+            poQty,
+            fabricationQty,
+            packagingQty,
+            procurementDone: procurementQty >= qty,
+            poDone: poQty >= qty,
+            fabricationDone: fabricationQty >= qty,
+            packagingDone: packagingQty >= qty,
+            progressPercent: newProgress,
+          },
+        });
+      }
+    });
+
+    revalidatePath("/trackers/production");
+    return { success: true };
+  } catch (err: any) {
+    console.error("Error bulk updating mechanical stage:", err);
+    return { success: false, error: sanitizeErrorMessage(err, "Gagal memperbarui tahapan mekanikal secara massal.") };
+  }
+}
+
+

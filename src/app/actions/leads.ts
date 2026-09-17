@@ -7,6 +7,7 @@ import { generateTrackingNumber } from "@/lib/generate-number";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export async function createLead(formData: FormData) {
   try {
@@ -21,7 +22,7 @@ export async function createLead(formData: FormData) {
     const expectedDateStr = formData.get("expectedDate") as string | null;
 
     if (!customerId || !projectName) {
-      return { error: "Customer and Project Name are required" };
+      return { error: "Pelanggan dan Nama Proyek wajib diisi." };
     }
 
     const value = valueRaw ? new Prisma.Decimal(valueRaw) : null;
@@ -51,7 +52,7 @@ export async function createLead(formData: FormData) {
       }
     };
   } catch (error: any) {
-    return { error: error.message || "Failed to create lead" };
+    return { error: sanitizeErrorMessage(error, "Gagal membuat lead baru.") };
   }
 }
 
@@ -65,7 +66,7 @@ export async function updateLead(id: string, formData: FormData) {
     const salesPerson = formData.get("salesPerson") as string | null;
     const customerId = formData.get("customerId") as string | null;
 
-    if (!projectName) return { error: "Project Name is required" };
+    if (!projectName) return { error: "Nama proyek wajib diisi." };
     const value = valueRaw ? new Prisma.Decimal(valueRaw) : null;
 
     const updateData: any = { 
@@ -128,7 +129,7 @@ export async function updateLead(id: string, formData: FormData) {
       }
     };
   } catch (error: any) {
-    return { error: error.message || "Failed to update lead" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui data lead.") };
   }
 }
 
@@ -141,7 +142,7 @@ export async function deleteLead(id: string) {
     revalidatePath("/leads");
     return { success: true };
   } catch (error: any) {
-    return { error: error.message || "Failed to delete lead" };
+    return { error: sanitizeErrorMessage(error, "Gagal menghapus lead.") };
   }
 }
 
@@ -163,7 +164,7 @@ export async function updateLeadStatus(
 
     // Validation: LOST requires lostReason
     if (status === "LOST" && !lostReason) {
-      return { error: "Alasan lost harus diisi" };
+      return { error: "Alasan status Lost harus diisi." };
     }
 
     const updated = await prisma.lead.update({
@@ -197,7 +198,7 @@ export async function updateLeadStatus(
       }
     };
   } catch (error: any) {
-    return { error: error.message || "Failed to update status" };
+    return { error: sanitizeErrorMessage(error, "Gagal memperbarui status lead.") };
   }
 }
 
@@ -317,7 +318,7 @@ export async function getLeads(params: {
       }
     };
   } catch (error: any) {
-    return { error: error.message || "Failed to fetch leads" };
+    return { error: sanitizeErrorMessage(error, "Gagal mengambil data leads.") };
   }
 }
 

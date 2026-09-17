@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { syncEngineeringMasterplanProgress } from "@/app/actions/masterplan";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export async function updateProjectEstimatedTonnage(
   projectId: string,
@@ -53,7 +54,7 @@ export async function updateProjectEstimatedTonnage(
     console.error("Error updateProjectEstimatedTonnage:", error);
     return {
       success: false,
-      error: error?.message || "Gagal memperbarui estimasi tonase proyek",
+      error: sanitizeErrorMessage(error, "Gagal memperbarui estimasi tonase proyek."),
     };
   }
 }

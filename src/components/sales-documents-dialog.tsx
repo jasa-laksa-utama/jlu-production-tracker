@@ -221,7 +221,7 @@ function CategorySection({
         }
       }
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(err?.message || "Gagal mengunduh dokumen");
     } finally {
       setIsDownloading(null);
     }

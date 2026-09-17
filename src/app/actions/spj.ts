@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createNotification } from "@/app/actions/notifications";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export interface CreateSPJItemInput {
   name: string;
@@ -105,8 +106,8 @@ export async function createSPJ(
 
     return { success: true, data: JSON.parse(JSON.stringify(newSPJ)) };
   } catch (error: any) {
-    console.error("[createSPJ] Error:", error);
-    return { success: false, error: error.message || "Gagal membuat SPJ" };
+    console.error("Failed to create SPJ:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat SPJ.") };
   }
 }
 
@@ -236,8 +237,8 @@ export async function updateSPJ(
     revalidatePath("/trackers/production");
     return { success: true, data: JSON.parse(JSON.stringify(updated)) };
   } catch (error: any) {
-    console.error("[updateSPJ] Error:", error);
-    return { success: false, error: error.message || "Gagal memperbarui SPJ" };
+    console.error("Failed to update SPJ:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui SPJ.") };
   }
 }
 
@@ -272,8 +273,8 @@ export async function deleteSPJ(spjId: string) {
     revalidatePath("/trackers/production");
     return { success: true };
   } catch (error: any) {
-    console.error("[deleteSPJ] Error:", error);
-    return { success: false, error: error.message || "Gagal menghapus SPJ" };
+    console.error("Failed to delete SPJ:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghapus SPJ.") };
   }
 }
 
@@ -303,7 +304,7 @@ export async function approveSPJByPpic(spjId: string) {
     return { success: true, data: JSON.parse(JSON.stringify(updated)) };
   } catch (error: any) {
     console.error("[approveSPJByPpic] Error:", error);
-    return { success: false, error: error.message || "Gagal menyetujui SPJ" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPJ.") };
   }
 }
 
@@ -331,8 +332,8 @@ export async function approveSPJByPm(spjId: string) {
     revalidatePath("/trackers/ppic");
     return { success: true, data: JSON.parse(JSON.stringify(updated)) };
   } catch (error: any) {
-    console.error("[approveSPJByPm] Error:", error);
-    return { success: false, error: error.message || "Gagal menyetujui SPJ" };
+    console.error("Failed to approve SPJ by PM:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menyetujui SPJ.") };
   }
 }
 
@@ -361,8 +362,8 @@ export async function rejectSPJ(spjId: string, reason: string) {
     revalidatePath("/trackers/spb-approval-pm");
     return { success: true, data: JSON.parse(JSON.stringify(updated)) };
   } catch (error: any) {
-    console.error("[rejectSPJ] Error:", error);
-    return { success: false, error: error.message || "Gagal menolak SPJ" };
+    console.error("Failed to reject SPJ:", error);
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menolak SPJ.") };
   }
 }
 
@@ -405,10 +406,10 @@ export async function updateSPJItemStatus(
     revalidatePath("/trackers/production");
     return { success: true, data: JSON.parse(JSON.stringify(updatedItem)) };
   } catch (error: any) {
-    console.error("[updateSPJItemStatus] Error:", error);
+    console.error("Failed to update SPJ item status:", error);
     return {
       success: false,
-      error: error.message || "Gagal memperbarui status item SPJ",
+      error: sanitizeErrorMessage(error, "Gagal memperbarui status item SPJ."),
     };
   }
 }

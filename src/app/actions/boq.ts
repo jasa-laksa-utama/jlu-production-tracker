@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth-guard";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 export interface BoQItemInput {
   itemId: string;
@@ -180,12 +181,19 @@ export async function createProjectBoQ(projectId: string, boqNumber: string, ite
       return boq;
     });
 
+    try {
+      const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+      await syncEngineeringMasterplanProgress(projectId);
+    } catch (e) {
+      console.error("Error auto-syncing engineering masterplan on createProjectBoQ:", e);
+    }
+
     revalidatePath("/trackers/engineering");
     revalidatePath("/trackers/ppic");
     return { success: true, data: result };
   } catch (error: any) {
     console.error("[createProjectBoQ] Error:", error);
-    return { success: false, error: error.message || "Gagal membuat BoQ" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal membuat BoQ.") };
   }
 }
 
@@ -287,15 +295,24 @@ export async function updateProjectBoQ(boqId: string, boqNumber: string, items: 
         });
       }
 
-      return { count: items.length };
+      return { count: items.length, projectId: boq.projectId };
     });
+
+    if (result.projectId) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(result.projectId);
+      } catch (e) {
+        console.error("Error auto-syncing engineering masterplan on updateProjectBoQ:", e);
+      }
+    }
 
     revalidatePath("/trackers/engineering");
     revalidatePath("/trackers/ppic");
     return { success: true, data: result };
   } catch (error: any) {
     console.error("[updateProjectBoQ] Error:", error);
-    return { success: false, error: error.message || "Gagal memperbarui BoQ" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal memperbarui BoQ.") };
   }
 }
 
@@ -337,11 +354,20 @@ export async function deleteProjectBoQ(boqId: string) {
       return deleted;
     });
 
+    if (result.projectId) {
+      try {
+        const { syncEngineeringMasterplanProgress } = await import("@/app/actions/masterplan");
+        await syncEngineeringMasterplanProgress(result.projectId);
+      } catch (e) {
+        console.error("Error auto-syncing engineering masterplan on deleteProjectBoQ:", e);
+      }
+    }
+
     revalidatePath("/trackers/engineering");
     revalidatePath("/trackers/ppic");
     return { success: true, data: result };
   } catch (error: any) {
     console.error("[deleteProjectBoQ] Error:", error);
-    return { success: false, error: error.message || "Gagal menghapus BoQ" };
+    return { success: false, error: sanitizeErrorMessage(error, "Gagal menghapus BoQ.") };
   }
 }

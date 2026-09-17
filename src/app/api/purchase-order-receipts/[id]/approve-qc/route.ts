@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { sanitizeErrorMessage } from "@/lib/error-handler";
 
 /**
  * POST /api/purchase-order-receipts/[id]/approve-qc
@@ -78,7 +79,7 @@ export async function POST(
   } catch (error: any) {
     console.error(`Error POST /api/purchase-order-receipts/[id]/approve-qc:`, error);
     return NextResponse.json(
-      { success: false, error: error?.message || "Gagal memproses approval QC receipt" },
+      { success: false, error: sanitizeErrorMessage(error, "Gagal memproses persetujuan QC penerimaan") },
       { status: 500 }
     );
   }

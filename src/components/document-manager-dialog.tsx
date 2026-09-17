@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
 import {
   Dialog,
   DialogContent,
@@ -34,9 +35,37 @@ import {
   RefreshCw,
   Search,
   Filter,
+  ClipboardList,
+  DraftingCompass,
+  Cog,
+  Boxes,
+  FileSpreadsheet,
+  FileSignature,
+  Calculator,
+  TrendingUp,
+  Factory,
+  ShieldCheck,
+  Paperclip,
+  Scale,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { BoQPDFDocument } from "@/components/trackers/boq-pdf-document";
+import { SPBPDFDocument } from "@/components/trackers/spb-pdf-document";
+import { SPJPDFDocument } from "@/components/trackers/spj-pdf-document";
+
+const PDFViewer = dynamic(
+  () => import("@react-pdf/renderer").then((m) => m.PDFViewer),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-125 w-full flex flex-col items-center justify-center text-muted-foreground gap-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <span className="text-sm font-semibold">Memuat PDF Viewer...</span>
+      </div>
+    ),
+  },
+);
 import {
   createDocumentUploadUrl,
   saveDocumentRecord,
@@ -51,50 +80,62 @@ export const DOCUMENT_CATEGORIES = [
   {
     id: "BRIEF",
     label: "Brief",
-    icon: "📋",
+    icon: ClipboardList,
     desc: "Dokumen brief, TOR, dan spesifikasi awal",
   },
   {
     id: "DRAWING",
     label: "Drawing",
-    icon: "📐",
+    icon: DraftingCompass,
     desc: "Gambar teknik 2D/3D & layout kerja",
   },
   {
     id: "MECH_PART_LIST",
     label: "Mechanical Part List",
-    icon: "⚙️",
+    icon: Cog,
     desc: "Daftar komponen mekanik & part list",
   },
   {
     id: "ASSEMBLY_LIST",
     label: "Assembly List",
-    icon: "📦",
+    icon: Boxes,
     desc: "Urutan dan instruksi perakitan unit",
+  },
+  {
+    id: "BOQ",
+    label: "BoQ",
+    icon: FileSpreadsheet,
+    desc: "Bill of Quantities & daftar kebutuhan material proyek",
+  },
+  {
+    id: "SPB",
+    label: "SPB / SPJ",
+    icon: FileSignature,
+    desc: "Surat Permintaan Barang (SPB) & Surat Pertanggungjawaban (SPJ)",
   },
   {
     id: "RAB",
     label: "RAB",
-    icon: "💰",
+    icon: Calculator,
     desc: "Rencana Anggaran Biaya proyek",
   },
-  { id: "RAP", label: "RAP", icon: "📈", desc: "Rencana Anggaran Pelaksanaan" },
+  { id: "RAP", label: "RAP", icon: TrendingUp, desc: "Rencana Anggaran Pelaksanaan" },
   {
     id: "PRODUCTION",
     label: "Dokumen Produksi",
-    icon: "🏭",
+    icon: Factory,
     desc: "Work order, SPK, dan instruksi kerja",
   },
   {
     id: "QC",
     label: "Dokumen QC",
-    icon: "✅",
+    icon: ShieldCheck,
     desc: "Checklist QC, ITP, dan laporan inspeksi",
   },
   {
     id: "OTHER",
     label: "Lainnya",
-    icon: "📎",
+    icon: Paperclip,
     desc: "Lampiran & berkas pendukung lainnya",
   },
 ] as const;
@@ -122,6 +163,8 @@ interface DocumentManagerDialogProps {
   trigger?: React.ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  projectData?: any;
+  readOnly?: boolean;
 }
 
 interface DocumentRecord {
@@ -151,6 +194,8 @@ export function DocumentManagerDialog({
   trigger,
   open: controlledOpen,
   onOpenChange: setControlledOpen,
+  projectData,
+  readOnly = false,
 }: DocumentManagerDialogProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen !== undefined ? controlledOpen : internalOpen;
@@ -161,6 +206,24 @@ export function DocumentManagerDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState<string | null>(null);
+
+  // Detail Item Dialog States (untuk BoQ & SPB/SPJ)
+  const [viewingDetailType, setViewingDetailType] = useState<
+    "BOQ" | "SPB" | "SPJ" | null
+  >(null);
+  const [viewingDetailData, setViewingDetailData] = useState<any>(null);
+  const [detailSearchQuery, setDetailSearchQuery] = useState("");
+
+  // PDF Preview States (untuk BoQ & SPB/SPJ)
+  const [previewPdfType, setPreviewPdfType] = useState<
+    "BOQ" | "SPB" | "SPJ" | null
+  >(null);
+  const [previewPdfData, setPreviewPdfData] = useState<any>(null);
+
+  // Filter Sub-tab SPB vs SPJ
+  const [spbFilterType, setSpbFilterType] = useState<"ALL" | "SPB" | "SPJ">(
+    "ALL",
+  );
 
   // Selected Category State untuk Drill-Down
   const [selectedCatId, setSelectedCatId] = useState<DocumentCategory | null>(
@@ -257,7 +320,13 @@ export function DocumentManagerDialog({
   const currentCatDocs = useMemo(() => {
     if (!selectedCatId) return [];
     return documents
-      .filter((d) => d.category === selectedCatId)
+      .filter((d) => {
+        if (selectedCatId === "SPB") {
+          const cat = (d.category || "").toUpperCase();
+          return cat === "SPB" || cat === "SPJ";
+        }
+        return d.category === selectedCatId;
+      })
       .sort(
         (a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
@@ -312,7 +381,7 @@ export function DocumentManagerDialog({
         }
       }
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(err?.message || "Gagal mengunduh dokumen");
     } finally {
       setIsDownloading(null);
     }
@@ -713,14 +782,16 @@ export function DocumentManagerDialog({
                         )}
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => setIsEditingDrive(true)}
-                      className="h-7 text-xs text-primary font-semibold hover:bg-primary/10 cursor-pointer"
-                    >
-                      {driveUrl ? "Ubah" : "Atur Link"}
-                    </Button>
+                    {!readOnly && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setIsEditingDrive(true)}
+                        className="h-7 text-xs text-primary font-semibold hover:bg-primary/10 cursor-pointer"
+                      >
+                        {driveUrl ? "Ubah" : "Atur Link"}
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -729,14 +800,40 @@ export function DocumentManagerDialog({
               <div className="flex-1 overflow-y-auto min-h-0 pr-1 my-1">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
                   {activeCategories.map((cat) => {
-                    const catDocs = documents.filter(
-                      (d) => d.category === cat.id,
-                    );
-                    const hasDocs = catDocs.length > 0;
+                    const isBoqCat = cat.id === "BOQ";
+                    const isSpbCat = cat.id === "SPB";
+                    const isSpecialViewerCat = isBoqCat || isSpbCat;
+
+                    const catDocs = documents.filter((d) => {
+                      if (cat.id === "SPB") {
+                        const c = (d.category || "").toUpperCase();
+                        return c === "SPB" || c === "SPJ";
+                      }
+                      return d.category === cat.id;
+                    });
 
                     const uniqueLabelsCount = new Set(
                       catDocs.map((d) => d.label || d.fileName || d.id),
                     ).size;
+
+                    const sysBoqs = projectData?.boqs || [];
+                    const sysSpbs = projectData?.spb || [];
+                    const sysSpjs = projectData?.spj || [];
+
+                    let totalItemCount = uniqueLabelsCount;
+                    let totalDocsCount = catDocs.length;
+
+                    if (isBoqCat) {
+                      totalItemCount = sysBoqs.length + uniqueLabelsCount;
+                      totalDocsCount = sysBoqs.length + catDocs.length;
+                    } else if (isSpbCat) {
+                      totalItemCount =
+                        sysSpbs.length + sysSpjs.length + uniqueLabelsCount;
+                      totalDocsCount =
+                        sysSpbs.length + sysSpjs.length + catDocs.length;
+                    }
+
+                    const hasDocs = totalDocsCount > 0;
 
                     return (
                       <div
@@ -755,10 +852,10 @@ export function DocumentManagerDialog({
                         <div>
                           {/* Top: Icon + Name + Badge Count */}
                           <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-base sm:text-lg shrink-0">
-                                {cat.icon}
-                              </span>
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                                <cat.icon className="w-4 h-4 text-primary" />
+                              </div>
                               <span className="font-bold text-xs sm:text-sm text-foreground truncate group-hover:text-primary transition-colors">
                                 {cat.label}
                               </span>
@@ -766,8 +863,9 @@ export function DocumentManagerDialog({
 
                             {hasDocs ? (
                               <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 text-[10px] font-bold px-1.5 py-0 shrink-0">
-                                {uniqueLabelsCount} Berkas ({catDocs.length}{" "}
-                                Versi)
+                                {isSpecialViewerCat
+                                  ? `${totalItemCount} Dokumen`
+                                  : `${uniqueLabelsCount} Berkas (${catDocs.length} Versi)`}
                               </Badge>
                             ) : (
                               <Badge
@@ -781,7 +879,19 @@ export function DocumentManagerDialog({
 
                           {/* Description / Summary */}
                           <div className="mt-2 text-[11px] leading-relaxed">
-                            {hasDocs ? (
+                            {isBoqCat ? (
+                              <p className="text-muted-foreground line-clamp-2">
+                                {hasDocs
+                                  ? `Terdapat ${totalItemCount} dokumen BoQ resmi proyek yang siap dilihat.`
+                                  : "Daftar Bill of Quantities (BoQ) proyek dari PPIC."}
+                              </p>
+                            ) : isSpbCat ? (
+                              <p className="text-muted-foreground line-clamp-2">
+                                {hasDocs
+                                  ? `Terdapat ${totalItemCount} dokumen SPB & SPJ proyek yang siap dilihat.`
+                                  : "Daftar Surat Permintaan Barang (SPB) & SPJ proyek."}
+                              </p>
+                            ) : hasDocs ? (
                               <p className="text-muted-foreground line-clamp-2">
                                 Terdapat {uniqueLabelsCount} item dokumen aktif
                                 dengan total {catDocs.length} riwayat revisi.
@@ -797,7 +907,9 @@ export function DocumentManagerDialog({
                         {/* Bottom Action Hint */}
                         <div className="mt-3 pt-2 border-t border-border/40 flex items-center justify-between text-[11px] font-semibold text-muted-foreground group-hover:text-primary">
                           <span>
-                            {hasDocs
+                            {readOnly || isSpecialViewerCat
+                              ? "Lihat Dokumen"
+                              : hasDocs
                               ? "Lihat & Kelola Berkas"
                               : "Tambah Dokumen"}
                           </span>
@@ -841,10 +953,12 @@ export function DocumentManagerDialog({
                       <span>Semua Dokumen</span>
                     </Button>
                     <span className="text-muted-foreground/40">/</span>
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-base">
-                        {currentCategoryObj?.icon}
-                      </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      {currentCategoryObj?.icon && (
+                        <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                          <currentCategoryObj.icon className="w-3.5 h-3.5 text-primary" />
+                        </div>
+                      )}
                       <DialogTitle className="text-sm sm:text-base font-bold text-foreground truncate">
                         {currentCategoryObj?.label}
                       </DialogTitle>
@@ -853,12 +967,714 @@ export function DocumentManagerDialog({
                 </div>
               </DialogHeader>
 
-              {/* 2 Tabs Navigation di Level 2 */}
-              <Tabs
-                value={activeLevel2Tab}
-                onValueChange={setActiveLevel2Tab}
-                className="flex-1 flex flex-col min-h-0"
-              >
+              {/* 2 Tabs Navigation di Level 2 / Read-only viewer untuk BoQ, SPB/SPJ, dan readOnly mode */}
+              {readOnly || selectedCatId === "BOQ" || selectedCatId === "SPB" ? (
+                <div className="flex-1 overflow-y-auto min-h-0 space-y-4 py-2 pr-1">
+                  {/* Banner Mode Lihat */}
+                  <div className="p-3.5 sm:p-4 rounded-xl border border-border/70 bg-muted/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        {currentCategoryObj?.icon && (
+                          <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                            <currentCategoryObj.icon className="w-3.5 h-3.5 text-primary" />
+                          </div>
+                        )}
+                        <h4 className="text-xs sm:text-sm font-bold text-foreground">
+                          {selectedCatId === "BOQ"
+                            ? "Daftar Bill of Quantities (BoQ) Proyek"
+                            : selectedCatId === "SPB"
+                            ? "Daftar Surat Permintaan Barang (SPB) & SPJ Proyek"
+                            : `Dokumen ${currentCategoryObj?.label}`}
+                        </h4>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        {selectedCatId === "BOQ"
+                          ? "Dokumen BoQ resmi diterbitkan oleh tim PPIC dan disahkan oleh Project Manager. Anda dapat melihat rincian item barang atau membuka pratinjau cetak PDF."
+                          : selectedCatId === "SPB"
+                          ? "Dokumen SPB (Material) dan SPJ (Barang Jadi) diajukan oleh tim Engineering. Anda dapat melihat rincian item atau membuka pratinjau cetak PDF."
+                          : `Lihat dan unduh berkas resmi ${currentCategoryObj?.label} proyek.`}
+                      </p>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className="bg-primary/5 text-primary border-primary/20 text-[10px] font-bold px-2 py-0.5 shrink-0 self-start sm:self-auto"
+                    >
+                      Mode Lihat Dokumen
+                    </Badge>
+                  </div>
+
+                  {/* KONTEN KATEGORI BOQ */}
+                  {selectedCatId === "BOQ" && (
+                    <div className="space-y-3">
+                      {(() => {
+                        const sysBoqs = projectData?.boqs || [];
+                        if (sysBoqs.length === 0 && currentCatDocs.length === 0) {
+                          return (
+                            <div className="p-8 rounded-xl border border-dashed border-border/80 text-center bg-muted/10 space-y-2">
+                              <FileText className="w-8 h-8 text-muted-foreground/40 mx-auto" />
+                              <p className="text-xs font-semibold text-foreground">
+                                Belum Ada Dokumen BoQ
+                              </p>
+                              <p className="text-[11px] text-muted-foreground max-w-md mx-auto">
+                                Belum ada Bill of Quantities (BoQ) yang diterbitkan untuk proyek ini oleh tim PPIC.
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-2.5">
+                            {sysBoqs.map((boq: any) => (
+                              <div
+                                key={boq.id}
+                                className="p-3.5 rounded-xl border border-border/80 bg-card hover:border-primary/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+                              >
+                                <div className="space-y-1 min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-bold text-xs sm:text-sm text-foreground">
+                                      {boq.boqNumber || "BoQ Proyek"}
+                                    </span>
+                                    <Badge
+                                      className={cn(
+                                        "text-[10px] font-bold px-2 py-0 border shadow-none",
+                                        boq.boqStatus === "APPROVED"
+                                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200"
+                                          : boq.boqStatus === "PENDING"
+                                          ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200"
+                                          : "bg-muted text-muted-foreground border-border/60",
+                                      )}
+                                    >
+                                      {boq.boqStatus || "DRAFT"}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                                    <span>
+                                      Pembuat:{" "}
+                                      <strong className="text-foreground font-semibold">
+                                        {boq.boqMakerName || "PPIC"}
+                                      </strong>
+                                    </span>
+                                    <span>•</span>
+                                    <span>
+                                      Tanggal:{" "}
+                                      {boq.createdAt
+                                        ? formatJakartaDate(boq.createdAt)
+                                        : "-"}
+                                    </span>
+                                    <span>•</span>
+                                    <span className="text-primary font-semibold">
+                                      {(boq.boqItems || []).length} Item Barang
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setViewingDetailType("BOQ");
+                                      setViewingDetailData({
+                                        ...boq,
+                                        projectName:
+                                          projectData?.projectName || "Proyek",
+                                      });
+                                    }}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg border-border/80 hover:bg-primary/5 hover:text-primary cursor-pointer"
+                                  >
+                                    <Search className="w-3.5 h-3.5" />
+                                    <span>Lihat Rincian</span>
+                                  </Button>
+
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      setPreviewPdfType("BOQ");
+                                      setPreviewPdfData({
+                                        project: {
+                                          ...(projectData || {}),
+                                          boqNumber: boq.boqNumber,
+                                          boqStatus: boq.boqStatus,
+                                          boqMakerName: boq.boqMakerName,
+                                          boqApprovedByPpic:
+                                            boq.boqApprovedByPpic,
+                                          boqApprovedByPm: boq.boqApprovedByPm,
+                                          createdAt: boq.createdAt,
+                                        },
+                                        items: (boq.boqItems || []).map(
+                                          (bi: any) => ({
+                                            itemId: bi.itemId || bi.id,
+                                            itemCode:
+                                              bi.item?.itemCode ||
+                                              bi.item?.code ||
+                                              "",
+                                            itemName:
+                                              bi.item?.itemName ||
+                                              bi.item?.name ||
+                                              "",
+                                            itemTypeMerk:
+                                              bi.item?.typeMerk || "",
+                                            qty: bi.qty || 0,
+                                            unit:
+                                              bi.unit ||
+                                              bi.item?.unit ||
+                                              "pcs",
+                                            price: Number(bi.price) || 0,
+                                            note: bi.note || "",
+                                          }),
+                                        ),
+                                        boqNumber: boq.boqNumber,
+                                      });
+                                    }}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 cursor-pointer shadow-none"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Pratinjau PDF</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* Berkas Tambahan / Lampiran BoQ jika ada */}
+                            {currentCatDocs.length > 0 && (
+                              <div className="mt-4 pt-3 border-t border-border/40 space-y-2">
+                                <h5 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                  Berkas Lampiran Tambahan ({currentCatDocs.length})
+                                </h5>
+                                <div className="space-y-1.5">
+                                  {currentCatDocs.map((doc) => (
+                                    <div
+                                      key={doc.id}
+                                      className="p-2.5 rounded-lg border border-border/60 bg-muted/20 flex items-center justify-between gap-2 text-xs"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                                        <span className="font-semibold text-foreground truncate">
+                                          {doc.label || doc.fileName}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground">
+                                          v{doc.version}
+                                        </span>
+                                      </div>
+                                      <Button
+                                        variant="ghost"
+                                        size="xs"
+                                        onClick={() => handleDownload(doc)}
+                                        className="h-7 px-2 text-xs font-semibold gap-1 text-primary hover:bg-primary/10 cursor-pointer"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                        <span>Unduh</span>
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* KONTEN KATEGORI SPB & SPJ */}
+                  {selectedCatId === "SPB" && (
+                    <div className="space-y-3">
+                      {(() => {
+                        const sysSpbs = projectData?.spb || [];
+                        const sysSpjs = projectData?.spj || [];
+
+                        if (
+                          sysSpbs.length === 0 &&
+                          sysSpjs.length === 0 &&
+                          currentCatDocs.length === 0
+                        ) {
+                          return (
+                            <div className="p-8 rounded-xl border border-dashed border-border/80 text-center bg-muted/10 space-y-2">
+                              <FileText className="w-8 h-8 text-muted-foreground/40 mx-auto" />
+                              <p className="text-xs font-semibold text-foreground">
+                                Belum Ada Dokumen SPB / SPJ
+                              </p>
+                              <p className="text-[11px] text-muted-foreground max-w-md mx-auto">
+                                Belum ada Surat Permintaan Barang (SPB) atau SPJ yang diajukan untuk proyek ini.
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        const filteredSpbs =
+                          spbFilterType === "SPJ" ? [] : sysSpbs;
+                        const filteredSpjs =
+                          spbFilterType === "SPB" ? [] : sysSpjs;
+
+                        return (
+                          <div className="space-y-3">
+                            {/* Filter Sub-tab SPB vs SPJ */}
+                            <div className="flex items-center gap-1.5 bg-muted/40 p-1 rounded-xl border border-border/60 w-fit">
+                              <button
+                                type="button"
+                                onClick={() => setSpbFilterType("ALL")}
+                                className={cn(
+                                  "px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                                  spbFilterType === "ALL"
+                                    ? "bg-background text-foreground shadow-2xs border border-border/60"
+                                    : "text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                Semua ({sysSpbs.length + sysSpjs.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSpbFilterType("SPB")}
+                                className={cn(
+                                  "px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                                  spbFilterType === "SPB"
+                                    ? "bg-background text-foreground shadow-2xs border border-border/60"
+                                    : "text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                SPB Material ({sysSpbs.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSpbFilterType("SPJ")}
+                                className={cn(
+                                  "px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                                  spbFilterType === "SPJ"
+                                    ? "bg-background text-foreground shadow-2xs border border-border/60"
+                                    : "text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                SPJ Barang Jadi ({sysSpjs.length})
+                              </button>
+                            </div>
+
+                            {/* SPB Cards */}
+                            {filteredSpbs.map((spb: any) => (
+                              <div
+                                key={spb.id}
+                                className="p-3.5 rounded-xl border border-border/80 bg-card hover:border-primary/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+                              >
+                                <div className="space-y-1 min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <Badge className="bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-200 text-[10px] font-bold px-1.5 py-0">
+                                      SPB
+                                    </Badge>
+                                    <span className="font-bold text-xs sm:text-sm text-foreground">
+                                      {spb.spbNumber || "SPB Proyek"}
+                                    </span>
+                                    <Badge
+                                      className={cn(
+                                        "text-[10px] font-bold px-2 py-0 border shadow-none",
+                                        spb.status === "APPROVED"
+                                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200"
+                                          : spb.status === "SUBMITTED" ||
+                                              spb.status === "IN_PROGRESS"
+                                          ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200"
+                                          : "bg-muted text-muted-foreground border-border/60",
+                                      )}
+                                    >
+                                      {(spb.status || "DRAFT").replace(
+                                        /_/g,
+                                        " ",
+                                      )}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                                    <span>
+                                      Pemohon:{" "}
+                                      <strong className="text-foreground font-semibold">
+                                        {spb.makerName || "Engineering"}
+                                      </strong>
+                                    </span>
+                                    <span>•</span>
+                                    <span>
+                                      Tanggal:{" "}
+                                      {spb.createdAt
+                                        ? formatJakartaDate(spb.createdAt)
+                                        : "-"}
+                                    </span>
+                                    <span>•</span>
+                                    <span className="text-orange-600 font-semibold">
+                                      {(spb.items || []).length} Item Material
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setViewingDetailType("SPB");
+                                      setViewingDetailData({
+                                        ...spb,
+                                        projectName:
+                                          projectData?.projectName || "Proyek",
+                                      });
+                                    }}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg border-border/80 hover:bg-primary/5 hover:text-primary cursor-pointer"
+                                  >
+                                    <Search className="w-3.5 h-3.5" />
+                                    <span>Lihat Rincian</span>
+                                  </Button>
+
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      setPreviewPdfType("SPB");
+                                      setPreviewPdfData({
+                                        spb: {
+                                          id: spb.id,
+                                          spbNumber: spb.spbNumber,
+                                          date: spb.createdAt
+                                            ? formatJakartaDate(spb.createdAt)
+                                            : "-",
+                                          deadlineDate: spb.deadlineDate,
+                                          imageUrl: spb.imageUrl,
+                                          items: (spb.items || []).map(
+                                            (it: any) => ({
+                                              name:
+                                                it.material?.name ||
+                                                it.itemName ||
+                                                it.name ||
+                                                "Material",
+                                              qty: it.qty || 0,
+                                              source: it.source || "GUDANG",
+                                              unit:
+                                                it.unit ||
+                                                it.material?.unit ||
+                                                "pcs",
+                                              note: it.note || "",
+                                              typeMerk:
+                                                it.material?.typeMerk || "",
+                                            }),
+                                          ),
+                                          makerName:
+                                            spb.makerName || "Engineering",
+                                          mengetahuiName: spb.mengetahuiName,
+                                          menyetujuiName: spb.menyetujuiName,
+                                          createdAt: spb.createdAt,
+                                          approvedByPpic: spb.approvedByPpic,
+                                          approvedByPpicAt:
+                                            spb.approvedByPpicAt,
+                                          approvedByPm: spb.approvedByPm,
+                                          approvedByPmAt: spb.approvedByPmAt,
+                                        },
+                                        project: projectData || {},
+                                        spbNumber: spb.spbNumber,
+                                      });
+                                    }}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 cursor-pointer shadow-none"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Pratinjau PDF</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* SPJ Cards */}
+                            {filteredSpjs.map((spj: any) => (
+                              <div
+                                key={spj.id}
+                                className="p-3.5 rounded-xl border border-border/80 bg-card hover:border-primary/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+                              >
+                                <div className="space-y-1 min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <Badge className="bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-200 text-[10px] font-bold px-1.5 py-0">
+                                      SPJ
+                                    </Badge>
+                                    <span className="font-bold text-xs sm:text-sm text-foreground">
+                                      {spj.spjNumber || "SPJ Proyek"}
+                                    </span>
+                                    <Badge
+                                      className={cn(
+                                        "text-[10px] font-bold px-2 py-0 border shadow-none",
+                                        spj.status === "APPROVED"
+                                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200"
+                                          : spj.status === "SUBMITTED"
+                                          ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200"
+                                          : "bg-muted text-muted-foreground border-border/60",
+                                      )}
+                                    >
+                                      {(spj.status || "DRAFT").replace(
+                                        /_/g,
+                                        " ",
+                                      )}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground flex-wrap">
+                                    <span>
+                                      Pembuat:{" "}
+                                      <strong className="text-foreground font-semibold">
+                                        {spj.makerName || "Engineering"}
+                                      </strong>
+                                    </span>
+                                    <span>•</span>
+                                    <span>
+                                      Tanggal:{" "}
+                                      {spj.createdAt
+                                        ? formatJakartaDate(spj.createdAt)
+                                        : "-"}
+                                    </span>
+                                    <span>•</span>
+                                    <span className="text-purple-600 font-semibold">
+                                      {(spj.items || []).length} Item Barang Jadi
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setViewingDetailType("SPJ");
+                                      setViewingDetailData({
+                                        ...spj,
+                                        projectName:
+                                          projectData?.projectName || "Proyek",
+                                      });
+                                    }}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg border-border/80 hover:bg-primary/5 hover:text-primary cursor-pointer"
+                                  >
+                                    <Search className="w-3.5 h-3.5" />
+                                    <span>Lihat Rincian</span>
+                                  </Button>
+
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      setPreviewPdfType("SPJ");
+                                      setPreviewPdfData({
+                                        spj: {
+                                          id: spj.id,
+                                          spjNumber: spj.spjNumber,
+                                          date: spj.createdAt
+                                            ? formatJakartaDate(spj.createdAt)
+                                            : "-",
+                                          items: (spj.items || []).map(
+                                            (it: any) => ({
+                                              name:
+                                                it.itemName ||
+                                                it.name ||
+                                                "Barang Jadi",
+                                              qty: it.qty || 0,
+                                              unit: it.unit || "pcs",
+                                              note: it.note || "",
+                                            }),
+                                          ),
+                                          makerName:
+                                            spj.makerName || "Engineering",
+                                          mengetahuiName: spj.mengetahuiName,
+                                          menyetujuiName: spj.menyetujuiName,
+                                          createdAt: spj.createdAt,
+                                          approvedByPpic: spj.approvedByPpic,
+                                          approvedByPpicAt:
+                                            spj.approvedByPpicAt,
+                                          approvedByPm: spj.approvedByPm,
+                                          approvedByPmAt: spj.approvedByPmAt,
+                                        },
+                                        project: projectData || {},
+                                        spjNumber: spj.spjNumber,
+                                      });
+                                    }}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 cursor-pointer shadow-none"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Pratinjau PDF</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* Berkas Tambahan Lampiran SPB/SPJ */}
+                            {currentCatDocs.length > 0 && (
+                              <div className="mt-4 pt-3 border-t border-border/40 space-y-2">
+                                <h5 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                  Berkas Lampiran Tambahan ({currentCatDocs.length})
+                                </h5>
+                                <div className="space-y-1.5">
+                                  {currentCatDocs.map((doc) => (
+                                    <div
+                                      key={doc.id}
+                                      className="p-2.5 rounded-lg border border-border/60 bg-muted/20 flex items-center justify-between gap-2 text-xs"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                                        <span className="font-semibold text-foreground truncate">
+                                          {doc.label || doc.fileName}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground">
+                                          v{doc.version}
+                                        </span>
+                                      </div>
+                                      <Button
+                                        variant="ghost"
+                                        size="xs"
+                                        onClick={() => handleDownload(doc)}
+                                        className="h-7 px-2 text-xs font-semibold gap-1 text-primary hover:bg-primary/10 cursor-pointer"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                        <span>Unduh</span>
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* KONTEN KATEGORI UMUM SAAT READ-ONLY (DRAWING, BRIEF, MECH PART LIST, ASSEMBLY LIST, DLL) */}
+                  {selectedCatId !== "BOQ" && selectedCatId !== "SPB" && (
+                    <div className="space-y-3">
+                      {/* Search & Filter Bar */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-muted/40 p-2 sm:p-2.5 rounded-xl border border-border/60">
+                        <div className="relative flex-1">
+                          <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
+                          <Input
+                            placeholder={`Cari berkas ${currentCategoryObj?.label || "dokumen"}...`}
+                            value={historySearch}
+                            onChange={(e) => setHistorySearch(e.target.value)}
+                            className="h-8 pl-8 text-xs bg-background rounded-lg border-border/60 shadow-none"
+                          />
+                        </div>
+
+                        {existingDocumentLabels.length > 1 && (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            <select
+                              value={historyDocFilter}
+                              onChange={(e) => setHistoryDocFilter(e.target.value)}
+                              className="h-8 text-xs bg-background border border-border/60 rounded-lg px-2 text-foreground font-medium cursor-pointer"
+                            >
+                              <option value="ALL">
+                                Semua Berkas ({currentCatDocs.length})
+                              </option>
+                              {existingDocumentLabels.map((item) => (
+                                <option key={item.key} value={item.key}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* List Berkas Dokumen */}
+                      {filteredHistoryDocs.length > 0 ? (
+                        <div className="space-y-2.5">
+                          {filteredHistoryDocs.map((doc, idx) => (
+                            <div
+                              key={doc.id}
+                              className="p-3.5 sm:p-4 rounded-xl border border-border/80 bg-card shadow-2xs hover:border-border transition-all space-y-2"
+                            >
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                  <span className="text-xs font-bold text-muted-foreground/70 min-w-5 shrink-0 pt-0.5">
+                                    {idx + 1}.
+                                  </span>
+
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-bold text-xs sm:text-sm text-foreground break-all">
+                                        {doc.label || doc.fileName || "Dokumen"}
+                                      </span>
+                                      <Badge className="bg-primary/10 text-primary border-primary/20 text-[10px] font-bold px-1.5 py-0">
+                                        v{doc.version}
+                                      </Badge>
+                                      {doc.tonnage && doc.tonnage > 0 ? (
+                                        <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300 text-[10px] font-bold px-1.5 py-0 flex items-center gap-1">
+                                          <Scale className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                          <span>{doc.tonnage} Ton</span>
+                                        </Badge>
+                                      ) : null}
+                                      {doc.isExternal && (
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[10px] px-1.5 py-0"
+                                        >
+                                          External Link
+                                        </Badge>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground mt-1 flex-wrap">
+                                      <span>File: {doc.fileName || "-"}</span>
+                                      <span>•</span>
+                                      <span>
+                                        Oleh: {doc.uploadedBy || "System"}
+                                      </span>
+                                      <span>•</span>
+                                      <span>
+                                        {formatJakartaDate(doc.createdAt, "datetime")}
+                                      </span>
+                                    </div>
+
+                                    {doc.notes && (
+                                      <p className="text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-lg mt-2 italic border border-border/40">
+                                        &ldquo;{doc.notes}&rdquo;
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                                  {isPreviewable(doc.fileName) && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleView(doc)}
+                                      className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg border-border/80 hover:bg-primary/5 hover:text-primary cursor-pointer"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>Pratinjau</span>
+                                    </Button>
+                                  )}
+
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleDownload(doc)}
+                                    disabled={isDownloading === doc.id}
+                                    className="h-8 px-2.5 text-xs font-semibold gap-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 cursor-pointer shadow-none"
+                                  >
+                                    {isDownloading === doc.id ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : doc.isExternal ? (
+                                      <ExternalLink className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Download className="w-3.5 h-3.5" />
+                                    )}
+                                    <span>{doc.isExternal ? "Buka Link" : "Unduh"}</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-8 rounded-xl border border-dashed border-border/80 text-center bg-muted/10 space-y-2">
+                          <FileText className="w-8 h-8 text-muted-foreground/40 mx-auto" />
+                          <p className="text-xs font-semibold text-foreground">
+                            {historySearch
+                              ? "Tidak ada berkas yang cocok dengan pencarian."
+                              : "Belum ada berkas untuk kategori ini."}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Tabs
+                  value={activeLevel2Tab}
+                  onValueChange={setActiveLevel2Tab}
+                  className="flex-1 flex flex-col min-h-0"
+                >
                 <div className="px-0.5 pt-2 shrink-0">
                   <TabsList className="grid grid-cols-2 w-full sm:w-auto h-9 bg-muted/60 p-1 rounded-xl">
                     <TabsTrigger
@@ -1001,7 +1817,8 @@ export function DocumentManagerDialog({
                     {selectedCatId === "DRAWING" && (
                       <div className="space-y-1 bg-amber-500/10 p-3 rounded-xl border border-amber-300">
                         <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                          <span>⚖️ Tonase Drawing (Ton) <span className="text-red-500 font-bold">* Wajib</span></span>
+                          <Scale className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                          <span>Tonase Drawing (Ton) <span className="text-red-500 font-bold">* Wajib</span></span>
                         </Label>
                         <Input
                           type="number"
@@ -1210,8 +2027,9 @@ export function DocumentManagerDialog({
                                     v{doc.version}
                                   </Badge>
                                   {doc.tonnage && doc.tonnage > 0 ? (
-                                    <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300 text-[10px] font-bold px-1.5 py-0">
-                                      ⚖️ {doc.tonnage} Ton
+                                    <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-300 text-[10px] font-bold px-1.5 py-0 flex items-center gap-1">
+                                      <Scale className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                      <span>{doc.tonnage} Ton</span>
                                     </Badge>
                                   ) : null}
                                   {doc.isExternal && (
@@ -1315,6 +2133,7 @@ export function DocumentManagerDialog({
                   )}
                 </TabsContent>
               </Tabs>
+              )}
 
               <DialogFooter className="pt-2 border-t border-border/40 flex justify-between items-center shrink-0">
                 <Button
@@ -1410,6 +2229,364 @@ export function DocumentManagerDialog({
           </DialogContent>
         </Dialog>
       )}
+
+      {/* DIALOG DETAIL ITEM (BOQ / SPB / SPJ) */}
+      <Dialog
+        open={!!viewingDetailType}
+        onOpenChange={(open) => {
+          if (!open) {
+            setViewingDetailType(null);
+            setViewingDetailData(null);
+            setDetailSearchQuery("");
+          }
+        }}
+      >
+        <DialogContent className="w-[95vw] sm:max-w-2xl max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border border-border/80 shadow-2xl bg-background z-[60]">
+          <DialogHeader className="p-4 sm:p-6 pb-4 shrink-0 border-b border-border/50">
+            <div className="flex items-center justify-between w-full pr-6">
+              <div className="flex items-center gap-3">
+                <div
+                  className={cn(
+                    "h-10 w-10 rounded-xl flex items-center justify-center border shrink-0",
+                    viewingDetailType === "BOQ"
+                      ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
+                      : viewingDetailType === "SPB"
+                      ? "bg-orange-500/10 text-orange-600 border-orange-500/20"
+                      : "bg-purple-500/10 text-purple-600 border-purple-500/20",
+                  )}
+                >
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-bold text-foreground">
+                    Detail Item{" "}
+                    {viewingDetailType === "BOQ"
+                      ? `BoQ: ${viewingDetailData?.boqNumber || "-"}`
+                      : viewingDetailType === "SPB"
+                      ? `SPB: ${viewingDetailData?.spbNumber || "-"}`
+                      : `SPJ: ${viewingDetailData?.spjNumber || "-"}`}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground font-medium mt-0.5">
+                    Proyek: {viewingDetailData?.projectName || "-"}
+                  </DialogDescription>
+                </div>
+              </div>
+              <Badge
+                className={cn(
+                  "border-none shadow-none text-[10px] font-bold rounded-lg px-2.5 py-1",
+                  viewingDetailType === "BOQ"
+                    ? viewingDetailData?.boqStatus === "APPROVED"
+                      ? "bg-emerald-500/10 text-emerald-700"
+                      : "bg-amber-500/10 text-amber-700"
+                    : viewingDetailData?.status === "APPROVED"
+                    ? "bg-emerald-500/10 text-emerald-700"
+                    : "bg-amber-500/10 text-amber-700",
+                )}
+              >
+                {viewingDetailType === "BOQ"
+                  ? viewingDetailData?.boqStatus || "DRAFT"
+                  : (viewingDetailData?.status || "DRAFT").replace(/_/g, " ")}
+              </Badge>
+            </div>
+          </DialogHeader>
+
+          {/* Search Bar */}
+          <div className="px-4 sm:px-6 py-2 border-b border-border/30 bg-muted/10 shrink-0">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="Cari nama barang atau kode..."
+                className="pl-9 w-full shadow-none bg-background rounded-lg border-border h-9 text-xs"
+                value={detailSearchQuery}
+                onChange={(e) => setDetailSearchQuery(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Items Table inside Dialog */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-muted/5">
+            <div className="border border-border/40 rounded-xl overflow-x-auto shadow-xs bg-card">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-muted/30 text-xs font-semibold text-muted-foreground border-b border-border/30">
+                    <th className="p-3 w-12 text-center">No</th>
+                    {viewingDetailType === "BOQ" && (
+                      <th className="p-3 w-32">Kode Barang</th>
+                    )}
+                    <th className="p-3">Nama Barang</th>
+                    {viewingDetailType !== "SPJ" && (
+                      <th className="p-3 w-36">Tipe / Merk</th>
+                    )}
+                    <th className="p-3 text-center w-28">Kuantitas</th>
+                    {viewingDetailType === "SPB" && (
+                      <th className="p-3 text-center w-32">Sumber Barang</th>
+                    )}
+                    <th className="p-3">Catatan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const q = detailSearchQuery.toLowerCase();
+                    if (viewingDetailType === "BOQ") {
+                      const items = (viewingDetailData?.boqItems || []).filter(
+                        (bi: any) =>
+                          (bi.item?.name || bi.item?.itemName || "")
+                            .toLowerCase()
+                            .includes(q) ||
+                          (bi.item?.code || bi.item?.itemCode || "")
+                            .toLowerCase()
+                            .includes(q) ||
+                          (bi.item?.typeMerk || "").toLowerCase().includes(q),
+                      );
+
+                      if (items.length === 0) {
+                        return (
+                          <tr>
+                            <td
+                              colSpan={6}
+                              className="p-8 text-center text-muted-foreground italic"
+                            >
+                              Tidak ada item yang ditemukan.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return items.map((item: any, idx: number) => (
+                        <tr
+                          key={item.id || idx}
+                          className="border-b border-border/10 last:border-0 hover:bg-muted/5 transition-colors"
+                        >
+                          <td className="p-3 text-center text-foreground font-bold">
+                            {idx + 1}
+                          </td>
+                          <td className="p-3 font-mono text-muted-foreground">
+                            {item.item?.itemCode || item.item?.code || "-"}
+                          </td>
+                          <td className="p-3 font-semibold text-foreground">
+                            {item.item?.itemName || item.item?.name || "-"}
+                          </td>
+                          <td className="p-3 text-muted-foreground">
+                            {item.item?.typeMerk || "-"}
+                          </td>
+                          <td className="p-3 text-center font-bold text-primary">
+                            {item.qty} {item.unit || item.item?.unit || "pcs"}
+                          </td>
+                          <td className="p-3 text-muted-foreground italic text-[11px]">
+                            {item.note || "-"}
+                          </td>
+                        </tr>
+                      ));
+                    }
+
+                    if (viewingDetailType === "SPB") {
+                      const items = (viewingDetailData?.items || []).filter(
+                        (it: any) =>
+                          (it.material?.name || it.itemName || it.name || "")
+                            .toLowerCase()
+                            .includes(q) ||
+                          (it.material?.typeMerk || it.typeMerk || "")
+                            .toLowerCase()
+                            .includes(q),
+                      );
+
+                      if (items.length === 0) {
+                        return (
+                          <tr>
+                            <td
+                              colSpan={6}
+                              className="p-8 text-center text-muted-foreground italic"
+                            >
+                              Tidak ada item yang ditemukan.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return items.map((item: any, idx: number) => (
+                        <tr
+                          key={item.id || idx}
+                          className="border-b border-border/10 last:border-0 hover:bg-muted/5 transition-colors"
+                        >
+                          <td className="p-3 text-center text-foreground font-bold">
+                            {idx + 1}
+                          </td>
+                          <td className="p-3 font-semibold text-foreground">
+                            {item.material?.name ||
+                              item.itemName ||
+                              item.name ||
+                              "-"}
+                          </td>
+                          <td className="p-3 text-muted-foreground">
+                            {item.material?.typeMerk || item.typeMerk || "-"}
+                          </td>
+                          <td className="p-3 text-center font-bold text-orange-600">
+                            {item.qty}{" "}
+                            {item.unit || item.material?.unit || "pcs"}
+                          </td>
+                          <td className="p-3 text-center">
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] font-bold px-1.5 py-0"
+                            >
+                              {item.source || "GUDANG"}
+                            </Badge>
+                          </td>
+                          <td className="p-3 text-muted-foreground italic text-[11px]">
+                            {item.note || "-"}
+                          </td>
+                        </tr>
+                      ));
+                    }
+
+                    if (viewingDetailType === "SPJ") {
+                      const items = (viewingDetailData?.items || []).filter(
+                        (it: any) =>
+                          (it.itemName || it.name || "")
+                            .toLowerCase()
+                            .includes(q),
+                      );
+
+                      if (items.length === 0) {
+                        return (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="p-8 text-center text-muted-foreground italic"
+                            >
+                              Tidak ada item yang ditemukan.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return items.map((item: any, idx: number) => (
+                        <tr
+                          key={item.id || idx}
+                          className="border-b border-border/10 last:border-0 hover:bg-muted/5 transition-colors"
+                        >
+                          <td className="p-3 text-center text-foreground font-bold">
+                            {idx + 1}
+                          </td>
+                          <td className="p-3 font-semibold text-foreground">
+                            {item.itemName || item.name || "-"}
+                          </td>
+                          <td className="p-3 text-center font-bold text-purple-600">
+                            {item.qty} {item.unit || "pcs"}
+                          </td>
+                          <td className="p-3 text-muted-foreground italic text-[11px]">
+                            {item.note || "-"}
+                          </td>
+                        </tr>
+                      ));
+                    }
+
+                    return null;
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <DialogFooter className="p-4 border-t border-border/40 bg-muted/10 shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setViewingDetailType(null)}
+              className="rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG PRATINJAU CETAK PDF (BOQ / SPB / SPJ) */}
+      <Dialog
+        open={!!previewPdfType}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewPdfType(null);
+            setPreviewPdfData(null);
+          }
+        }}
+      >
+        <DialogContent className="w-[96vw] sm:max-w-4xl h-[90vh] flex flex-col p-6 bg-zinc-950 border border-zinc-800 text-white rounded-2xl z-[60]">
+          <DialogHeader className="flex-none">
+            <DialogTitle className="text-base font-bold text-white">
+              Pratinjau Cetak {previewPdfType === "BOQ" ? "BoQ" : previewPdfType === "SPB" ? "SPB" : "SPJ"}
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400 text-xs">
+              Pratinjau dokumen PDF{" "}
+              {previewPdfType === "BOQ"
+                ? `Bill of Quantities (${previewPdfData?.boqNumber || "-"})`
+                : previewPdfType === "SPB"
+                ? `Surat Permintaan Barang (${previewPdfData?.spbNumber || "-"})`
+                : `Surat Pertanggungjawaban (${previewPdfData?.spjNumber || "-"})`}
+              .
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 w-full overflow-hidden rounded-xl bg-zinc-900 border border-zinc-800 mt-4 relative">
+            {previewPdfType === "BOQ" && previewPdfData && (
+              <PDFViewer
+                width="100%"
+                height="100%"
+                showToolbar={true}
+                className="border-0"
+              >
+                <BoQPDFDocument
+                  project={previewPdfData.project}
+                  items={previewPdfData.items}
+                />
+              </PDFViewer>
+            )}
+
+            {previewPdfType === "SPB" && previewPdfData && (
+              <PDFViewer
+                width="100%"
+                height="100%"
+                showToolbar={true}
+                className="border-0"
+              >
+                <SPBPDFDocument
+                  spb={previewPdfData.spb}
+                  project={previewPdfData.project}
+                />
+              </PDFViewer>
+            )}
+
+            {previewPdfType === "SPJ" && previewPdfData && (
+              <PDFViewer
+                width="100%"
+                height="100%"
+                showToolbar={true}
+                className="border-0"
+              >
+                <SPJPDFDocument
+                  spj={previewPdfData.spj}
+                  project={previewPdfData.project}
+                />
+              </PDFViewer>
+            )}
+          </div>
+
+          <DialogFooter className="mt-4 flex-none">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setPreviewPdfType(null);
+                setPreviewPdfData(null);
+              }}
+              className="cursor-pointer font-semibold rounded-lg bg-transparent text-white border-zinc-700 hover:bg-zinc-800 hover:text-white"
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

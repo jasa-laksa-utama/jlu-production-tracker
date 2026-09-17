@@ -45,6 +45,8 @@ import {
   Mail,
   FileText,
   History,
+  Scale,
+  MapPin,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -145,6 +147,7 @@ export function LeadTable({
     "AUTO",
   );
   const [customProjectNo, setCustomProjectNo] = useState("");
+  const [estimatedTonnageInput, setEstimatedTonnageInput] = useState("");
   const [dealChecks, setDealChecks] = useState({
     poFile: null as File | null,
     ssFile: null as File | null,
@@ -223,6 +226,11 @@ export function LeadTable({
       );
       setProjectNumberMode("AUTO");
       setCustomProjectNo("");
+      setEstimatedTonnageInput(
+        convertToProjectLead.estimatedTonnage
+          ? String(convertToProjectLead.estimatedTonnage)
+          : "",
+      );
       setDealChecks({
         poFile: null,
         ssFile: null,
@@ -980,6 +988,12 @@ export function LeadTable({
                         <span className="text-xs text-muted-foreground font-medium truncate max-w-62.5">
                           {lead.customer?.name || "-"}
                         </span>
+                        {(lead.customer?.city || lead.customer?.province) && (
+                          <span className="text-[11px] text-muted-foreground font-normal truncate max-w-62.5 flex items-center gap-1 mt-0.5">
+                            <MapPin className="w-3 h-3 text-amber-500 shrink-0" />
+                            {[lead.customer.city, lead.customer.province].filter(Boolean).join(", ")}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </TableCell>
@@ -1377,6 +1391,25 @@ export function LeadTable({
                     </p>
                   </div>
 
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold flex items-center gap-1.5">
+                      <Scale className="w-4 h-4 text-primary" />
+                      Estimasi Total Tonase Proyek (Ton)
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      placeholder="Contoh: 25.5 (Ton)"
+                      className="w-full text-xs font-semibold"
+                      value={estimatedTonnageInput}
+                      onChange={(e) => setEstimatedTonnageInput(e.target.value)}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Estimasi tonase digunakan oleh tim Engineering sebagai acuan bobot progres upload drawing & BoQ di Masterplan.
+                    </p>
+                  </div>
+
                   <div className="space-y-3 pt-2">
                     <Label className="text-sm font-semibold">
                       Validasi Dokumen
@@ -1515,6 +1548,9 @@ export function LeadTable({
                             expectedDate,
                             projectNumberMode === "MANUAL"
                               ? customProjectNo.trim()
+                              : null,
+                            estimatedTonnageInput
+                              ? Number(estimatedTonnageInput)
                               : null,
                           );
 
@@ -1960,7 +1996,7 @@ export function LeadTable({
                     setLostReason("");
                     router.refresh();
                   } else {
-                    toast.error(result.error);
+                    toast.error(result.error || "Gagal menandai lead sebagai lost");
                   }
                 });
               }}
@@ -2013,7 +2049,7 @@ export function LeadTable({
                     setRevertConfirmLead(null);
                     router.refresh();
                   } else {
-                    toast.error(result.error);
+                    toast.error(result.error || "Gagal mengembalikan proyek ke lead");
                   }
                 });
               }}
